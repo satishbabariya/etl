@@ -7,6 +7,7 @@ use temporalio_common::worker::{
 use temporalio_sdk::{Worker, WorkerOptions};
 use worker::{
     activities::run_lifecycle::RunLifecycleActivities,
+    activities::sync::SyncActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
     workflows::PipelineRunWorkflow,
 };
@@ -35,7 +36,10 @@ async fn main() -> anyhow::Result<()> {
     let runtime = make_runtime()?;
     let client = make_client(&cfg).await?;
 
-    let activities = RunLifecycleActivities {
+    let lifecycle = RunLifecycleActivities {
+        catalog: catalog.clone(),
+    };
+    let sync = SyncActivities {
         catalog: catalog.clone(),
     };
 
@@ -44,12 +48,13 @@ async fn main() -> anyhow::Result<()> {
         .deployment_options(WorkerDeploymentOptions {
             version: WorkerDeploymentVersion {
                 deployment_name: "etl".to_owned(),
-                build_id: "etl-worker-0.1".to_owned(),
+                build_id: "etl-worker-0.2".to_owned(),
             },
             use_worker_versioning: false,
             default_versioning_behavior: None,
         })
-        .register_activities(activities)
+        .register_activities(lifecycle)
+        .register_activities(sync)
         .register_workflow::<PipelineRunWorkflow>()
         .build();
 
