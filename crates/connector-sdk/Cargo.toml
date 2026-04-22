@@ -7,3 +7,7 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+arrow = { workspace = true }
+async-trait = { workspace = true }
+common-types = { workspace = true }
+anyhow = { workspace = true }

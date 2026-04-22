@@ -614,6 +614,10 @@ dependencies = [
 name = "connector-sdk"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "arrow",
+ "async-trait",
+ "common-types",
  "serde",
 ]
 
