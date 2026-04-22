@@ -1,90 +1,107 @@
 # ETL Platform
 
-Rust + Temporal + WebAssembly ETL platform targeting the Fivetran ingestion market. Full architecture across 23 RFCs in `docs/rfc/`, roadmap in `docs/superpowers/specs/2026-04-22-implementation-roadmap-design.md`, current phase plan in `docs/superpowers/plans/2026-04-22-phase-1-1-skeleton.md`.
+Rust + Temporal + WebAssembly ETL platform targeting the Fivetran ingestion market. Full architecture across 23 RFCs in `docs/rfc/`, roadmap in `docs/superpowers/specs/2026-04-22-implementation-roadmap-design.md`, current phase plan in `docs/superpowers/plans/2026-04-22-phase-1-2-first-pipeline.md`.
 
 ## Prerequisites
 
 - Rust 1.88+ (`rust-toolchain.toml` pins the channel; rustup auto-fetches)
 - Docker + Docker Compose (the whole dev stack runs in containers)
 
-No host-side `psql` or `temporal` CLI required — both are run via `docker exec`.
+No host-side `psql` or `temporal` CLI required — everything runs via `docker exec`.
 
 ## Local dev bootstrap
 
 ```bash
-# 1. Start the full stack: Postgres (catalog), Postgres (temporal),
-#    Temporal server (auto-setup), Temporal UI
+# 1. Start the full stack: Postgres (catalog + source), Temporal server, Temporal UI
 docker compose up -d
 
-# 2. Env
+# 2. Seed the source-demo database (creates etl_source_demo.customers with 10 rows)
+bash scripts/seed-source-demo.sh
+
+# 3. Env
 cp .env.example .env
 source .env
 
-# 3. Build
+# 4. Build
 cargo build --workspace
 
-# 4. Seed one tenant + connection + pipeline for manual testing
+# 5. Seed a demo pipeline in the catalog
 docker exec -i etl-postgres psql -U etl -d etl_catalog <<'SQL'
-INSERT INTO tenants (tenant_id, name) VALUES ('11111111-1111-1111-1111-111111111111', 'dev');
+INSERT INTO tenants (tenant_id, name)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'dev');
 INSERT INTO connections (connection_id, tenant_id, name, connector_ref, config)
-  VALUES ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111',
-          'dev-pg', 'postgres@0.1.0', '{}'::jsonb);
+  VALUES ('22222222-2222-2222-2222-222222222222',
+          '11111111-1111-1111-1111-111111111111',
+          'source-demo', 'postgres@0.1.0',
+          '{"url":"postgres://etl:etl@localhost:5432/etl_source_demo"}'::jsonb);
 INSERT INTO pipelines (pipeline_id, tenant_id, name, source_conn_id, spec)
-  VALUES ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111',
-          'demo', '22222222-2222-2222-2222-222222222222', '{}'::jsonb);
+  VALUES ('33333333-3333-3333-3333-333333333333',
+          '11111111-1111-1111-1111-111111111111',
+          'customers-sync',
+          '22222222-2222-2222-2222-222222222222',
+          '{"source":{"type":"postgres","schema":"public","table":"customers","cursor_column":"updated_at","cursor_kind":"timestamp_tz","pk_columns":["id"]},"destination":{"type":"local_parquet","base_path":"./data"},"batch_size":4}'::jsonb);
 SQL
 
-# 5. Run the worker (leave running in a terminal)
+# 6. Run the worker (separate terminal)
 cargo run --bin worker
 
-# 6. In another terminal, submit a pipeline run
+# 7. Submit the pipeline
 cargo run --bin platform -- pipeline run pipe-33333333-3333-3333-3333-333333333333
 ```
 
-Then watch:
-- Worker logs show `run started` → 30s pause → `run completed`
-- Temporal UI at <http://localhost:8080> shows the workflow
-- Run status: `docker exec -i etl-postgres psql -U etl -d etl_catalog -c "SELECT status, started_at, completed_at FROM runs ORDER BY started_at DESC LIMIT 1;"`
+Expected outcome on first run:
+- Worker logs show start_run → 3× (read_batch + load_batch + commit_cursor) → complete_run
+- Three Parquet files under `./data/33333333-.../<run_id>/batch-0000{0,1,2}.parquet` (4 + 4 + 2 rows)
+- Cursor persisted: `docker exec -i etl-postgres psql -U etl -d etl_catalog -c "SELECT stream_name, cursor_value FROM stream_state;"` shows `customers | 2026-04-22T11:00:00.000000Z`
+
+Re-running the command replays zero rows (cursor matches head). To exercise incremental behavior, insert rows with later `updated_at` into `etl_source_demo.customers` and re-run; only the new rows land in a new Parquet file in a new run subdirectory, and the cursor advances.
 
 ## Tests
 
-Unit + catalog-integration tests (requires Postgres running):
+Workspace unit/integration tests (requires Postgres running):
 
 ```bash
 DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog cargo test --workspace -- --test-threads=1
 ```
 
-End-to-end durability test (requires full stack running; ~80s runtime):
+End-to-end integration tests (require full docker stack + source-demo seeded):
 
 ```bash
+# Fresh + incremental sync (~75s)
 DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
-  cargo test -p integration-tests -- --ignored --nocapture
-```
+  cargo test -p integration-tests incremental_sync -- --ignored --nocapture
 
-The durability test spawns a worker, submits a pipeline, kills the worker while the workflow's 30s timer is pending server-side, spawns a fresh worker, and asserts the run reaches `completed`. The elapsed-time invariant (`complete_run` fires exactly 30s after `start_run` despite the restart) proves Temporal's server-side timer survived.
+# Kill-restart durability (~10–180s depending on machine speed)
+DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
+  cargo test -p integration-tests sync_survives -- --ignored --nocapture
+
+# Phase I.1 workflow durability (~80s)
+DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
+  cargo test -p integration-tests workflow_survives -- --ignored --nocapture
+```
 
 ## Crate map
 
 | Crate | Role | Phase |
 |---|---|---|
-| `common-types` | Non-forgeable ID newtypes (`TenantId`, `PipelineId`, `ConnectionId`, `RunId`) | I.1 |
-| `catalog` | Postgres-backed metadata store (RFC-10) | I.1 (minimal) → I.4 (full) |
-| `worker` | Temporal worker, activities, `PipelineRunWorkflow` (RFC-4) | I.1 (skeleton) → I.6 (CDC) |
+| `common-types` | ID newtypes, `PipelineSpec`, `CursorValue`, `ConnectionConfig` | I.1 / I.2 |
+| `catalog` | Postgres-backed metadata store (RFC-10) + stream_state | I.1 (minimal) → I.4 (full) |
+| `connector-sdk` | `SourceConnector` trait | I.2 (trait) → I.3 (WASM) |
+| `loader-sdk` | `DestinationLoader` trait | I.2 (trait) → II.3 (warehouse variants) |
+| `worker` | Temporal worker, PipelineRunWorkflow, Postgres connector, Parquet loader | I.1 (skeleton) → I.6 (CDC) |
 | `control-api` | Public HTTP/gRPC surface (stub) | III.1 |
-| `connector-sdk` | Developer-facing connector SDK (stub) | I.3 |
-| `loader-sdk` | Rust-native loader trait (stub) | II.3 |
 | `cli` | `platform` command-line tool (RFC-13) | I.1 (subset) → I.4 (full) |
-| `tests/integration` | End-to-end durability test | I.1 |
+| `tests/integration` | End-to-end tests | I.1 / I.2 |
 
 ## Stack
 
 | Component | Host port | Notes |
 |---|---|---|
-| `etl-postgres` | 5432 | Catalog DB (`etl_catalog`) with `wal_level=logical` ready for Phase I.6 CDC |
+| `etl-postgres` | 5432 | Catalog DB (`etl_catalog`) + source demo DB (`etl_source_demo`); `wal_level=logical` ready for Phase I.6 CDC |
 | `etl-temporal-postgres` | (internal) | Temporal's backing DB |
 | `etl-temporal` | 7233 | Temporal server (gRPC) |
 | `etl-temporal-ui` | 8080 | Temporal Web UI |
 
 ## Phase
 
-Currently: **Phase I.1 — Skeleton (complete)**. Next: Phase I.2 — first real pipeline (Postgres cursor-incremental → Parquet). See the roadmap spec for the four-era trajectory.
+Currently: **Phase I.2 — First Pipeline (complete)**. Next: Phase I.3 — WASM runtime + connector SDK. See the roadmap spec for the four-era trajectory.
