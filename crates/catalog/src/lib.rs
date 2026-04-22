@@ -1,1 +1,90 @@
 //! Catalog: persistent metadata store (RFC-10).
+//!
+//! Phase I.1 scope: 4 tables (tenants, connections, pipelines, runs),
+//! every row tenant-scoped, async CRUD via sqlx. Subsequent phases add
+//! workspaces, streams, schemas, transformations, audit.
+
+mod db;
+pub mod connection;
+pub mod pipeline;
+pub mod run;
+pub mod tenant;
+
+pub use connection::{Connection, NewConnection};
+pub use pipeline::{NewPipeline, Pipeline};
+pub use run::{NewRun, Run, RunStatus};
+pub use tenant::Tenant;
+
+use common_types::ids::{ConnectionId, PipelineId, RunId, TenantId};
+use sqlx::PgPool;
+
+/// Wrapper that exposes catalog operations as methods.
+#[derive(Clone)]
+pub struct Catalog {
+    pool: PgPool,
+}
+
+impl Catalog {
+    pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
+        let pool = db::connect(url).await?;
+        Ok(Self { pool })
+    }
+
+    pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        db::migrate(&self.pool).await
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    // Tenants
+    pub async fn create_tenant(&self, name: &str) -> sqlx::Result<TenantId> {
+        tenant::create(&self.pool, name).await
+    }
+    pub async fn get_tenant(&self, id: TenantId) -> sqlx::Result<Option<Tenant>> {
+        tenant::get(&self.pool, id).await
+    }
+
+    // Connections
+    pub async fn create_connection(&self, new: NewConnection) -> sqlx::Result<ConnectionId> {
+        connection::create(&self.pool, new).await
+    }
+    pub async fn get_connection(&self, id: ConnectionId) -> sqlx::Result<Option<Connection>> {
+        connection::get(&self.pool, id).await
+    }
+
+    // Pipelines
+    pub async fn create_pipeline(&self, new: NewPipeline) -> sqlx::Result<PipelineId> {
+        pipeline::create(&self.pool, new).await
+    }
+    pub async fn get_pipeline(&self, id: PipelineId) -> sqlx::Result<Option<Pipeline>> {
+        pipeline::get(&self.pool, id).await
+    }
+
+    // Runs
+    pub async fn create_run(&self, new: NewRun) -> sqlx::Result<RunId> {
+        run::create(&self.pool, new).await
+    }
+    pub async fn mark_run_running(&self, id: RunId) -> sqlx::Result<()> {
+        run::mark_running(&self.pool, id).await
+    }
+    pub async fn mark_run_completed(&self, id: RunId) -> sqlx::Result<()> {
+        run::mark_completed(&self.pool, id).await
+    }
+    pub async fn mark_run_failed(&self, id: RunId, err: &str) -> sqlx::Result<()> {
+        run::mark_failed(&self.pool, id, err).await
+    }
+    pub async fn get_run(&self, id: RunId) -> sqlx::Result<Option<Run>> {
+        run::get(&self.pool, id).await
+    }
+
+    /// Truncates every table. Intended for test cleanup only.
+    #[doc(hidden)]
+    pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
+        sqlx::query("TRUNCATE runs, pipelines, connections, tenants CASCADE")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
