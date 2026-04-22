@@ -25,3 +25,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+temporalio-sdk = "0.2"
+temporalio-client = "0.2"
+temporalio-common = "0.2"
+temporalio-sdk-core = "0.2"
+temporalio-macros = "0.2"
+url = "2"
+futures = "0.3"
