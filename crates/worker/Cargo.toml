@@ -1,0 +1,35 @@
+[package]
+name = "worker"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "worker"
+path = "src/main.rs"
+
+[dependencies]
+common-types = { workspace = true }
+catalog = { workspace = true }
+tokio = { workspace = true }
+arrow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+temporalio-sdk = "0.2"
+temporalio-client = "0.2"
+temporalio-common = "0.2"
+temporalio-sdk-core = "0.2"
+temporalio-macros = "0.2"
+url = "2"
+futures = "0.3"
+futures-util = "0.3"

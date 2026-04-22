@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: etl-postgres
+    environment:
+      POSTGRES_USER: etl
+      POSTGRES_PASSWORD: etl
+      POSTGRES_DB: etl_catalog
+    ports:
+      - "5432:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+    volumes:
+      - etl_pg:/var/lib/postgresql/data
+
+  temporal-postgres:
+    image: postgres:16
+    container_name: etl-temporal-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - etl_temporal_pg:/var/lib/postgresql/data
+
+  temporal:
+    image: temporalio/auto-setup:1.27
+    container_name: etl-temporal
+    depends_on:
+      - temporal-postgres
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.31.0
+    container_name: etl-temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8080:8080"
+
+volumes:
+  etl_pg:
+  etl_temporal_pg:

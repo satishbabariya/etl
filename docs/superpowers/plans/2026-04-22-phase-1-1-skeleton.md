@@ -2307,3 +2307,49 @@ Not in Phase I.1, listed so you don't accidentally build them here:
 - Multi-tenancy beyond the TenantId plumbing (Phase II.1)
 - Secrets backend (Phase II.2)
 - Anything else in the roadmap
+
+---
+
+## Phase I.1 Completion Log
+
+Completed 2026-04-22 on branch `phase-1-1-skeleton`, 14 commits.
+
+- [x] Task 1 — Workspace scaffolding (Rust 1.88, 7-crate workspace)
+- [x] Task 2 — Local Postgres via docker-compose
+- [x] Task 3 — Non-forgeable ID newtypes (4 tests)
+- [x] Task 4 — Catalog schema migration
+- [x] Task 5 — Catalog pool + CRUD (3 integration tests)
+- [x] Task 6 — Arrow IPC round-trip smoke test (1 test)
+- [x] Task 7 — Temporal SDK wiring
+- [x] Task 8 — PipelineRunWorkflow + activities
+- [x] Task 9 — CLI `platform pipeline run <id>` submission
+- [x] Task 10 — Durability integration test (`--ignored`, ~81s runtime)
+- [x] Task 11 — README with bootstrap instructions
+- [x] Task 12 — This completion log
+
+### Deviations from the plan
+
+- **Rust toolchain 1.82 → 1.88**: plan's 1.82 estimate was too old for the current crate ecosystem (`clap_lex` needs edition2024 → Rust ≥1.85; `icu_*` needs ≥1.88).
+- **Temporal SDK crate names**: plan used `temporal-sdk-core` / `temporal-sdk` 0.1 (unpublished). Actual official crates are `temporalio-sdk` / `temporalio-client` / `temporalio-sdk-core` / `temporalio-common` / `temporalio-macros` at 0.2.
+- **Workflow API shape**: plan assumed function-style `pipeline_run(ctx, input)`. Actual SDK uses `#[workflow]` / `#[workflow_methods]` proc-macro pattern with struct state + `#[init]` / `#[run]` / `#[signal]` / `#[query]` methods. Activities similarly use `#[activities]` / `#[activity]` macros with `self: Arc<Self>` receivers.
+- **Temporal deployment**: plan had `brew install temporal + temporal server start-dev`. Replaced with `temporalio/auto-setup:1.27` + dedicated `temporal-postgres` + `temporalio/ui:2.31.0` in docker-compose. No host CLI install needed.
+- **psql tooling**: host-side `psql` not installed; all SQL routed through `docker exec -i etl-postgres psql`. No functional change.
+- **Run ID correlation bug**: caught during end-to-end test — `NewRun` originally let `catalog.create_run` generate its own ID, diverging from the one passed as workflow input. Fixed by making `NewRun.run_id` a required caller-supplied field.
+
+### Exit criterion — met
+
+**Workflow durable across worker restart.** Proven by the durability integration test:
+- Worker #1 submits workflow, `start_run` activity fires → run transitions to `running` → worker enters 30s timer
+- Worker #1 killed mid-timer
+- Worker #2 spawned 3s later
+- `complete_run` activity fires exactly 30s after `start_run` (Temporal server preserved the timer) → run transitions to `completed`
+
+### Handoff to Phase I.2
+
+Phase I.2 (first real pipeline: Postgres cursor-incremental → Parquet) inherits:
+- The Temporal workflow skeleton to extend with real batch loops
+- The WASM-ready worker layout (WASM wiring is Phase I.3; in-process connector first)
+- The catalog with a persistence shape ready for adding `streams` and `schemas` entities in I.4
+
+Delete `crates/worker/src/arrow_smoke.rs` once the real data path lands.
+
