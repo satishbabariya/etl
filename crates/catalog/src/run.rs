@@ -47,6 +47,10 @@ pub struct Run {
 }
 
 pub struct NewRun {
+    /// Caller supplies the id. Required so callers can correlate the row
+    /// with identifiers passed to external systems (e.g. Temporal workflow
+    /// input) before the INSERT commits.
+    pub run_id: RunId,
     pub tenant_id: TenantId,
     pub pipeline_id: PipelineId,
     pub trigger: String,
@@ -54,19 +58,18 @@ pub struct NewRun {
 }
 
 pub async fn create(pool: &PgPool, new: NewRun) -> sqlx::Result<RunId> {
-    let id = RunId::new();
     sqlx::query(
         "INSERT INTO runs (run_id, tenant_id, pipeline_id, status, trigger, temporal_workflow_id) \
          VALUES ($1, $2, $3, 'queued', $4, $5)",
     )
-    .bind(id.as_uuid())
+    .bind(new.run_id.as_uuid())
     .bind(new.tenant_id.as_uuid())
     .bind(new.pipeline_id.as_uuid())
     .bind(&new.trigger)
     .bind(new.temporal_workflow_id)
     .execute(pool)
     .await?;
-    Ok(id)
+    Ok(new.run_id)
 }
 
 pub async fn mark_running(pool: &PgPool, id: RunId) -> sqlx::Result<()> {

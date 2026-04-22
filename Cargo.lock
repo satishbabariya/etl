@@ -576,10 +576,13 @@ dependencies = [
  "catalog",
  "clap",
  "common-types",
+ "serde_json",
+ "temporalio-client",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "worker",
 ]
 
 [[package]]

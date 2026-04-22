@@ -1,4 +1,5 @@
 use catalog::{Catalog, NewConnection, NewPipeline, NewRun, RunStatus};
+use common_types::ids::RunId;
 use serde_json::json;
 
 async fn test_catalog() -> Catalog {
@@ -61,6 +62,7 @@ async fn pipeline_run_lifecycle() {
         .unwrap();
     let run = cat
         .create_run(NewRun {
+            run_id: RunId::new(),
             tenant_id: tenant,
             pipeline_id: pipe,
             trigger: "manual".into(),
