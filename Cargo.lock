@@ -4509,6 +4509,7 @@ dependencies = [
  "chrono",
  "common-types",
  "futures",
+ "futures-util",
  "serde",
  "serde_json",
  "temporalio-client",

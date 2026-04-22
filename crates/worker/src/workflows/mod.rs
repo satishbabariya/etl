@@ -1,1 +1,4 @@
-//! Workflows: orchestration logic (RFC-4). Populated in Plan Task 8.
+//! Workflows: orchestration logic (RFC-4).
+pub mod pipeline_run;
+
+pub use pipeline_run::{PipelineRunInput, PipelineRunWorkflow};

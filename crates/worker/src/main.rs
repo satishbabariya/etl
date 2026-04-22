@@ -8,6 +8,7 @@ use temporalio_sdk::{Worker, WorkerOptions};
 use worker::{
     activities::run_lifecycle::RunLifecycleActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
+    workflows::PipelineRunWorkflow,
 };
 
 #[tokio::main]
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let worker_options = WorkerOptions::new(cfg.task_queue.clone())
-        .task_types(WorkerTaskTypes::activity_only())
+        .task_types(WorkerTaskTypes::all())
         .deployment_options(WorkerDeploymentOptions {
             version: WorkerDeploymentVersion {
                 deployment_name: "etl".to_owned(),
@@ -49,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
             default_versioning_behavior: None,
         })
         .register_activities(activities)
+        .register_workflow::<PipelineRunWorkflow>()
         .build();
 
     let mut worker = Worker::new(&runtime, client, worker_options)
