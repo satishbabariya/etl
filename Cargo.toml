@@ -8,6 +8,7 @@ members = [
     "crates/connector-sdk",
     "crates/loader-sdk",
     "crates/cli",
+    "tests/integration",
 ]
 
 [workspace.package]
