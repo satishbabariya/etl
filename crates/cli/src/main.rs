@@ -61,7 +61,6 @@ enum PipelineCmd {
 enum ConnectorCmd {
     /// Compile a guest Rust crate to a precompiled .cwasm artifact.
     Build {
-        /// Path to the guest crate (must contain Cargo.toml with [lib] crate-type = ["cdylib"]).
         path: String,
         #[arg(long)]
         name: Option<String>,
@@ -69,6 +68,9 @@ enum ConnectorCmd {
         version: Option<String>,
         #[arg(long, default_value = "./connectors")]
         out: String,
+        /// Runtime to precompile for: 'source' (default) or 'scalar'.
+        #[arg(long, default_value = "source")]
+        kind: String,
     },
 }
 
@@ -84,8 +86,8 @@ async fn main() -> anyhow::Result<()> {
     match cli.cmd {
         Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => pipeline_run(id).await,
         Cmd::Connector {
-            cmd: ConnectorCmd::Build { path, name, version, out },
-        } => connector_build(path, name, version, out).await,
+            cmd: ConnectorCmd::Build { path, name, version, out, kind },
+        } => connector_build(path, name, version, out, kind).await,
         Cmd::Apply { file } => apply_cmd(file).await,
         Cmd::Get { kind, name } => get_cmd(kind, name).await,
         Cmd::Validate { file } => validate_cmd(file).await,
@@ -263,6 +265,7 @@ async fn connector_build(
     name: Option<String>,
     version: Option<String>,
     out: String,
+    kind: String,
 ) -> anyhow::Result<()> {
     use std::path::PathBuf;
     use std::process::Command as StdCommand;
@@ -303,12 +306,25 @@ async fn connector_build(
     }
 
     let out_dir = PathBuf::from(&out);
-    let rt = worker::wasm_runtime::WasmSourceRuntime::new(&out_dir)?;
     let target_name = format!("{}@{}", pkg_name, pkg_version);
-    let out_path = rt.artifact_path(&target_name);
-    rt.precompile_to(&wasm_path, &out_path)?;
 
-    println!("built {}", out_path.display());
+    let out_path = match kind.as_str() {
+        "source" => {
+            let rt = worker::wasm_runtime::WasmSourceRuntime::new(&out_dir)?;
+            let p = rt.artifact_path(&target_name);
+            rt.precompile_to(&wasm_path, &p)?;
+            p
+        }
+        "scalar" => {
+            let rt = worker::wasm_runtime::WasmScalarRuntime::new(&out_dir)?;
+            let p = rt.artifact_path(&target_name);
+            rt.precompile_to(&wasm_path, &p)?;
+            p
+        }
+        other => anyhow::bail!("unknown --kind: '{other}' (expected 'source' or 'scalar')"),
+    };
+
+    println!("built {} ({})", out_path.display(), kind);
     Ok(())
 }
 

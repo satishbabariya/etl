@@ -3595,3 +3595,58 @@ Post-transform schema is sensitive to the operator list. If you change the opera
 **2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 **Which approach?**
+
+---
+
+## Phase I.5 Completion Log
+
+Completed 2026-04-23 on branch `phase-1-5-transformations`.
+
+- [x] Tasks 1-2 — `TransformSpec` + `Operator` tagged enum (Select, Filter, Mask, AddColumn, Validate, WasmScalar) + `LiteralValue` (Bool before Int for untagged serde) + 4 unit tests
+- [x] Task 3 — `PipelineSpec` / `PipelineDslSpec` gain `#[serde(default)] transform: Option<TransformSpec>`
+- [x] Tasks 4-6 — Subset-SQL predicate parser (`IS [NOT] NULL`, `= <literal>`, `IN (...)`), select/filter/mask/add_column operators (21 unit tests total)
+- [x] Task 7 — `validate` operator: splits batch via BooleanArray masks into kept + rejected
+- [x] Task 8 — `wasm_scalar` operator wired through a new `WasmScalarRuntime` (shared Engine + ticker + Component cache with `WasmSourceRuntime`)
+- [x] Task 9 — `platform:udf/scalar-udf` WIT world (`log` imported; no http-fetch, no wall-clock, no randomness) under separate `connector-sdk/wit-scalar/` directory to keep bindgen per-world
+- [x] Task 10 — Reference `examples/upper-case-scalar` guest (wasm32-wasip2)
+- [x] Task 11 — CLI `connector build --kind source|scalar` dispatches to the right runtime for precompilation
+- [x] Task 12 — `discover_stream` activity computes post-transform schema via `transform::derive_schema` before calling `record_and_resolve`
+- [x] Task 13 — `read_batch` applies the transform and encodes kept + rejected IPC separately
+- [x] Task 14 — `load_batch` writes dead-letter parquet and enforces cumulative `rows_rejected / rows_total` threshold (NonRetryable on exceed)
+- [x] Task 14b — Workflow threads `transform` + running totals through DiscoverInput/ReadBatchInput/LoadBatchInput
+- [x] Task 15 — Dead-letter path (`<base>/<pipeline_id>/dead-letter/<run_id>/batch-<seq>.parquet`) — folded into Task 14
+- [x] Task 16 — Schema evolution tracks derived schema — folded into Task 12
+- [x] Task 17 — `transforms_filter_mask_end_to_end` integration test
+- [x] Task 18 — `transforms_dead_letter` integration test with two scenarios (under/over threshold); added `fail_run` activity + workflow error shim so Failed status is recorded
+- [x] Task 19 — README section + this log
+
+### Exit criterion — MET
+
+- 6 of 10 declarative operators implemented MVP (select, filter, mask, add_column, validate, wasm_scalar). Deferred: project, cast, rename, dedupe, flatten.
+- Each operator has a `derive_schema` method tested as a pure function (via unit tests in `crates/worker/src/transform/operators/`).
+- Dead-letter parquet lands at the spec'd path, preserves original columns (verified by `transforms_dead_letter::validate_dead_letter_under_threshold_completes`), and is Parquet-readable.
+- Phase I.4 schema-evolution flow continues: `discover_stream` computes derived schema first, then `record_and_resolve` stores it as the stream's current_schema_id.
+- Backward-compat: existing pipelines without `transform` short-circuit the branch and behave identically (no regression in Phase I.2/I.3/I.4 integration tests).
+- All 7 integration tests green (5 pre-existing + `transforms_filter_mask_end_to_end` + `transforms_dead_letter` × 2 scenarios).
+
+### Deviations from the plan
+
+- **Scalar-UDF WIT lives under `connector-sdk/wit-scalar/`, not `connector-sdk/wit/`.** `wit-bindgen` couldn't share a single directory with two world files. Separate directory isolates the worlds; the guest's `wit_bindgen::generate!` macro points at the new path.
+- **`HostState` needs a second `Host` impl.** Each generated bindgen world has its own `host::Host` trait even when the interfaces are identical by name. Added a parallel `impl super::scalar_bindings::platform::udf::host::Host for HostState` alongside the existing connector one.
+- **`arrow` Array trait imports.** `wasm_scalar.rs` needed explicit `use arrow::array::{Array, ArrayRef, StringArray, StringBuilder}` for `is_null()` / `value(i)` to resolve.
+- **`batch.schema().column_with_name(...)` lifetime.** Temporary schema dropped while the downcast ref was still borrowed. Fixed by capturing `schema` into a local and reading `field.is_nullable()` / `field.data_type().clone()` into scalars before touching the array.
+- **`LiteralValue` untagged ordering.** `Bool` variant must come before `Int`; otherwise serde matches `"true"` / `"false"` as Int first and fails.
+- **`fail_run` wasn't in the plan** but turned out to be required for the over-threshold dead-letter test: without it, the workflow bubbles the NonRetryable up, but the `runs` row stays `running` forever. Added a `fail_run` activity and a Result-wrapping shim in `PipelineRunWorkflow::run` that invokes it on any error from the inner body.
+- **`pipe.to_string()` vs `pipe.as_uuid().to_string()`.** IDs display with the `pipe-` prefix (Phase I.1 convention) but the loader writes to a UUID-only directory. Dead-letter test walked the wrong dir until it used `pipe.as_uuid().to_string()`.
+
+### Handoff to Phase I.6
+
+Phase I.6 (CDC / streaming) reuses:
+- The transform DAG — CDC events land as `RecordBatch`es the same way batch reads do.
+- The dead-letter path — CDC records that fail validation can land in the same subtree.
+- `fail_run` — any error path in a streaming workflow now has a catalog-visible terminal state.
+
+What Phase I.5 explicitly leaves open:
+- Dedupe / flatten / project / cast / rename operators (stubs not checked in; add when a real pipeline needs them).
+- Batch-crossing state for streaming dedupe — Phase I.6 CDC decides whether to put it in the transform layer or upstream.
+- Full-SQL predicates (`CASE`, function calls, arithmetic) — Phase IV query engine.

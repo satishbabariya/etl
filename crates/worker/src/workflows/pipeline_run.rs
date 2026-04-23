@@ -19,7 +19,7 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, WorkflowResult};
 use uuid::Uuid;
 
-use crate::activities::run_lifecycle::RunLifecycleActivities;
+use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
 use crate::activities::sync::SyncActivities;
 use crate::activities::sync::inputs::{
     CommitCursorInput, DiscoverInput, LoadBatchInput, ReadBatchInput,
@@ -56,6 +56,8 @@ pub struct PipelineRunWorkflow {
     cursor_kind: common_types::cursor::CursorKind,
     pk_columns: Vec<String>,
     tenant_id: Uuid,
+    rows_total_so_far: u64,
+    rows_rejected_so_far: u64,
 }
 
 fn opts_short() -> ActivityOptions {
@@ -89,11 +91,36 @@ impl PipelineRunWorkflow {
             cursor_kind: input.cursor_kind,
             pk_columns: input.pk_columns,
             tenant_id: input.tenant_id,
+            rows_total_so_far: 0,
+            rows_rejected_so_far: 0,
         }
     }
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
+        let run_id = ctx.state(|s| s.run_id);
+        match Self::run_inner(ctx).await {
+            Ok(()) => Ok(()),
+            Err(termination) => {
+                let err_str = format!("{termination}");
+                // Best effort: record Failed status. If this sub-activity itself
+                // fails (e.g. catalog unreachable), bubble original error.
+                let _ = ctx
+                    .start_activity(
+                        RunLifecycleActivities::fail_run,
+                        FailRunInput {
+                            run_id,
+                            error: err_str,
+                        },
+                        opts_short(),
+                    )
+                    .await;
+                Err(termination)
+            }
+        }
+    }
+
+    async fn run_inner(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
         let (
             run_id,
             pipeline_id,
@@ -138,10 +165,17 @@ impl PipelineRunWorkflow {
                 cursor_kind,
                 pk_columns: pk_columns.clone(),
                 evolution_policy,
+                transform: spec.transform.clone(),
             },
             opts_short(),
         )
         .await?;
+
+        let dead_letter_threshold = spec
+            .transform
+            .as_ref()
+            .map(|t| t.dead_letter_threshold)
+            .unwrap_or(0.0);
 
         let mut batch_seq: u32 = 0;
         loop {
@@ -156,12 +190,23 @@ impl PipelineRunWorkflow {
                         cursor,
                         batch_size: spec.batch_size,
                         connector_ref: connector_ref.clone(),
+                        transform: spec.transform.clone(),
                     },
                     opts_long(),
                 )
                 .await?;
 
-            if read_out.rows == 0 {
+            let rows_this_batch = read_out.rows + read_out.rows_rejected;
+            ctx.state_mut(|s| {
+                s.rows_total_so_far = s.rows_total_so_far.saturating_add(rows_this_batch as u64);
+                s.rows_rejected_so_far = s
+                    .rows_rejected_so_far
+                    .saturating_add(read_out.rows_rejected as u64);
+            });
+            let (rows_total_so_far, rows_rejected_so_far) =
+                ctx.state(|s| (s.rows_total_so_far, s.rows_rejected_so_far));
+
+            if read_out.rows == 0 && read_out.rows_rejected == 0 {
                 break;
             }
 
@@ -173,6 +218,10 @@ impl PipelineRunWorkflow {
                     pipeline_id,
                     run_id,
                     batch_seq,
+                    rejected_ipc_b64: read_out.rejected_ipc_b64,
+                    dead_letter_threshold,
+                    rows_rejected_so_far: rows_rejected_so_far as usize,
+                    rows_total_so_far: rows_total_so_far as usize,
                 },
                 opts_long(),
             )

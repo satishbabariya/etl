@@ -7,6 +7,8 @@ pub struct PipelineSpec {
     pub destination: DestinationSpec,
     /// Max rows per read_batch activity call.
     pub batch_size: usize,
+    #[serde(default)]
+    pub transform: Option<crate::transform::TransformSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +63,7 @@ mod tests {
                 base_path: "./data".into(),
             }),
             batch_size: 100,
+            transform: None,
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: PipelineSpec = serde_json::from_str(&j).unwrap();
