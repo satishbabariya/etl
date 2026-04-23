@@ -89,6 +89,7 @@ fn bind_cursor<'a>(
                 .context("cursor value is not RFC-3339 timestamptz")?;
             q.bind(v)
         }
+        CursorKind::Lsn => anyhow::bail!("LSN cursors only valid in CDC mode"),
     })
 }
 
@@ -109,6 +110,7 @@ fn extract_cursor(
                 value: ts.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
             }
         }
+        CursorKind::Lsn => anyhow::bail!("LSN cursors only valid in CDC mode"),
     })
 }
 
@@ -209,6 +211,7 @@ mod tests {
             cursor_column: "updated_at".into(),
             cursor_kind: CursorKind::TimestampTz,
             pk_columns: vec!["id".into()],
+            sync_mode: Default::default(),
         }
     }
 

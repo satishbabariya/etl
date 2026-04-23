@@ -79,6 +79,7 @@ mod tests {
                 cursor_column: "updated_at".into(),
                 cursor_kind: CursorKind::TimestampTz,
                 pk_columns: vec!["id".into()],
+                sync_mode: Default::default(),
             },
         )
         .await

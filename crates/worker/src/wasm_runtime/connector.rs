@@ -108,13 +108,19 @@ impl SourceConnector for WasmSourceConnector {
         let wit_source = wit_types::SourceConfig {
             json: Self::wasm_source_json(source)?,
         };
-        let wit_cursor = cursor.map(|c| wit_types::CursorValue {
-            kind: match c.kind {
-                CursorKind::Int64 => wit_types::CursorKind::Int64,
-                CursorKind::TimestampTz => wit_types::CursorKind::TimestampTz,
-            },
-            value: c.value,
-        });
+        let wit_cursor = match cursor {
+            Some(c) => Some(wit_types::CursorValue {
+                kind: match c.kind {
+                    CursorKind::Int64 => wit_types::CursorKind::Int64,
+                    CursorKind::TimestampTz => wit_types::CursorKind::TimestampTz,
+                    CursorKind::Lsn => {
+                        anyhow::bail!("LSN cursor not supported in WASM connectors")
+                    }
+                },
+                value: c.value,
+            }),
+            None => None,
+        };
 
         let outcome = bindings
             .call_read_batch(

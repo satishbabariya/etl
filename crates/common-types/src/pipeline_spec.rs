@@ -18,6 +18,14 @@ pub enum SourceSpec {
     Wasm(WasmSourceSpec),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    #[default]
+    Cursor,
+    Cdc,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostgresSourceSpec {
     pub schema: String,
@@ -25,6 +33,8 @@ pub struct PostgresSourceSpec {
     pub cursor_column: String,
     pub cursor_kind: CursorKind,
     pub pk_columns: Vec<String>,
+    #[serde(default)]
+    pub sync_mode: SyncMode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,6 +68,7 @@ mod tests {
                 cursor_column: "updated_at".into(),
                 cursor_kind: CursorKind::TimestampTz,
                 pk_columns: vec!["id".into()],
+                sync_mode: SyncMode::Cursor,
             }),
             destination: DestinationSpec::LocalParquet(LocalParquetSpec {
                 base_path: "./data".into(),
@@ -88,8 +99,39 @@ mod tests {
             cursor_column: "c".into(),
             cursor_kind: CursorKind::Int64,
             pk_columns: vec!["id".into()],
+            sync_mode: SyncMode::Cursor,
         });
         let j: serde_json::Value = serde_json::to_value(&s).unwrap();
         assert_eq!(j["type"], "postgres");
+    }
+
+    #[test]
+    fn postgres_sync_mode_defaults_to_cursor() {
+        let j = r#"{
+            "type": "postgres", "schema": "public", "table": "customers",
+            "cursor_column": "updated_at", "cursor_kind": "timestamp_tz",
+            "pk_columns": ["id"]
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::Postgres(p) = s {
+            assert_eq!(p.sync_mode, SyncMode::Cursor);
+        } else {
+            panic!("expected Postgres variant");
+        }
+    }
+
+    #[test]
+    fn postgres_sync_mode_cdc_parses() {
+        let j = r#"{
+            "type": "postgres", "schema": "public", "table": "customers",
+            "cursor_column": "updated_at", "cursor_kind": "timestamp_tz",
+            "pk_columns": ["id"], "sync_mode": "cdc"
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::Postgres(p) = s {
+            assert_eq!(p.sync_mode, SyncMode::Cdc);
+        } else {
+            panic!();
+        }
     }
 }

@@ -16,6 +16,7 @@ fn kind_str(k: CursorKind) -> &'static str {
     match k {
         CursorKind::Int64 => "int64",
         CursorKind::TimestampTz => "timestamptz",
+        CursorKind::Lsn => "lsn",
     }
 }
 
@@ -23,6 +24,7 @@ fn parse_kind(s: &str) -> CursorKind {
     match s {
         "int64" => CursorKind::Int64,
         "timestamptz" => CursorKind::TimestampTz,
+        "lsn" => CursorKind::Lsn,
         other => panic!("unknown cursor_kind in DB: {other}"),
     }
 }
