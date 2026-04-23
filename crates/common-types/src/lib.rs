@@ -6,3 +6,4 @@ pub mod evolution;
 pub mod ids;
 pub mod pipeline_spec;
 pub mod schema_fingerprint;
+pub mod transform;

@@ -43,6 +43,8 @@ pub struct PipelineDslSpec {
     pub batch_size: usize,
     #[serde(default)]
     pub evolution_policy: EvolutionPolicy,
+    #[serde(default)]
+    pub transform: Option<crate::transform::TransformSpec>,
 }
 
 #[cfg(test)]
