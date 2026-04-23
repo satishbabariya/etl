@@ -22,13 +22,16 @@ pub struct NewConnection {
 }
 
 pub async fn create(pool: &PgPool, new: NewConnection) -> sqlx::Result<ConnectionId> {
+    // Auto-resolve the tenant's default workspace for denormalization.
+    let workspace_id = crate::workspace::ensure_default(pool, new.tenant_id).await?;
     let id = ConnectionId::new();
     sqlx::query(
-        "INSERT INTO connections (connection_id, tenant_id, name, connector_ref, config) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO connections (connection_id, tenant_id, workspace_id, name, connector_ref, config) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(id.as_uuid())
     .bind(new.tenant_id.as_uuid())
+    .bind(workspace_id.as_uuid())
     .bind(&new.name)
     .bind(&new.connector_ref)
     .bind(&new.config)

@@ -8,15 +8,18 @@ mod db;
 pub mod connection;
 pub mod pipeline;
 pub mod run;
+pub mod schema;
+pub mod stream;
 pub mod stream_state;
 pub mod tenant;
+pub mod workspace;
 
 pub use connection::{Connection, NewConnection};
 pub use pipeline::{NewPipeline, Pipeline};
 pub use run::{NewRun, Run, RunStatus};
 pub use tenant::Tenant;
 
-use common_types::ids::{ConnectionId, PipelineId, RunId, TenantId};
+use common_types::ids::{ConnectionId, PipelineId, RunId, SchemaId, StreamId, TenantId, WorkspaceId};
 use sqlx::PgPool;
 
 /// Wrapper that exposes catalog operations as methods.
@@ -99,12 +102,59 @@ impl Catalog {
         stream_state::upsert(&self.pool, pipeline_id, stream_name, cursor, last_run_id).await
     }
 
+    // Workspaces
+    pub async fn ensure_default_workspace(
+        &self,
+        tenant_id: TenantId,
+    ) -> sqlx::Result<WorkspaceId> {
+        workspace::ensure_default(&self.pool, tenant_id).await
+    }
+    pub async fn get_workspace_by_name(
+        &self,
+        tenant_id: TenantId,
+        name: &str,
+    ) -> sqlx::Result<Option<workspace::Workspace>> {
+        workspace::get_by_name(&self.pool, tenant_id, name).await
+    }
+
+    // Streams
+    pub async fn ensure_stream(&self, new: stream::NewStream) -> sqlx::Result<StreamId> {
+        stream::ensure(&self.pool, new).await
+    }
+    pub async fn get_stream_by_name(
+        &self,
+        pipeline_id: PipelineId,
+        name: &str,
+    ) -> sqlx::Result<Option<stream::Stream>> {
+        stream::get_by_name(&self.pool, pipeline_id, name).await
+    }
+    pub async fn set_stream_current_schema(
+        &self,
+        stream_id: StreamId,
+        schema_id: SchemaId,
+    ) -> sqlx::Result<()> {
+        stream::set_current_schema(&self.pool, stream_id, schema_id).await
+    }
+
+    // Schemas
+    pub async fn insert_schema(&self, new: schema::NewSchema) -> sqlx::Result<SchemaId> {
+        schema::insert(&self.pool, new).await
+    }
+    pub async fn get_latest_schema(
+        &self,
+        stream_id: StreamId,
+    ) -> sqlx::Result<Option<schema::Schema>> {
+        schema::get_latest(&self.pool, stream_id).await
+    }
+
     /// Truncates every table. Intended for test cleanup only.
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
-        sqlx::query("TRUNCATE runs, stream_state, pipelines, connections, tenants CASCADE")
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "TRUNCATE runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
