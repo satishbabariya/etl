@@ -8,6 +8,9 @@ pub mod host;
 pub mod limits;
 pub mod runtime;
 
+#[cfg(test)]
+mod tests;
+
 pub use connector::WasmSourceConnector;
 pub use engine::build_engine;
 pub use epoch::EpochTicker;
