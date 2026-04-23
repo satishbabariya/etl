@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub struct DiscoverInput {
     pub source: SourceSpec,
     pub source_url: String,
+    pub connector_ref: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,6 +21,7 @@ pub struct ReadBatchInput {
     pub source_url: String,
     pub cursor: Option<CursorValue>,
     pub batch_size: usize,
+    pub connector_ref: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

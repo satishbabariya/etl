@@ -69,8 +69,19 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         serde_json::from_value(source_conn_row.config.clone())
             .context("source connections.config did not deserialize as ConnectionConfig")?;
 
+    let connector_ref = source_conn_row.connector_ref.clone();
+
     let stream_name = match &spec.source {
         SourceSpec::Postgres(p) => p.table.clone(),
+        SourceSpec::Wasm(_) => {
+            // Phase I.3: derive stream name from the connector's name
+            // (strip the "wasm:" prefix and the "@version" suffix).
+            let bare = connector_ref
+                .strip_prefix("wasm:")
+                .unwrap_or(&connector_ref);
+            let name = bare.split('@').next().unwrap_or(bare);
+            name.to_string()
+        }
     };
 
     let initial_cursor = catalog
@@ -107,6 +118,7 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         source_connection,
         initial_cursor,
         stream_name,
+        connector_ref,
     };
 
     client

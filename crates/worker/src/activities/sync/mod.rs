@@ -1,4 +1,4 @@
-//! Phase I.2 sync activities: discover / read_batch / load_batch / commit_cursor.
+//! Phase I.2 sync activities, extended in Phase I.3 with WASM dispatch.
 
 pub mod inputs;
 
@@ -11,22 +11,22 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use catalog::Catalog;
 use common_types::connection_config::ConnectionConfig;
 use common_types::ids::{PipelineId, RunId};
-use connector_sdk::SourceConnector;
 use loader_sdk::{DestinationLoader, LoadId};
 use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
-use crate::connectors::postgres::PostgresConnector;
+use crate::connectors::dispatch::build_source_connector;
 use crate::loaders::parquet_local::LocalParquetLoader;
+use crate::wasm_runtime::WasmSourceRuntime;
 use inputs::*;
 
 pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
+    pub wasm_runtime: Arc<WasmSourceRuntime>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {
-    // Uses ActivityError's From<anyhow::Error> impl (produces Retryable).
     e.into()
 }
 
@@ -62,7 +62,10 @@ impl SyncActivities {
         _ctx: ActivityContext,
         input: DiscoverInput,
     ) -> Result<DiscoverOutput, ActivityError> {
-        let schema = PostgresConnector
+        let connector =
+            build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
+                .map_err(to_retryable)?;
+        let schema = connector
             .discover(
                 &ConnectionConfig { url: input.source_url },
                 &input.source,
@@ -79,7 +82,10 @@ impl SyncActivities {
         _ctx: ActivityContext,
         input: ReadBatchInput,
     ) -> Result<ReadBatchOutput, ActivityError> {
-        let outcome = PostgresConnector
+        let connector =
+            build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
+                .map_err(to_retryable)?;
+        let outcome = connector
             .read_batch(
                 &ConnectionConfig { url: input.source_url },
                 &input.source,

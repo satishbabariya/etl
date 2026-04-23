@@ -34,6 +34,7 @@ pub struct PipelineRunInput {
     pub initial_cursor: Option<CursorValue>,
     /// Name of the stream being synced. Phase I.2 uses the source table name.
     pub stream_name: String,
+    pub connector_ref: String,
 }
 
 #[workflow]
@@ -44,6 +45,7 @@ pub struct PipelineRunWorkflow {
     source_connection: ConnectionConfig,
     cursor: Option<CursorValue>,
     stream_name: String,
+    connector_ref: String,
 }
 
 fn opts_short() -> ActivityOptions {
@@ -71,18 +73,20 @@ impl PipelineRunWorkflow {
             source_connection: input.source_connection,
             cursor: input.initial_cursor,
             stream_name: input.stream_name,
+            connector_ref: input.connector_ref,
         }
     }
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
-        let (run_id, pipeline_id, spec, conn, stream_name) = ctx.state(|s| {
+        let (run_id, pipeline_id, spec, conn, stream_name, connector_ref) = ctx.state(|s| {
             (
                 s.run_id,
                 s.pipeline_id,
                 s.spec.clone(),
                 s.source_connection.clone(),
                 s.stream_name.clone(),
+                s.connector_ref.clone(),
             )
         });
 
@@ -94,6 +98,7 @@ impl PipelineRunWorkflow {
             DiscoverInput {
                 source: spec.source.clone(),
                 source_url: conn.url.clone(),
+                connector_ref: connector_ref.clone(),
             },
             opts_short(),
         )
@@ -111,6 +116,7 @@ impl PipelineRunWorkflow {
                         source_url: conn.url.clone(),
                         cursor,
                         batch_size: spec.batch_size,
+                        connector_ref: connector_ref.clone(),
                     },
                     opts_long(),
                 )
