@@ -7,6 +7,7 @@ pub mod epoch;
 pub mod host;
 pub mod limits;
 pub mod runtime;
+pub mod scalar_runtime;
 
 #[cfg(test)]
 mod tests;
@@ -17,3 +18,4 @@ pub use epoch::EpochTicker;
 pub use host::HostState;
 pub use limits::{Limits, MemoryCap};
 pub use runtime::WasmSourceRuntime;
+pub use scalar_runtime::WasmScalarRuntime;
