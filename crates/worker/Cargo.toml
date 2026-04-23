@@ -39,6 +39,12 @@ url = "2"
 futures = "0.3"
 futures-util = "0.3"
 base64 = "0.22"
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wit-bindgen = { workspace = true }
+dashmap = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+wat = "1"
