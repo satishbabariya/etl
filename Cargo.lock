@@ -6373,6 +6373,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "base64 0.22.1",
+ "blake3",
  "catalog",
  "chrono",
  "common-types",
