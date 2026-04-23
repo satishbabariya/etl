@@ -9,6 +9,12 @@ fn empty_host_state() -> super::HostState {
     super::HostState::new(super::Limits::default())
 }
 
+fn tight_memory_host_state(max_bytes: u64) -> super::HostState {
+    let mut limits = super::Limits::default();
+    limits.memory_bytes = max_bytes;
+    super::HostState::new(limits)
+}
+
 #[tokio::test]
 async fn fuel_exhaustion_traps_guest() {
     let engine = Arc::new(build_engine().unwrap());
@@ -19,6 +25,8 @@ async fn fuel_exhaustion_traps_guest() {
     let mut store = Store::new(&engine, empty_host_state());
     // Tiny budget so the infinite loop trips instantly.
     store.set_fuel(10_000).unwrap();
+    // Generous epoch deadline so interrupt doesn't fire (we're testing fuel).
+    store.set_epoch_deadline(u64::MAX);
     let instance = linker
         .instantiate_async(&mut store, &component)
         .await
@@ -32,4 +40,27 @@ async fn fuel_exhaustion_traps_guest() {
         msg.contains("fuel") || msg.contains("trap"),
         "expected fuel/trap error, got: {msg}"
     );
+}
+
+#[tokio::test]
+async fn memory_cap_denies_large_growth() {
+    let engine = Arc::new(build_engine().unwrap());
+    let wat = include_str!("tests/memory_hog.wat");
+    let wasm_bytes = wat::parse_str(wat).unwrap();
+    let component = Component::new(&engine, &wasm_bytes).unwrap();
+    let linker: Linker<super::HostState> = Linker::new(&engine);
+    // Tight cap: 2 pages = 128 KB. memory_hog tries to grow by 1024 pages (~64 MB).
+    let mut store = Store::new(&engine, tight_memory_host_state(2 * 65536));
+    store.set_fuel(1_000_000).unwrap();
+    store.set_epoch_deadline(u64::MAX);
+    store.limiter(|s: &mut super::HostState| &mut s.memory_limiter);
+    let instance = linker
+        .instantiate_async(&mut store, &component)
+        .await
+        .unwrap();
+    let grow = instance
+        .get_typed_func::<(), (i32,)>(&mut store, "grow")
+        .unwrap();
+    let (result,) = grow.call_async(&mut store, ()).await.unwrap();
+    assert_eq!(result, -1, "memory.grow should return -1 when denied");
 }
