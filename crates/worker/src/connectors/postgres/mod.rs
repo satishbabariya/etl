@@ -18,6 +18,9 @@ impl SourceConnector for PostgresConnector {
             common_types::pipeline_spec::SourceSpec::Postgres(pg) => {
                 discover::run(conn, pg).await
             }
+            common_types::pipeline_spec::SourceSpec::Wasm(_) => {
+                anyhow::bail!("PostgresConnector received a SourceSpec::Wasm — dispatcher bug")
+            }
         }
     }
 
@@ -31,6 +34,9 @@ impl SourceConnector for PostgresConnector {
         match source {
             common_types::pipeline_spec::SourceSpec::Postgres(pg) => {
                 read::run(conn, pg, cursor, batch_size).await
+            }
+            common_types::pipeline_spec::SourceSpec::Wasm(_) => {
+                anyhow::bail!("PostgresConnector received a SourceSpec::Wasm — dispatcher bug")
             }
         }
     }

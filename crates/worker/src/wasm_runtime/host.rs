@@ -10,13 +10,15 @@ pub struct HostState {
     pub table: ResourceTable,
     pub http: reqwest::Client,
     pub limits: super::limits::Limits,
+    pub memory_limiter: super::limits::MemoryCap,
 }
 
 impl HostState {
     pub fn new(limits: super::limits::Limits) -> Self {
-        // Deliberately no filesystem preopens, no network, no env-vars.
-        // Phase I.3 connectors get only what we explicitly linked below.
         let wasi = WasiCtxBuilder::new().build();
+        let memory_limiter = super::limits::MemoryCap {
+            max_bytes: limits.memory_bytes,
+        };
         Self {
             wasi,
             table: ResourceTable::new(),
@@ -25,6 +27,7 @@ impl HostState {
                 .build()
                 .expect("reqwest client"),
             limits,
+            memory_limiter,
         }
     }
 }
