@@ -170,8 +170,6 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
     let stream_name = match &spec.source {
         SourceSpec::Postgres(p) => p.table.clone(),
         SourceSpec::Wasm(_) => {
-            // Phase I.3: derive stream name from the connector's name
-            // (strip the "wasm:" prefix and the "@version" suffix).
             let bare = connector_ref
                 .strip_prefix("wasm:")
                 .unwrap_or(&connector_ref);
@@ -179,6 +177,27 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
             name.to_string()
         }
     };
+
+    let (cursor_column, cursor_kind, pk_columns) = match &spec.source {
+        SourceSpec::Postgres(p) => (
+            p.cursor_column.clone(),
+            p.cursor_kind,
+            p.pk_columns.clone(),
+        ),
+        SourceSpec::Wasm(_) => (
+            "_row_index".to_string(),
+            common_types::cursor::CursorKind::Int64,
+            vec![],
+        ),
+    };
+
+    // Pull evolution_policy out of the pipelines.spec JSONB; fall back to
+    // PropagateAdditive if absent (Phase I.2 catalog rows won't have it).
+    let evolution_policy = pipeline
+        .spec
+        .get("evolution_policy")
+        .and_then(|v| serde_json::from_value::<common_types::evolution::EvolutionPolicy>(v.clone()).ok())
+        .unwrap_or_default();
 
     let initial_cursor = catalog
         .get_stream_state(pipeline_id, &stream_name)
@@ -215,6 +234,11 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         initial_cursor,
         stream_name,
         connector_ref,
+        evolution_policy,
+        cursor_column,
+        cursor_kind,
+        pk_columns,
+        tenant_id: pipeline.tenant_id.as_uuid(),
     };
 
     client
