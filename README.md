@@ -106,7 +106,39 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase I.4 — Full Catalog + YAML DSL (complete)**. Next: Phase I.5 — Transformation DAG. See the roadmap spec for the four-era trajectory.
+Currently: **Phase I.5 — Transformation DAG + dead-letter (complete)**. Next: Phase I.6 — CDC / streaming mode. See the roadmap spec for the four-era trajectory.
+
+## Phase I.5 — Transformation DAG + dead-letter demo
+
+Pipelines gain an optional `transform` field with a linear chain of operators. Schema derivation is pure; the catalog stores the post-transform schema so downstream consumers see what actually lands at the destination.
+
+```yaml
+# examples/dsl/customers-filter-mask.yaml
+kind: Pipeline
+name: customers-filter-mask
+spec:
+  source:
+    type: postgres
+    schema: public
+    table: customers
+    cursor_column: updated_at
+    cursor_kind: timestamp_tz
+    pk_columns: [id]
+  destination: { type: local_parquet, base_path: ./data }
+  batch_size: 4
+  evolution_policy: propagate_additive
+  transform:
+    dead_letter_threshold: 0.0
+    operators:
+      - { type: filter, predicate: "email IS NOT NULL" }
+      - { type: mask,   column: email, strategy: { kind: hash } }
+```
+
+MVP operators: `select`, `filter` (subset SQL — `IS [NOT] NULL`, `= <literal>`, `IN (...)`), `mask` (hash/null/redact), `add_column`, `validate` (row-level; fails land in dead-letter), `wasm_scalar` (pure per-row UDF via the Phase I.3 runtime under a tighter capability set — only `log`).
+
+**Dead-letter routing.** Rows rejected by `validate` are written to `<base_path>/<pipeline_id>/dead-letter/<run_id>/batch-<seq>.parquet` with the original columns preserved. Cumulative `rows_rejected / rows_total` is compared to `dead_letter_threshold` (default `0.0` — fail on any). Over threshold → `load_batch` returns NonRetryable, the workflow's new `fail_run` shim marks the `runs` row Failed.
+
+**Scalar UDFs.** Build a WASM scalar UDF with `cargo run --bin platform -- connector build <dir> --kind scalar`. See `examples/upper-case-scalar/` for the reference guest. Reference from a pipeline with `{ type: wasm_scalar, udf: "upper-case-scalar@0.1.0", input_column: name, output_column: name_upper }`.
 
 ## Phase I.4 — YAML DSL + schema evolution demo
 
