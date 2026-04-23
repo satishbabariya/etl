@@ -42,6 +42,24 @@ impl WasiView for HostState {
 }
 
 #[wasmtime::component::__internal::async_trait]
+impl super::scalar_bindings::platform::udf::host::Host for HostState {
+    async fn log(
+        &mut self,
+        level: super::scalar_bindings::platform::udf::host::LogLevel,
+        message: String,
+    ) {
+        use super::scalar_bindings::platform::udf::host::LogLevel as L;
+        match level {
+            L::Trace => tracing::trace!(guest = true, udf = true, "{}", message),
+            L::Debug => tracing::debug!(guest = true, udf = true, "{}", message),
+            L::Info => tracing::info!(guest = true, udf = true, "{}", message),
+            L::Warn => tracing::warn!(guest = true, udf = true, "{}", message),
+            L::Error => tracing::error!(guest = true, udf = true, "{}", message),
+        }
+    }
+}
+
+#[wasmtime::component::__internal::async_trait]
 impl host::Host for HostState {
     async fn log(&mut self, level: LogLevel, message: String) {
         match level {

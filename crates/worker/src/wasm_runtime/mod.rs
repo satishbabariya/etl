@@ -7,6 +7,7 @@ pub mod epoch;
 pub mod host;
 pub mod limits;
 pub mod runtime;
+pub mod scalar_bindings;
 pub mod scalar_runtime;
 
 #[cfg(test)]

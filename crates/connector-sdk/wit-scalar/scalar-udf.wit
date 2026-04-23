@@ -1,0 +1,14 @@
+package platform:udf@0.1.0;
+
+interface host {
+    enum log-level { trace, debug, info, warn, error }
+    log: func(level: log-level, message: string);
+}
+
+world scalar-udf {
+    import host;
+    /// Apply the UDF to each string in `input`; return same-length list.
+    /// Implementations MUST be deterministic (no wall-clock, randomness,
+    /// or external state — the host doesn't link those capabilities).
+    export apply-scalar: func(input: list<string>) -> result<list<string>, string>;
+}

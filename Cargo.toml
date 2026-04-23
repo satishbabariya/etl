@@ -10,7 +10,7 @@ members = [
     "crates/cli",
     "tests/integration",
 ]
-exclude = ["examples/csv-source"]
+exclude = ["examples/csv-source", "examples/upper-case-scalar"]
 
 [workspace.package]
 edition = "2021"
