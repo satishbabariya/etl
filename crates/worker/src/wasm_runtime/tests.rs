@@ -64,3 +64,47 @@ async fn memory_cap_denies_large_growth() {
     let (result,) = grow.call_async(&mut store, ()).await.unwrap();
     assert_eq!(result, -1, "memory.grow should return -1 when denied");
 }
+
+#[tokio::test]
+async fn instantiation_fails_when_guest_imports_un_linked_function() {
+    let engine = Arc::new(build_engine().unwrap());
+    let wat = include_str!("tests/forbidden_import.wat");
+    let wasm_bytes = wat::parse_str(wat).unwrap();
+    // Component::new may even reject compilation if it can't resolve.
+    // But typically compile succeeds and instantiate fails — either outcome
+    // satisfies the "capability denied" commitment.
+    match Component::new(&engine, &wasm_bytes) {
+        Err(e) => {
+            let msg = format!("{e:?}").to_lowercase();
+            assert!(
+                msg.contains("forbidden")
+                    || msg.contains("unknown")
+                    || msg.contains("unresolved")
+                    || msg.contains("missing")
+                    || msg.contains("import"),
+                "expected import-related error, got: {msg}"
+            );
+            return;
+        }
+        Ok(component) => {
+            let linker: Linker<super::HostState> = Linker::new(&engine);
+            let mut store = Store::new(&engine, empty_host_state());
+            store.set_fuel(1_000_000).unwrap();
+            store.set_epoch_deadline(u64::MAX);
+            let res = linker.instantiate_async(&mut store, &component).await;
+            let err = match res {
+                Ok(_) => panic!("expected instantiation to fail due to un-linked import"),
+                Err(e) => e,
+            };
+            let msg = format!("{err:?}").to_lowercase();
+            assert!(
+                msg.contains("forbidden")
+                    || msg.contains("unknown")
+                    || msg.contains("unresolved")
+                    || msg.contains("missing")
+                    || msg.contains("import"),
+                "expected capability-denial error mentioning the missing import, got: {msg}"
+            );
+        }
+    }
+}
