@@ -433,6 +433,33 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .task_timeout(Duration::from_secs(60))
         .build();
 
+    // Phase I.6: route to CdcPipelineWorkflow if sync_mode is Cdc.
+    let is_cdc = matches!(
+        &spec.source,
+        common_types::pipeline_spec::SourceSpec::Postgres(p)
+            if p.sync_mode == common_types::pipeline_spec::SyncMode::Cdc
+    );
+    if is_cdc {
+        let cdc_input = worker::workflows::CdcPipelineInput {
+            run_id: run_id.as_uuid(),
+            pipeline_id: pipeline_id.as_uuid(),
+            tenant_id: pipeline.tenant_id.as_uuid(),
+            spec: spec.clone(),
+            source_url: source_connection.url.clone(),
+            max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+        };
+        client
+            .start_workflow(worker::workflows::CdcPipelineWorkflow::run, cdc_input, opts)
+            .await
+            .context("starting CdcPipelineWorkflow")?;
+        println!("started CDC workflow {}", workflow_id);
+        println!("run id: {}", run_id);
+        return Ok(());
+    }
+
     let input = PipelineRunInput {
         run_id: run_id.as_uuid(),
         pipeline_id: pipeline_id.as_uuid(),
