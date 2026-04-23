@@ -1,7 +1,9 @@
 use anyhow::Context;
 use catalog::{Catalog, NewRun};
 use clap::{Parser, Subcommand};
+use common_types::connection_config::ConnectionConfig;
 use common_types::ids::{PipelineId, RunId};
+use common_types::pipeline_spec::{PipelineSpec, SourceSpec};
 use std::time::Duration;
 use temporalio_client::WorkflowStartOptions;
 use worker::temporal::{make_client, TemporalConfig};
@@ -16,7 +18,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Pipeline commands.
     Pipeline {
         #[command(subcommand)]
         cmd: PipelineCmd,
@@ -25,9 +26,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum PipelineCmd {
-    /// Run a pipeline by id.
     Run {
-        /// Pipeline id (e.g. "pipe-<uuid>") or bare UUID.
         id: String,
     },
 }
@@ -59,6 +58,26 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .await?
         .with_context(|| format!("pipeline {} not found", pipeline_id))?;
 
+    let spec: PipelineSpec = serde_json::from_value(pipeline.spec.clone())
+        .context("pipelines.spec did not deserialize as PipelineSpec")?;
+
+    let source_conn_row = catalog
+        .get_connection(pipeline.source_conn_id)
+        .await?
+        .with_context(|| format!("source connection {} not found", pipeline.source_conn_id))?;
+    let source_connection: ConnectionConfig =
+        serde_json::from_value(source_conn_row.config.clone())
+            .context("source connections.config did not deserialize as ConnectionConfig")?;
+
+    let stream_name = match &spec.source {
+        SourceSpec::Postgres(p) => p.table.clone(),
+    };
+
+    let initial_cursor = catalog
+        .get_stream_state(pipeline_id, &stream_name)
+        .await?
+        .and_then(|s| s.cursor);
+
     let run_id = RunId::new();
     let workflow_id = format!("run-{}", run_id.as_uuid());
 
@@ -76,13 +95,18 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
     let client = make_client(&cfg).await?;
 
     let opts = WorkflowStartOptions::new(cfg.task_queue.clone(), workflow_id.clone())
-        .execution_timeout(Duration::from_secs(600))
-        .run_timeout(Duration::from_secs(600))
-        .task_timeout(Duration::from_secs(10))
+        .execution_timeout(Duration::from_secs(3600))
+        .run_timeout(Duration::from_secs(3600))
+        .task_timeout(Duration::from_secs(60))
         .build();
 
     let input = PipelineRunInput {
         run_id: run_id.as_uuid(),
+        pipeline_id: pipeline_id.as_uuid(),
+        spec,
+        source_connection,
+        initial_cursor,
+        stream_name,
     };
 
     client

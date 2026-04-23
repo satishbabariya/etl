@@ -8,6 +8,7 @@ mod db;
 pub mod connection;
 pub mod pipeline;
 pub mod run;
+pub mod stream_state;
 pub mod tenant;
 
 pub use connection::{Connection, NewConnection};
@@ -79,10 +80,29 @@ impl Catalog {
         run::get(&self.pool, id).await
     }
 
+    // Stream state
+    pub async fn get_stream_state(
+        &self,
+        pipeline_id: PipelineId,
+        stream_name: &str,
+    ) -> sqlx::Result<Option<stream_state::StreamState>> {
+        stream_state::get(&self.pool, pipeline_id, stream_name).await
+    }
+
+    pub async fn upsert_stream_state(
+        &self,
+        pipeline_id: PipelineId,
+        stream_name: &str,
+        cursor: Option<common_types::cursor::CursorValue>,
+        last_run_id: Option<RunId>,
+    ) -> sqlx::Result<()> {
+        stream_state::upsert(&self.pool, pipeline_id, stream_name, cursor, last_run_id).await
+    }
+
     /// Truncates every table. Intended for test cleanup only.
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
-        sqlx::query("TRUNCATE runs, pipelines, connections, tenants CASCADE")
+        sqlx::query("TRUNCATE runs, stream_state, pipelines, connections, tenants CASCADE")
             .execute(&self.pool)
             .await?;
         Ok(())

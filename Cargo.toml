@@ -44,8 +44,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # DB
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate", "macros"] }
 
-# Arrow
+# Arrow / Parquet
 arrow = "53"
+parquet = "53"
+
+# async-trait for async fns in object-safe traits
+async-trait = "0.1"
 
 # Internal crates
 common-types = { path = "crates/common-types" }

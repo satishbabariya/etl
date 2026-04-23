@@ -16,6 +16,7 @@ services:
       - "max_replication_slots=10"
     volumes:
       - etl_pg:/var/lib/postgresql/data
+      - ./db/postgres-init:/docker-entrypoint-initdb.d:ro
 
   temporal-postgres:
     image: postgres:16
