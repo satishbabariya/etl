@@ -2552,36 +2552,56 @@ Append to the bottom of `docs/superpowers/plans/2026-04-23-phase-1-3-wasm-runtim
 
 ## Phase I.3 Completion Log
 
-- [ ] Task 1 — Workspace wasmtime deps + wasm32-wasip2 target
-- [ ] Task 2 — WIT definition
-- [ ] Task 3 — Engine construction
-- [ ] Task 4 — Bindings + HostState + log + http-fetch
-- [ ] Task 5 — Memory limiter + epoch ticker
-- [ ] Task 6 — WasmSourceRuntime + Component cache
-- [ ] Task 7 — WasmSourceConnector impls SourceConnector
-- [ ] Task 8 — SourceSpec::Wasm + dispatcher
-- [ ] Task 9 — SyncActivities + workflow plumbing
-- [ ] Task 10 — CSV reference guest
-- [ ] Task 11 — `platform connector build` CLI
-- [ ] Task 12 — Fuel adversarial test
-- [ ] Task 13 — Memory adversarial test
-- [ ] Task 14 — Capability-denial adversarial test
-- [ ] Task 15 — End-to-end integration test
-- [ ] Task 16 — README + this log
+Completed 2026-04-23 on branch `phase-1-3-wasm-runtime`, 17 commits.
 
-### Exit criterion — to be marked when Tasks 12-15 pass
+- [x] Task 1 — Workspace wasmtime deps + wasm32-wasip2 target
+- [x] Task 2 — WIT definition
+- [x] Task 3 — Engine construction
+- [x] Task 4 — Bindings + HostState + log + http-fetch
+- [x] Task 5 — Memory limiter + epoch ticker
+- [x] Task 6 — WasmSourceRuntime + Component cache
+- [x] Task 7 — WasmSourceConnector impls SourceConnector
+- [x] Task 8 — SourceSpec::Wasm + dispatcher
+- [x] Task 9 — SyncActivities + workflow plumbing
+- [x] Task 10 — CSV reference guest
+- [x] Task 11 — `platform connector build` CLI
+- [x] Task 12 — Fuel adversarial test
+- [x] Task 13 — Memory adversarial test
+- [x] Task 14 — Capability-denial adversarial test
+- [x] Task 15 — End-to-end integration test
+- [x] Task 16 — README + this log
+
+### Exit criterion — MET
 
 **Capability sandboxing + resource limits + end-to-end WASM sync**, proven by:
-- Fuel exhaustion trap (Task 12)
-- Memory-growing denial (Task 13)
-- Instantiation-fails-on-un-linked-import (Task 14)
-- 5-row CSV → 3 Parquet files (2+2+1) via WASM guest (Task 15)
+- `fuel_exhaustion_traps_guest` — 10k-fuel budget against infinite core-loop → trap
+- `memory_cap_denies_large_growth` — 2-page cap rejects 1024-page grow → returns -1
+- `instantiation_fails_when_guest_imports_un_linked_function` — import of `forbidden.wall_clock_now` fails at resolve-time
+- `csv_wasm_connector_end_to_end` (~55 s) — 5-row inline CSV through WASM guest → 3 Parquet batches (2+2+1), cursor 0→2→4→5, guest `log()` entries surface in worker tracing, full run in <30 s budget
 
-Plus: Phase I.2 tests still green (regression-proof that the Rust-native Postgres path still works).
+Plus: Phase I.2 Postgres path still works (workspace test run clean after Task 9 wiring changes).
 
-### Deviations
+### Deviations from the plan
 
-(Fill in as encountered during execution.)
+- **Task 7 needed `SourceSpec::Wasm` to compile** (pattern-matches on it) — pulled Task 8's variant addition forward. PostgresConnector's match arms updated for exhaustiveness (bail on Wasm — dispatcher bug if it receives one).
+- **HostState now carries a `MemoryCap` field** directly rather than the plan's `Box::leak` closure trick — cleaner, passes the limiter via `store.limiter(|s| &mut s.memory_limiter)`.
+- **Adversarial tests needed `store.set_epoch_deadline(u64::MAX)`** explicitly; the engine enables `epoch_interruption(true)`, and without a ticker a default deadline of 0 traps immediately on instantiation. Fuel/memory tests don't have a ticker running.
+- **Guest `wit_bindgen::generate!` output** puts some types at crate root (clashing with `use`) and others under the `platform::connector::types::` path (needing explicit import). Specifically, `ConnectionConfig`, `ConnectorError`, `CursorValue`, `ReadOutcome`, `SourceConfig`, and `Guest` are at root; `CursorKind` is under `types::`. Fixed by using selective imports only for the non-root-exported names.
+- **Arrow in `wasm32-wasip2` worked first-try** with `default-features = false` on each of `arrow-array`, `arrow-schema`, `arrow-ipc`, `arrow-data`, `arrow-buffer` — the plan-documented CSV/JSON fallback wasn't needed.
+- **`Result::unwrap_err` on `Result<Box<dyn SourceConnector>>`** doesn't compile (the T must be `Debug`). Switched dispatcher tests to pattern-match `Ok`/`Err` explicitly.
+- **`.cwasm` accidentally tracked in the Task 11 commit** — followed up with a `.gitignore` addition (`/connectors/*` with a `.gitkeep` placeholder) and a `git rm` of the binary.
+- **Guest's `log()` takes `&str`** per wit-bindgen generation; plan had `String`. Wrap in `&format!(...)`.
+- **`StreamWriter::try_new` return value needs `mut`** in the guest's `ipc_schema_bytes` — plan had it immutable.
+
+### Handoff to Phase I.4
+
+Phase I.4 (full catalog entities + YAML DSL) adds:
+- `streams` and `schemas` tables (replacing the `stream_state` shortcut)
+- Schema evolution policies
+- YAML DSL parser (`platform apply -f pipeline.yaml`)
+- Postgres-in-WASM via a host `postgres-query` capability (additive change to the `host` WIT interface)
+
+The WASM runtime machinery built in I.3 is stable; adding a `postgres-query` host function is an additive extension to `bindings.rs` + `host.rs`.
 
 ### Handoff to Phase I.4
 
