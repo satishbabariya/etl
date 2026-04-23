@@ -5,6 +5,7 @@
 //! workspaces, streams, schemas, transformations, audit.
 
 mod db;
+pub mod cdc;
 pub mod connection;
 pub mod pipeline;
 pub mod run;
