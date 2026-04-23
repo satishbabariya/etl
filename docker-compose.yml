@@ -14,6 +14,8 @@ services:
       - "wal_level=logical"
       - "-c"
       - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
     volumes:
       - etl_pg:/var/lib/postgresql/data
       - ./db/postgres-init:/docker-entrypoint-initdb.d:ro

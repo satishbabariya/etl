@@ -61,6 +61,13 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json", "gzip"], default
 blake3 = "1"
 serde_yaml = "0.9"
 
+# CDC
+tokio-postgres = { version = "0.7", features = ["runtime", "with-chrono-0_4"] }
+postgres-protocol = "0.6"
+byteorder = "1"
+futures-util = "0.3"
+bytes = "1"
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }
