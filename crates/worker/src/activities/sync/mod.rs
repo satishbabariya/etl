@@ -18,12 +18,13 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 use crate::connectors::dispatch::build_source_connector;
 use crate::loaders::parquet_local::LocalParquetLoader;
-use crate::wasm_runtime::WasmSourceRuntime;
+use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
 use inputs::*;
 
 pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,
+    pub scalar_runtime: Arc<WasmScalarRuntime>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {
@@ -65,13 +66,26 @@ impl SyncActivities {
         let connector =
             build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
                 .map_err(to_retryable)?;
-        let schema = connector
+        let discovered_schema = connector
             .discover(
                 &ConnectionConfig { url: input.source_url.clone() },
                 &input.source,
             )
             .await
             .map_err(to_retryable)?;
+
+        // Phase I.5: if a transform is configured, record the DERIVED schema.
+        let final_schema: arrow::datatypes::SchemaRef = match &input.transform {
+            Some(spec) if !spec.operators.is_empty() => {
+                let derived = crate::transform::derive_schema(
+                    discovered_schema.as_ref(),
+                    &spec.operators,
+                )
+                .map_err(to_retryable)?;
+                std::sync::Arc::new(derived)
+            }
+            _ => discovered_schema,
+        };
 
         let tenant_id = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
         let pipeline_id = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
@@ -99,7 +113,7 @@ impl SyncActivities {
             tenant_id,
             stream_id,
             input.evolution_policy,
-            schema.clone(),
+            final_schema.clone(),
         )
         .await
         .map_err(to_retryable)?;
@@ -131,14 +145,42 @@ impl SyncActivities {
             .await
             .map_err(to_retryable)?;
 
-        let rows = outcome.batch.num_rows();
-        let b64 = encode_batch(&outcome.batch).map_err(to_retryable)?;
+        let (kept_batch, rejected_batch) = match &input.transform {
+            Some(spec) if !spec.operators.is_empty() => {
+                let tx = crate::transform::apply(
+                    outcome.batch,
+                    &spec.operators,
+                    &self.scalar_runtime,
+                )
+                .await
+                .map_err(to_retryable)?;
+                tracing::info!(
+                    per_operator = ?tx.per_operator,
+                    rows_kept = tx.kept.num_rows(),
+                    rows_rejected = tx.rejected.as_ref().map(|b| b.num_rows()).unwrap_or(0),
+                    "transform complete"
+                );
+                (tx.kept, tx.rejected)
+            }
+            _ => (outcome.batch, None),
+        };
+
+        let rows = kept_batch.num_rows();
+        let rows_rejected = rejected_batch.as_ref().map(|b| b.num_rows()).unwrap_or(0);
+        let b64 = encode_batch(&kept_batch).map_err(to_retryable)?;
+        let rejected_b64 = rejected_batch
+            .as_ref()
+            .map(encode_batch)
+            .transpose()
+            .map_err(to_retryable)?;
 
         Ok(ReadBatchOutput {
             batch_ipc_b64: b64,
             rows,
             new_cursor: outcome.new_cursor,
             is_final: outcome.is_final,
+            rejected_ipc_b64: rejected_b64,
+            rows_rejected,
         })
     }
 
@@ -155,9 +197,63 @@ impl SyncActivities {
             batch_seq: input.batch_seq,
         };
         let res = LocalParquetLoader
-            .load(&input.destination, load_id, batch)
+            .load(&input.destination, load_id.clone(), batch)
             .await
             .map_err(to_retryable)?;
+
+        // Dead-letter routing.
+        if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
+            let rej = decode_batch(rej_b64).map_err(to_retryable)?;
+            if rej.num_rows() > 0 {
+                let dest_path = match &input.destination {
+                    common_types::pipeline_spec::DestinationSpec::LocalParquet(s) => {
+                        let mut p = std::path::PathBuf::from(&s.base_path);
+                        p.push(load_id.pipeline_id.as_uuid().to_string());
+                        p.push("dead-letter");
+                        p.push(load_id.run_id.as_uuid().to_string());
+                        std::fs::create_dir_all(&p)
+                            .map_err(|e| to_retryable(anyhow::anyhow!("create dir: {e}")))?;
+                        p.push(format!("batch-{:05}.parquet", input.batch_seq));
+                        p
+                    }
+                };
+                let file = std::fs::File::create(&dest_path)
+                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter create: {e}")))?;
+                let props = parquet::file::properties::WriterProperties::builder().build();
+                let mut writer =
+                    parquet::arrow::ArrowWriter::try_new(file, rej.schema(), Some(props))
+                        .map_err(|e| to_retryable(anyhow::anyhow!("ArrowWriter: {e}")))?;
+                writer
+                    .write(&rej)
+                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter write: {e}")))?;
+                writer
+                    .close()
+                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter close: {e}")))?;
+                tracing::info!(
+                    path = %dest_path.display(),
+                    rows = rej.num_rows(),
+                    "dead-letter batch written"
+                );
+            }
+        }
+
+        // Threshold check (cumulative).
+        if input.dead_letter_threshold > 0.0 && input.rows_total_so_far > 0 {
+            let frac = input.rows_rejected_so_far as f64 / input.rows_total_so_far as f64;
+            if frac > input.dead_letter_threshold {
+                return Err(ActivityError::NonRetryable(
+                    anyhow::anyhow!(
+                        "dead-letter threshold exceeded: {:.4} > {:.4} (rejected {}/{} rows)",
+                        frac,
+                        input.dead_letter_threshold,
+                        input.rows_rejected_so_far,
+                        input.rows_total_so_far
+                    )
+                    .into(),
+                ));
+            }
+        }
+
         Ok(LoadBatchOutput {
             rows_loaded: res.rows_loaded,
             bytes_written: res.bytes_written,

@@ -1,5 +1,6 @@
 use common_types::cursor::CursorValue;
 use common_types::pipeline_spec::{DestinationSpec, SourceSpec};
+use common_types::transform::TransformSpec;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,6 +16,8 @@ pub struct DiscoverInput {
     pub cursor_kind: common_types::cursor::CursorKind,
     pub pk_columns: Vec<String>,
     pub evolution_policy: common_types::evolution::EvolutionPolicy,
+    #[serde(default)]
+    pub transform: Option<TransformSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,6 +34,8 @@ pub struct ReadBatchInput {
     pub cursor: Option<CursorValue>,
     pub batch_size: usize,
     pub connector_ref: String,
+    #[serde(default)]
+    pub transform: Option<TransformSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +45,10 @@ pub struct ReadBatchOutput {
     pub rows: usize,
     pub new_cursor: Option<CursorValue>,
     pub is_final: bool,
+    #[serde(default)]
+    pub rejected_ipc_b64: Option<String>,
+    #[serde(default)]
+    pub rows_rejected: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +58,14 @@ pub struct LoadBatchInput {
     pub pipeline_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
+    #[serde(default)]
+    pub rejected_ipc_b64: Option<String>,
+    #[serde(default)]
+    pub dead_letter_threshold: f64,
+    #[serde(default)]
+    pub rows_rejected_so_far: usize,
+    #[serde(default)]
+    pub rows_total_so_far: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
