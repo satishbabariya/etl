@@ -64,6 +64,9 @@ define_id!(TenantId, "ten");
 define_id!(ConnectionId, "conn");
 define_id!(PipelineId, "pipe");
 define_id!(RunId, "run");
+define_id!(WorkspaceId, "ws");
+define_id!(StreamId, "stream");
+define_id!(SchemaId, "sch");
 
 #[cfg(test)]
 mod tests {

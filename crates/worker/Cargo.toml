@@ -39,6 +39,7 @@ url = "2"
 futures = "0.3"
 futures-util = "0.3"
 base64 = "0.22"
+blake3 = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wit-bindgen = { workspace = true }

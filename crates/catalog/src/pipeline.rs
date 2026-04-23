@@ -24,13 +24,15 @@ pub struct NewPipeline {
 }
 
 pub async fn create(pool: &PgPool, new: NewPipeline) -> sqlx::Result<PipelineId> {
+    let workspace_id = crate::workspace::ensure_default(pool, new.tenant_id).await?;
     let id = PipelineId::new();
     sqlx::query(
-        "INSERT INTO pipelines (pipeline_id, tenant_id, name, source_conn_id, dest_conn_id, spec) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO pipelines (pipeline_id, tenant_id, workspace_id, name, source_conn_id, dest_conn_id, spec) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(id.as_uuid())
     .bind(new.tenant_id.as_uuid())
+    .bind(workspace_id.as_uuid())
     .bind(&new.name)
     .bind(new.source_conn_id.as_uuid())
     .bind(new.dest_conn_id.map(|d| d.as_uuid()))

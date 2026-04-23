@@ -67,13 +67,49 @@ impl SyncActivities {
                 .map_err(to_retryable)?;
         let schema = connector
             .discover(
-                &ConnectionConfig { url: input.source_url },
+                &ConnectionConfig { url: input.source_url.clone() },
                 &input.source,
             )
             .await
             .map_err(to_retryable)?;
-        let columns = schema.fields().iter().map(|f| f.name().clone()).collect();
-        Ok(DiscoverOutput { columns })
+
+        let tenant_id = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
+        let pipeline_id = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let cursor_config = serde_json::json!({
+            "column": input.cursor_column,
+            "kind": input.cursor_kind,
+        });
+        let pk_config = serde_json::to_value(&input.pk_columns).unwrap_or(serde_json::json!([]));
+        let stream_id = self
+            .catalog
+            .ensure_stream(catalog::stream::NewStream {
+                tenant_id,
+                pipeline_id,
+                name: input.stream_name.clone(),
+                sync_mode: "incremental".into(),
+                cursor_config,
+                pk_config,
+                destination_table: None,
+            })
+            .await
+            .map_err(|e| to_retryable(anyhow::anyhow!("ensure_stream: {e}")))?;
+
+        let resolved = crate::schema_evolution::record_and_resolve(
+            &self.catalog,
+            tenant_id,
+            stream_id,
+            input.evolution_policy,
+            schema.clone(),
+        )
+        .await
+        .map_err(to_retryable)?;
+
+        let columns = resolved.schema.fields().iter().map(|f| f.name().clone()).collect();
+        Ok(DiscoverOutput {
+            columns,
+            schema_id: resolved.schema_id.as_uuid(),
+            created_new_version: resolved.created_new_version,
+        })
     }
 
     #[activity]

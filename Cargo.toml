@@ -58,6 +58,8 @@ wasmtime-wasi = "26"
 wit-bindgen = "0.37"
 dashmap = "6"
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "gzip"], default-features = false }
+blake3 = "1"
+serde_yaml = "0.9"
 
 # Internal crates
 common-types = { path = "crates/common-types" }

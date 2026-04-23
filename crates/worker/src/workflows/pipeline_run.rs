@@ -35,6 +35,11 @@ pub struct PipelineRunInput {
     /// Name of the stream being synced. Phase I.2 uses the source table name.
     pub stream_name: String,
     pub connector_ref: String,
+    pub evolution_policy: common_types::evolution::EvolutionPolicy,
+    pub cursor_column: String,
+    pub cursor_kind: common_types::cursor::CursorKind,
+    pub pk_columns: Vec<String>,
+    pub tenant_id: Uuid,
 }
 
 #[workflow]
@@ -46,6 +51,11 @@ pub struct PipelineRunWorkflow {
     cursor: Option<CursorValue>,
     stream_name: String,
     connector_ref: String,
+    evolution_policy: common_types::evolution::EvolutionPolicy,
+    cursor_column: String,
+    cursor_kind: common_types::cursor::CursorKind,
+    pk_columns: Vec<String>,
+    tenant_id: Uuid,
 }
 
 fn opts_short() -> ActivityOptions {
@@ -74,12 +84,29 @@ impl PipelineRunWorkflow {
             cursor: input.initial_cursor,
             stream_name: input.stream_name,
             connector_ref: input.connector_ref,
+            evolution_policy: input.evolution_policy,
+            cursor_column: input.cursor_column,
+            cursor_kind: input.cursor_kind,
+            pk_columns: input.pk_columns,
+            tenant_id: input.tenant_id,
         }
     }
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
-        let (run_id, pipeline_id, spec, conn, stream_name, connector_ref) = ctx.state(|s| {
+        let (
+            run_id,
+            pipeline_id,
+            spec,
+            conn,
+            stream_name,
+            connector_ref,
+            evolution_policy,
+            cursor_column,
+            cursor_kind,
+            pk_columns,
+            tenant_id,
+        ) = ctx.state(|s| {
             (
                 s.run_id,
                 s.pipeline_id,
@@ -87,6 +114,11 @@ impl PipelineRunWorkflow {
                 s.source_connection.clone(),
                 s.stream_name.clone(),
                 s.connector_ref.clone(),
+                s.evolution_policy,
+                s.cursor_column.clone(),
+                s.cursor_kind,
+                s.pk_columns.clone(),
+                s.tenant_id,
             )
         });
 
@@ -99,6 +131,13 @@ impl PipelineRunWorkflow {
                 source: spec.source.clone(),
                 source_url: conn.url.clone(),
                 connector_ref: connector_ref.clone(),
+                tenant_id,
+                stream_name: stream_name.clone(),
+                pipeline_id,
+                cursor_column: cursor_column.clone(),
+                cursor_kind,
+                pk_columns: pk_columns.clone(),
+                evolution_policy,
             },
             opts_short(),
         )

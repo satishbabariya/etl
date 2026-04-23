@@ -84,15 +84,16 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 | Crate | Role | Phase |
 |---|---|---|
-| `common-types` | ID newtypes, `PipelineSpec`, `CursorValue`, `ConnectionConfig`, `SourceSpec::Wasm` | I.1 / I.2 / I.3 |
-| `catalog` | Postgres-backed metadata store (RFC-10) + stream_state | I.1 (minimal) → I.4 (full) |
-| `connector-sdk` | `SourceConnector` trait + WIT definition | I.2 (trait) / I.3 (WIT) |
-| `loader-sdk` | `DestinationLoader` trait | I.2 (trait) → II.3 (warehouse variants) |
-| `worker` | Temporal worker, PipelineRunWorkflow, Postgres connector, Parquet loader, WASM runtime | I.1 → I.6 |
+| `common-types` | IDs, `PipelineSpec`, `CursorValue`, `SchemaFingerprint`, `EvolutionPolicy`, DSL types | I.1 → I.4 |
+| `catalog` | Metadata store — tenants, workspaces, connections, pipelines, streams, schemas, runs | I.1 → I.4 |
+| `connector-sdk` | `SourceConnector` trait + WIT definition | I.2 / I.3 |
+| `loader-sdk` | `DestinationLoader` trait | I.2 → II.3 |
+| `worker` | Temporal worker, PipelineRunWorkflow, Postgres connector, Parquet loader, WASM runtime, schema_evolution | I.1 → I.6 |
 | `control-api` | Public HTTP/gRPC surface (stub) | III.1 |
-| `cli` | `platform` command-line tool (RFC-13) incl. `connector build` | I.1 / I.2 / I.3 |
+| `cli` | `platform` CLI (RFC-13): pipeline run, connector build, apply/get/diff/validate | I.1 → I.4 |
 | `examples/csv-source` | Reference WASM source connector (wasm32-wasip2) | I.3 |
-| `tests/integration` | End-to-end tests | I.1 / I.2 / I.3 |
+| `examples/dsl` | YAML resource files | I.4 |
+| `tests/integration` | End-to-end tests | I.1 → I.4 |
 
 ## Stack
 
@@ -105,7 +106,35 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase I.3 — WASM Runtime (complete)**. Next: Phase I.4 — full catalog entities (streams, schemas, evolution policies) + YAML DSL. See the roadmap spec for the four-era trajectory.
+Currently: **Phase I.4 — Full Catalog + YAML DSL (complete)**. Next: Phase I.5 — Transformation DAG. See the roadmap spec for the four-era trajectory.
+
+## Phase I.4 — YAML DSL + schema evolution demo
+
+```bash
+# 1. Validate then apply the demo YAML (creates 1 connection + 1 pipeline)
+cargo run --bin platform -- validate -f examples/dsl/customers-sync.yaml
+cargo run --bin platform -- apply    -f examples/dsl/customers-sync.yaml
+
+# 2. Reseed the source and run the pipeline — Schema v1 is auto-captured
+bash scripts/seed-source-demo.sh
+cargo run --bin worker &
+cargo run --bin platform -- pipeline run <pipeline-id-from-apply>
+
+# 3. Alter the source schema and rerun — Schema v2 appears with a typed diff
+docker exec -i etl-postgres psql -U etl -d etl_source_demo -c \
+  "ALTER TABLE customers ADD COLUMN nickname TEXT;"
+docker exec -i etl-postgres psql -U etl -d etl_source_demo -c \
+  "UPDATE customers SET updated_at = updated_at + interval '1 day';"
+cargo run --bin platform -- pipeline run <pipeline-id>
+docker exec -i etl-postgres psql -U etl -d etl_catalog -c \
+  "SELECT version, change_summary FROM schemas ORDER BY version;"
+
+# 4. `get` round-trips a catalog row back to YAML; `diff -f` shows pending changes
+cargo run --bin platform -- get pipeline customers-sync
+cargo run --bin platform -- diff -f examples/dsl/customers-sync.yaml
+```
+
+Evolution policies: `propagate_additive` (default — additive changes flow through), `freeze` (retain old), `strict` (fail run on any change). Set via `PipelineDslSpec.evolution_policy` in YAML.
 
 ## Phase I.3 — WASM connector demo
 

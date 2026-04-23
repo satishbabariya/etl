@@ -8,11 +8,20 @@ pub struct DiscoverInput {
     pub source: SourceSpec,
     pub source_url: String,
     pub connector_ref: String,
+    pub tenant_id: Uuid,
+    pub stream_name: String,
+    pub pipeline_id: Uuid,
+    pub cursor_column: String,
+    pub cursor_kind: common_types::cursor::CursorKind,
+    pub pk_columns: Vec<String>,
+    pub evolution_policy: common_types::evolution::EvolutionPolicy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiscoverOutput {
     pub columns: Vec<String>,
+    pub schema_id: Uuid,
+    pub created_new_version: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
