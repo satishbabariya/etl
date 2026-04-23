@@ -10,6 +10,7 @@ members = [
     "crates/cli",
     "tests/integration",
 ]
+exclude = ["examples/csv-source"]
 
 [workspace.package]
 edition = "2021"
@@ -50,6 +51,13 @@ parquet = "53"
 
 # async-trait for async fns in object-safe traits
 async-trait = "0.1"
+
+# WASM
+wasmtime = { version = "26", features = ["component-model", "async", "parallel-compilation"] }
+wasmtime-wasi = "26"
+wit-bindgen = "0.37"
+dashmap = "6"
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "gzip"], default-features = false }
 
 # Internal crates
 common-types = { path = "crates/common-types" }

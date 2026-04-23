@@ -40,3 +40,7 @@ pub struct ReadOutcome {
     /// has no more data at this moment.
     pub is_final: bool,
 }
+
+/// Canonical Component Model definition for source connectors. Host-side
+/// `bindgen!` and guest-side `wit_bindgen::generate!` both consume this file.
+pub const WIT_PATH: &str = "crates/connector-sdk/wit/source-connector.wit";

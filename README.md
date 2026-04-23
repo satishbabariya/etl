@@ -84,14 +84,15 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 | Crate | Role | Phase |
 |---|---|---|
-| `common-types` | ID newtypes, `PipelineSpec`, `CursorValue`, `ConnectionConfig` | I.1 / I.2 |
+| `common-types` | ID newtypes, `PipelineSpec`, `CursorValue`, `ConnectionConfig`, `SourceSpec::Wasm` | I.1 / I.2 / I.3 |
 | `catalog` | Postgres-backed metadata store (RFC-10) + stream_state | I.1 (minimal) → I.4 (full) |
-| `connector-sdk` | `SourceConnector` trait | I.2 (trait) → I.3 (WASM) |
+| `connector-sdk` | `SourceConnector` trait + WIT definition | I.2 (trait) / I.3 (WIT) |
 | `loader-sdk` | `DestinationLoader` trait | I.2 (trait) → II.3 (warehouse variants) |
-| `worker` | Temporal worker, PipelineRunWorkflow, Postgres connector, Parquet loader | I.1 (skeleton) → I.6 (CDC) |
+| `worker` | Temporal worker, PipelineRunWorkflow, Postgres connector, Parquet loader, WASM runtime | I.1 → I.6 |
 | `control-api` | Public HTTP/gRPC surface (stub) | III.1 |
-| `cli` | `platform` command-line tool (RFC-13) | I.1 (subset) → I.4 (full) |
-| `tests/integration` | End-to-end tests | I.1 / I.2 |
+| `cli` | `platform` command-line tool (RFC-13) incl. `connector build` | I.1 / I.2 / I.3 |
+| `examples/csv-source` | Reference WASM source connector (wasm32-wasip2) | I.3 |
+| `tests/integration` | End-to-end tests | I.1 / I.2 / I.3 |
 
 ## Stack
 
@@ -104,4 +105,36 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase I.2 — First Pipeline (complete)**. Next: Phase I.3 — WASM runtime + connector SDK. See the roadmap spec for the four-era trajectory.
+Currently: **Phase I.3 — WASM Runtime (complete)**. Next: Phase I.4 — full catalog entities (streams, schemas, evolution policies) + YAML DSL. See the roadmap spec for the four-era trajectory.
+
+## Phase I.3 — WASM connector demo
+
+```bash
+# 1. Build the reference WASM connector (re-run after guest code changes)
+cargo run --bin platform -- connector build examples/csv-source
+# → ./connectors/csv-source@0.1.0/component.cwasm (~3.4 MB precompiled)
+
+# 2. Seed a pipeline pointed at the WASM connector
+docker exec -i etl-postgres psql -U etl -d etl_catalog <<'SQL'
+TRUNCATE runs, stream_state, pipelines, connections, tenants CASCADE;
+INSERT INTO tenants (tenant_id, name) VALUES ('11111111-1111-1111-1111-111111111111', 'dev');
+INSERT INTO connections (connection_id, tenant_id, name, connector_ref, config)
+  VALUES ('44444444-4444-4444-4444-444444444444',
+          '11111111-1111-1111-1111-111111111111',
+          'csv-inline', 'wasm:csv-source@0.1.0', '{"url":""}'::jsonb);
+INSERT INTO pipelines (pipeline_id, tenant_id, name, source_conn_id, spec)
+  VALUES ('55555555-5555-5555-5555-555555555555',
+          '11111111-1111-1111-1111-111111111111',
+          'csv-sync',
+          '44444444-4444-4444-4444-444444444444',
+          '{"source":{"type":"wasm","config":{"csv_text":"id,name\nA,Alice\nB,Bob\nC,Carol\n","has_header":true}},"destination":{"type":"local_parquet","base_path":"./data"},"batch_size":2}'::jsonb);
+SQL
+
+# 3. Run worker + submit
+cargo run --bin worker &
+cargo run --bin platform -- pipeline run pipe-55555555-5555-5555-5555-555555555555
+```
+
+Expected: workflow fires `start_run → discover → read → load → commit (×N) → complete_run` via the WASM sandbox. Parquet files land under `./data/`. Worker logs interleave guest-emitted `log()` messages (tagged `guest=true`) with host traces.
+
+Resource limits + capability sandboxing validated by three unit tests (`wasm_runtime::tests::*`): fuel exhaustion traps an infinite loop, memory cap denies oversized allocation, and components importing un-linked host functions fail at instantiation.

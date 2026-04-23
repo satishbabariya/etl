@@ -9,6 +9,7 @@ use worker::{
     activities::run_lifecycle::RunLifecycleActivities,
     activities::sync::SyncActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
+    wasm_runtime::WasmSourceRuntime,
     workflows::PipelineRunWorkflow,
 };
 
@@ -36,11 +37,15 @@ async fn main() -> anyhow::Result<()> {
     let runtime = make_runtime()?;
     let client = make_client(&cfg).await?;
 
+    let wasm_base = std::env::var("ETL_CONNECTORS_DIR").unwrap_or_else(|_| "./connectors".into());
+    let wasm_runtime = WasmSourceRuntime::new(&wasm_base)?;
+
     let lifecycle = RunLifecycleActivities {
         catalog: catalog.clone(),
     };
     let sync = SyncActivities {
         catalog: catalog.clone(),
+        wasm_runtime: wasm_runtime.clone(),
     };
 
     let worker_options = WorkerOptions::new(cfg.task_queue.clone())

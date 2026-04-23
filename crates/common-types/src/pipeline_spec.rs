@@ -13,6 +13,7 @@ pub struct PipelineSpec {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceSpec {
     Postgres(PostgresSourceSpec),
+    Wasm(WasmSourceSpec),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +23,12 @@ pub struct PostgresSourceSpec {
     pub cursor_column: String,
     pub cursor_kind: CursorKind,
     pub pk_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WasmSourceSpec {
+    /// Free-form JSON passed as-is to the guest via `source-config.json`.
+    pub config: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +64,16 @@ mod tests {
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: PipelineSpec = serde_json::from_str(&j).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), j);
+    }
+
+    #[test]
+    fn wasm_variant_roundtrips() {
+        let s = SourceSpec::Wasm(WasmSourceSpec {
+            config: serde_json::json!({"path": "/tmp/foo.csv", "has_header": true}),
+        });
+        let j = serde_json::to_string(&s).unwrap();
+        let back: SourceSpec = serde_json::from_str(&j).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), j);
     }
 

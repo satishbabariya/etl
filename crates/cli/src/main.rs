@@ -22,12 +22,31 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PipelineCmd,
     },
+    Connector {
+        #[command(subcommand)]
+        cmd: ConnectorCmd,
+    },
 }
 
 #[derive(Subcommand)]
 enum PipelineCmd {
     Run {
         id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConnectorCmd {
+    /// Compile a guest Rust crate to a precompiled .cwasm artifact.
+    Build {
+        /// Path to the guest crate (must contain Cargo.toml with [lib] crate-type = ["cdylib"]).
+        path: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long, default_value = "./connectors")]
+        out: String,
     },
 }
 
@@ -42,7 +61,84 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => pipeline_run(id).await,
+        Cmd::Connector {
+            cmd: ConnectorCmd::Build { path, name, version, out },
+        } => connector_build(path, name, version, out).await,
     }
+}
+
+async fn connector_build(
+    path: String,
+    name: Option<String>,
+    version: Option<String>,
+    out: String,
+) -> anyhow::Result<()> {
+    use std::path::PathBuf;
+    use std::process::Command as StdCommand;
+
+    let crate_dir = PathBuf::from(&path);
+    let cargo_toml = crate_dir.join("Cargo.toml");
+    if !cargo_toml.exists() {
+        anyhow::bail!("no Cargo.toml at {}", cargo_toml.display());
+    }
+
+    let toml_text = std::fs::read_to_string(&cargo_toml)?;
+    let pkg_name = name.unwrap_or_else(|| {
+        read_toml_value(&toml_text, "name").unwrap_or_else(|| "connector".into())
+    });
+    let pkg_version = version.unwrap_or_else(|| {
+        read_toml_value(&toml_text, "version").unwrap_or_else(|| "0.1.0".into())
+    });
+
+    let status = StdCommand::new("cargo")
+        .current_dir(&crate_dir)
+        .args(["build", "--release"])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("guest build failed");
+    }
+
+    let wasm_name = format!("{}.wasm", pkg_name.replace('-', "_"));
+    let wasm_path = crate_dir
+        .join("target")
+        .join("wasm32-wasip2")
+        .join("release")
+        .join(&wasm_name);
+    if !wasm_path.exists() {
+        anyhow::bail!(
+            "expected artifact not found at {} — check the crate's [lib] crate-type and package name",
+            wasm_path.display()
+        );
+    }
+
+    let out_dir = PathBuf::from(&out);
+    let rt = worker::wasm_runtime::WasmSourceRuntime::new(&out_dir)?;
+    let target_name = format!("{}@{}", pkg_name, pkg_version);
+    let out_path = rt.artifact_path(&target_name);
+    rt.precompile_to(&wasm_path, &out_path)?;
+
+    println!("built {}", out_path.display());
+    Ok(())
+}
+
+fn read_toml_value(text: &str, key: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(&format!("{} = \"", key)) {
+            if let Some(end) = rest.find('"') {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
@@ -69,8 +165,19 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         serde_json::from_value(source_conn_row.config.clone())
             .context("source connections.config did not deserialize as ConnectionConfig")?;
 
+    let connector_ref = source_conn_row.connector_ref.clone();
+
     let stream_name = match &spec.source {
         SourceSpec::Postgres(p) => p.table.clone(),
+        SourceSpec::Wasm(_) => {
+            // Phase I.3: derive stream name from the connector's name
+            // (strip the "wasm:" prefix and the "@version" suffix).
+            let bare = connector_ref
+                .strip_prefix("wasm:")
+                .unwrap_or(&connector_ref);
+            let name = bare.split('@').next().unwrap_or(bare);
+            name.to_string()
+        }
     };
 
     let initial_cursor = catalog
@@ -107,6 +214,7 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         source_connection,
         initial_cursor,
         stream_name,
+        connector_ref,
     };
 
     client
