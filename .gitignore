@@ -1,6 +1,8 @@
 /target
 /data
 /staging
+/connectors/*
+!/connectors/.gitkeep
 .env
 *.log
 .DS_Store
