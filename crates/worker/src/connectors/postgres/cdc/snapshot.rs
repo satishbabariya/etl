@@ -123,7 +123,7 @@ pub fn cdc_schema_for(data_cols: &[(&str, DataType)]) -> SchemaRef {
     fields.push(Field::new(common_types::cdc::COL_LSN, DataType::Utf8, false));
     fields.push(Field::new(
         common_types::cdc::COL_COMMIT_TS,
-        DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        DataType::Timestamp(TimeUnit::Microsecond, None),
         true,
     ));
     fields.push(Field::new(common_types::cdc::COL_TXID, DataType::Int64, true));

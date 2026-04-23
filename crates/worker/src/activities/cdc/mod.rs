@@ -15,7 +15,10 @@ pub struct CdcActivities {
     pub catalog: Arc<Catalog>,
 }
 
-fn retryable(e: anyhow::Error) -> ActivityError { e.into() }
+fn retryable(e: anyhow::Error) -> ActivityError {
+    tracing::error!(error = %e, chain = ?e.chain().collect::<Vec<_>>(), "cdc activity returning retryable error");
+    e.into()
+}
 
 #[activities]
 impl CdcActivities {
@@ -25,6 +28,7 @@ impl CdcActivities {
         _ctx: ActivityContext,
         input: EnsureSlotInput,
     ) -> Result<EnsureSlotOutput, ActivityError> {
+        tracing::info!(pipeline_id = %input.pipeline_id, "cdc: ensure_slot entering");
         let slot_name = format!("etl_{}", input.pipeline_id.as_simple());
         let pub_name = format!("etl_{}_pub", input.pipeline_id.as_simple());
         let qualified = format!("{}.{}", input.schema, input.table);
@@ -62,6 +66,7 @@ impl CdcActivities {
         _ctx: ActivityContext,
         input: SnapshotChunkInput,
     ) -> Result<SnapshotChunkOutput, ActivityError> {
+        tracing::info!(last_pk = ?input.last_pk, batch_seq = input.batch_seq, "cdc: snapshot_chunk entering");
         // MVP: pk column rendered as text alongside data columns (SELECT *).
         // We don't know the column list until we query; for first pass we
         // just use the pk as the only "data" column and let the actual
@@ -107,6 +112,7 @@ impl CdcActivities {
         _ctx: ActivityContext,
         input: ReadWindowInput,
     ) -> Result<ReadWindowOutput, ActivityError> {
+        tracing::info!(slot = %input.slot_name, batch_seq = input.batch_seq, "cdc: read_window entering");
         let out = stream::read_window(
             &input.source_url,
             &input.slot_name,
