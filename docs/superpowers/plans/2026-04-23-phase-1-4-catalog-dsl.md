@@ -3284,3 +3284,47 @@ The lookup is keyed on `(pipeline_id, name)` where `name` is the source table na
 **2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 **Which approach?**
+
+---
+
+## Phase I.4 Completion Log
+
+Completed 2026-04-23 on branch `phase-1-4-catalog-dsl`, 13 commits.
+
+- [x] Task 1 — Dep additions (blake3, serde_yaml)
+- [x] Task 2 — common-types (SchemaFingerprint, EvolutionPolicy, ChangeKind, DSL types, new IDs)
+- [x] Task 3 — Migration 0003 (workspaces + streams + schemas + FK + backfill)
+- [x] Tasks 4-6 — Workspace + Stream + Schema CRUD (3 integration tests)
+- [x] Tasks 7-9 — Pure-function schema_evolution: fingerprint + diff + policy (16 unit tests)
+- [x] Task 10 — record_and_resolve composer
+- [x] Task 11 — discover_stream activity records Schema entities
+- [x] Tasks 12-14 — YAML DSL parser + apply/get/diff/validate CLI
+- [x] Task 15 — Postgres schema evolution end-to-end integration test
+- [x] Task 16 — DSL apply idempotency integration test
+- [x] Task 17 — README + this log + regression sweep
+
+### Exit criterion — MET
+
+- Schema fingerprint + diff + policy engine: **16 unit tests** pass (5 fingerprint + 6 diff + 5 policy)
+- `schema_evolution_adds_column_on_second_run` passes (~56 s): ALTER TABLE → Schema v2 with `AddColumn(nickname, nullable=true)`; Parquet from the second run includes the new column
+- `apply_is_idempotent` passes (~1.5 s): second apply of same YAML reports all-unchanged; `diff -f` emits only `=` lines
+- Phase I.2 + I.3 integration tests still green (regression-clean)
+
+### Deviations from the plan
+
+- **arrow::Schema doesn't derive Serialize in arrow 53**. Plan assumed it. Worked around by storing the schema as base64-encoded Arrow IPC bytes inside a `{"ipc_b64": "..."}` JSON wrapper. Same IPC format we already use for batch transport; round-trip verified via StreamWriter (schema-only finish() produces header bytes) + StreamReader.
+- **connection/pipeline create needed workspace_id NOT NULL backfill**. Migration adds the column as NOT NULL, so Phase I.1/I.2 catalog call sites broke until `connection::create` and `pipeline::create` were updated to auto-resolve the default workspace via `ensure_default_workspace`.
+- **`Result::unwrap_err` on a non-Debug SourceConnector trait object** doesn't compile — used explicit `match` in dispatcher tests (pattern already established in Phase I.3).
+- **`ensure_default` + `ensure_stream` race-safety** via `INSERT ... ON CONFLICT DO NOTHING` + read-back by unique key.
+- **Phase I.1's `workflow_survives_worker_restart` test had been silently broken since Phase I.2** — it seeded `spec: json!({})` which no longer parses as PipelineSpec. Phase I.2/I.3 phase-completion sweeps only ran the specific new tests, not the old ones. Fixed in Phase I.4 to seed a valid PipelineSpec.
+- **Tracing lines on stdout** tripped the DSL apply idempotency test's "all lines are `=`" assertion — filtered to lines starting with `+`, `~`, or `=`.
+- **CLI needed `serde = { workspace = true }`** for `serde::Deserialize::deserialize` in the DSL parser — not picked up transitively.
+
+### Handoff to Phase I.5
+
+Phase I.5 (transformation DAG) adds:
+- Declarative operators between read and load (select, filter, project, cast, rename, mask, add-column, validate, dedupe, flatten)
+- WASM UDF escape hatch reusing the Phase I.3 runtime with a tighter capability set (no network, no randomness, no wall-clock)
+- Static schema derivation for each operator — output flows into the same `record_and_resolve` path built in Phase I.4
+
+The schema machinery from I.4 is stable: the only integration point for transforms is "emit the derived schema and pass it to `record_and_resolve`".
