@@ -19,7 +19,7 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, WorkflowResult};
 use uuid::Uuid;
 
-use crate::activities::run_lifecycle::RunLifecycleActivities;
+use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
 use crate::activities::sync::SyncActivities;
 use crate::activities::sync::inputs::{
     CommitCursorInput, DiscoverInput, LoadBatchInput, ReadBatchInput,
@@ -98,6 +98,29 @@ impl PipelineRunWorkflow {
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
+        let run_id = ctx.state(|s| s.run_id);
+        match Self::run_inner(ctx).await {
+            Ok(()) => Ok(()),
+            Err(termination) => {
+                let err_str = format!("{termination}");
+                // Best effort: record Failed status. If this sub-activity itself
+                // fails (e.g. catalog unreachable), bubble original error.
+                let _ = ctx
+                    .start_activity(
+                        RunLifecycleActivities::fail_run,
+                        FailRunInput {
+                            run_id,
+                            error: err_str,
+                        },
+                        opts_short(),
+                    )
+                    .await;
+                Err(termination)
+            }
+        }
+    }
+
+    async fn run_inner(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
         let (
             run_id,
             pipeline_id,

@@ -44,4 +44,26 @@ impl RunLifecycleActivities {
         tracing::info!(%run_id, "run completed");
         Ok(())
     }
+
+    /// Mark a run as failed with an error message. Idempotent.
+    #[activity]
+    pub async fn fail_run(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: FailRunInput,
+    ) -> Result<(), ActivityError> {
+        let rid = RunId::from_uuid_unchecked(input.run_id);
+        self.catalog
+            .mark_run_failed(rid, &input.error)
+            .await
+            .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_failed: {e}").into()))?;
+        tracing::warn!(run_id = %input.run_id, error = %input.error, "run failed");
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FailRunInput {
+    pub run_id: Uuid,
+    pub error: String,
 }
