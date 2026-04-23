@@ -2,9 +2,11 @@
 
 pub mod bindings;
 pub mod engine;
+pub mod epoch;
 pub mod host;
 pub mod limits;
 
 pub use engine::build_engine;
+pub use epoch::EpochTicker;
 pub use host::HostState;
-pub use limits::Limits;
+pub use limits::{Limits, MemoryCap};
