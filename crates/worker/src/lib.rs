@@ -1,5 +1,6 @@
 //! Worker library: workflow + activity registrations.
 pub mod activities;
+pub mod cdc_monitor;
 pub mod connectors;
 pub mod loaders;
 pub mod metrics;

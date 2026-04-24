@@ -59,6 +59,35 @@ async fn main() -> anyhow::Result<()> {
     };
     let cdc = CdcActivities { catalog: catalog.clone() };
 
+    // Slot-lag poller: resolves each active slot's source URL via the
+    // catalog and publishes etl_cdc_slot_lag_bytes every 15s.
+    let cat_for_resolver = catalog.clone();
+    let source_url_resolver = move |pid: uuid::Uuid| -> Option<String> {
+        let cat = cat_for_resolver.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let row: Option<(serde_json::Value,)> = sqlx::query_as(
+                    "SELECT c.config FROM pipelines p \
+                     JOIN connections c ON c.connection_id = p.source_conn_id \
+                     WHERE p.pipeline_id = $1",
+                )
+                .bind(pid)
+                .fetch_optional(cat.pool())
+                .await
+                .ok()
+                .flatten();
+                row.and_then(|(cfg,)| {
+                    cfg.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
+                })
+            })
+        })
+    };
+    worker::cdc_monitor::spawn_slot_lag_poller(
+        catalog.clone(),
+        source_url_resolver,
+        std::time::Duration::from_secs(15),
+    );
+
     let worker_options = WorkerOptions::new(cfg.task_queue.clone())
         .task_types(WorkerTaskTypes::all())
         .deployment_options(WorkerDeploymentOptions {
