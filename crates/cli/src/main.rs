@@ -1,4 +1,5 @@
 mod dsl;
+mod terminate;
 
 use anyhow::Context;
 use catalog::{Catalog, NewRun};
@@ -48,6 +49,21 @@ enum Cmd {
         #[arg(short, long)]
         file: String,
     },
+    /// Workflow-level operations (Temporal).
+    Workflow {
+        #[command(subcommand)]
+        cmd: WorkflowCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowCmd {
+    /// Terminate a running workflow and mark its run Failed.
+    Terminate {
+        workflow_id: String,
+        #[arg(short, long)]
+        reason: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -92,6 +108,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Get { kind, name } => get_cmd(kind, name).await,
         Cmd::Validate { file } => validate_cmd(file).await,
         Cmd::Diff { file } => diff_cmd(file).await,
+        Cmd::Workflow { cmd: WorkflowCmd::Terminate { workflow_id, reason } } => {
+            terminate::terminate(workflow_id, reason).await
+        }
     }
 }
 
