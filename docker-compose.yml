@@ -54,6 +54,21 @@ services:
     ports:
       - "8080:8080"
 
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: etl-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - etl_prom:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   etl_pg:
   etl_temporal_pg:
+  etl_prom:
