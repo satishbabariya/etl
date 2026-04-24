@@ -1,4 +1,5 @@
 mod dsl;
+mod status;
 mod terminate;
 
 use anyhow::Context;
@@ -71,6 +72,10 @@ enum PipelineCmd {
     Run {
         id: String,
     },
+    /// Print the current status of a pipeline as JSON.
+    Status {
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -101,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => pipeline_run(id).await,
+        Cmd::Pipeline { cmd: PipelineCmd::Status { id } } => status::run(id).await,
         Cmd::Connector {
             cmd: ConnectorCmd::Build { path, name, version, out, kind },
         } => connector_build(path, name, version, out, kind).await,
