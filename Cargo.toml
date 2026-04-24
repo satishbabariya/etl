@@ -68,6 +68,11 @@ byteorder = "1"
 futures-util = "0.3"
 bytes = "1"
 
+# Observability (Era I exit — RFC-15 operational plane)
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+axum = "0.7"
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }
