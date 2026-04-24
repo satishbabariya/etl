@@ -6,11 +6,12 @@ use temporalio_common::worker::{
 };
 use temporalio_sdk::{Worker, WorkerOptions};
 use worker::{
+    activities::cdc::CdcActivities,
     activities::run_lifecycle::RunLifecycleActivities,
     activities::sync::SyncActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
     wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime},
-    workflows::PipelineRunWorkflow,
+    workflows::{CdcPipelineWorkflow, PipelineRunWorkflow},
 };
 
 #[tokio::main]
@@ -49,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         wasm_runtime: wasm_runtime.clone(),
         scalar_runtime: scalar_runtime.clone(),
     };
+    let cdc = CdcActivities { catalog: catalog.clone() };
 
     let worker_options = WorkerOptions::new(cfg.task_queue.clone())
         .task_types(WorkerTaskTypes::all())
@@ -62,7 +64,9 @@ async fn main() -> anyhow::Result<()> {
         })
         .register_activities(lifecycle)
         .register_activities(sync)
+        .register_activities(cdc)
         .register_workflow::<PipelineRunWorkflow>()
+        .register_workflow::<CdcPipelineWorkflow>()
         .build();
 
     let mut worker = Worker::new(&runtime, client, worker_options)

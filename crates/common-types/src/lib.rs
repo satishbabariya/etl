@@ -1,4 +1,5 @@
 //! Shared newtype identifiers and primitive types for the platform.
+pub mod cdc;
 pub mod connection_config;
 pub mod cursor;
 pub mod dsl;

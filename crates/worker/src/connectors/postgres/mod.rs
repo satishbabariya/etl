@@ -1,4 +1,5 @@
 //! Rust-native Postgres source connector (Phase I.2).
+pub mod cdc;
 pub mod discover;
 pub mod read;
 

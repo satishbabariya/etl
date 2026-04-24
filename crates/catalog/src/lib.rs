@@ -5,6 +5,7 @@
 //! workspaces, streams, schemas, transformations, audit.
 
 mod db;
+pub mod cdc;
 pub mod connection;
 pub mod pipeline;
 pub mod run;
@@ -151,7 +152,7 @@ impl Catalog {
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         sqlx::query(
-            "TRUNCATE runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&self.pool)
         .await?;

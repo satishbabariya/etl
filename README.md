@@ -106,7 +106,27 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase I.5 — Transformation DAG + dead-letter (complete)**. Next: Phase I.6 — CDC / streaming mode. See the roadmap spec for the four-era trajectory.
+Currently: **Phase I.6 — Postgres CDC (complete)**. Next: Era I exit / Phase II.1 multi-tenancy. See the roadmap spec for the four-era trajectory.
+
+## Phase I.6 — Postgres CDC demo
+
+```bash
+# 1. Seed source (creates cdc_source_demo DB with orders table)
+bash scripts/seed-source-demo.sh
+
+# 2. Start the worker
+cargo run --bin worker &
+
+# 3. Create a CDC pipeline via catalog + CLI (sync_mode: cdc dispatches CdcPipelineWorkflow)
+# ...create pipeline with spec.source.sync_mode = "cdc"...
+cargo run --bin platform -- pipeline run <pipeline-uuid>
+
+# 4. Drive DML; events land as append-only Parquet under ./data/<pid>/cdc/<rid>/
+docker exec -i etl-postgres psql -U etl -d cdc_source_demo -c \
+  "INSERT INTO orders VALUES (99,'Zed','999'); UPDATE orders SET amount='1000' WHERE id=99; DELETE FROM orders WHERE id=99;"
+```
+
+CDC pipelines emit one Parquet row per event with `_cdc.op` ∈ `s/i/u/d`, plus `_cdc.lsn`, `_cdc.commit_ts`, `_cdc.txid`. The loader appends forever; compaction into a current-state view is Phase II.
 
 ## Phase I.5 — Transformation DAG + dead-letter demo
 
