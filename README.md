@@ -106,7 +106,54 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase I.6 — Postgres CDC (complete)**. Next: Era I exit / Phase II.1 multi-tenancy. See the roadmap spec for the four-era trajectory.
+Currently: **Era I exit — observability + dogfood (complete)**. Next: **Phase II.1 — multi-tenancy**. See the roadmap spec for the four-era trajectory.
+
+## Observability (Era I exit)
+
+```bash
+# Bring up the full stack (postgres + temporal + prometheus + grafana)
+docker-compose up -d
+
+# Worker exposes /metrics on :9898
+cargo run --bin worker &
+
+# Grafana is anonymous-admin at http://localhost:3000 → ETL — Overview
+open http://localhost:3000/d/etl-overview
+```
+
+Available metrics: `etl_runs_{started,completed,failed}_total`,
+`etl_rows_{read,loaded,rejected}_total`, `etl_cdc_events_total{op}`,
+`etl_cdc_slot_lag_bytes{pipeline_id}`.
+
+## Operator commands
+
+```bash
+# Status of a single pipeline as JSON
+cargo run --bin platform -- pipeline status <pipeline-id>
+
+# Stop a stuck workflow and mark its run Failed
+cargo run --bin platform -- workflow terminate <workflow-id> --reason "cleanup"
+```
+
+## Writing a connector (Era I exit)
+
+See `crates/connector-sdk/README.md` for a 30-minute tutorial that
+walks you from zero to a registered WASM source connector. Reference
+examples:
+- `examples/hello-world-source/` — 3 rows, smallest viable
+- `examples/csv-source/` — real files with cursor iteration
+
+## Dogfood against your own database
+
+```bash
+scripts/dogfood-real-db.sh \
+  'postgres://you:pw@host:5432/yourdb' \
+  public.events \
+  updated_at
+```
+
+Replicates `public.events` to `./data/dogfood/<pipeline-id>/` as
+Parquet and prints a row-count + size summary.
 
 ## Phase I.6 — Postgres CDC demo
 

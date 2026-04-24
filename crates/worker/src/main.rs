@@ -23,6 +23,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let metrics_bind: std::net::SocketAddr = std::env::var("ETL_METRICS_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:9898".into())
+        .parse()
+        .context("ETL_METRICS_BIND must be host:port")?;
+    let prom_handle = worker::metrics::init_recorder(metrics_bind)?;
+    worker::observability::spawn_metrics_endpoint(prom_handle, metrics_bind);
+
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Arc::new(Catalog::connect(&db_url).await?);
     catalog.migrate().await?;
@@ -51,6 +58,35 @@ async fn main() -> anyhow::Result<()> {
         scalar_runtime: scalar_runtime.clone(),
     };
     let cdc = CdcActivities { catalog: catalog.clone() };
+
+    // Slot-lag poller: resolves each active slot's source URL via the
+    // catalog and publishes etl_cdc_slot_lag_bytes every 15s.
+    let cat_for_resolver = catalog.clone();
+    let source_url_resolver = move |pid: uuid::Uuid| -> Option<String> {
+        let cat = cat_for_resolver.clone();
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let row: Option<(serde_json::Value,)> = sqlx::query_as(
+                    "SELECT c.config FROM pipelines p \
+                     JOIN connections c ON c.connection_id = p.source_conn_id \
+                     WHERE p.pipeline_id = $1",
+                )
+                .bind(pid)
+                .fetch_optional(cat.pool())
+                .await
+                .ok()
+                .flatten();
+                row.and_then(|(cfg,)| {
+                    cfg.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
+                })
+            })
+        })
+    };
+    worker::cdc_monitor::spawn_slot_lag_poller(
+        catalog.clone(),
+        source_url_resolver,
+        std::time::Duration::from_secs(15),
+    );
 
     let worker_options = WorkerOptions::new(cfg.task_queue.clone())
         .task_types(WorkerTaskTypes::all())

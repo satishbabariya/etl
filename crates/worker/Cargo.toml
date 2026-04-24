@@ -49,6 +49,9 @@ tokio-postgres = { workspace = true }
 postgres-protocol = { workspace = true }
 byteorder = { workspace = true }
 bytes = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+axum = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

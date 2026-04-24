@@ -12,6 +12,7 @@ use catalog::Catalog;
 use common_types::connection_config::ConnectionConfig;
 use common_types::ids::{PipelineId, RunId};
 use loader_sdk::{DestinationLoader, LoadId};
+use metrics;
 use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -174,6 +175,10 @@ impl SyncActivities {
             .transpose()
             .map_err(to_retryable)?;
 
+        metrics::counter!(crate::metrics::ROWS_READ).increment(rows as u64);
+        if rows_rejected > 0 {
+            metrics::counter!(crate::metrics::ROWS_REJECTED).increment(rows_rejected as u64);
+        }
         Ok(ReadBatchOutput {
             batch_ipc_b64: b64,
             rows,
@@ -200,6 +205,7 @@ impl SyncActivities {
             .load(&input.destination, load_id.clone(), batch)
             .await
             .map_err(to_retryable)?;
+        metrics::counter!(crate::metrics::ROWS_LOADED).increment(res.rows_loaded as u64);
 
         // Dead-letter routing.
         if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {

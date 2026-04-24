@@ -2,6 +2,7 @@
 
 use catalog::Catalog;
 use common_types::ids::RunId;
+use metrics;
 use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -26,6 +27,7 @@ impl RunLifecycleActivities {
             .await
             .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_running: {e}").into()))?;
         tracing::info!(%run_id, "run started");
+        metrics::counter!(crate::metrics::RUN_STARTED).increment(1);
         Ok(())
     }
 
@@ -42,6 +44,7 @@ impl RunLifecycleActivities {
             .await
             .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_completed: {e}").into()))?;
         tracing::info!(%run_id, "run completed");
+        metrics::counter!(crate::metrics::RUN_COMPLETED).increment(1);
         Ok(())
     }
 
@@ -58,6 +61,7 @@ impl RunLifecycleActivities {
             .await
             .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_failed: {e}").into()))?;
         tracing::warn!(run_id = %input.run_id, error = %input.error, "run failed");
+        metrics::counter!(crate::metrics::RUN_FAILED).increment(1);
         Ok(())
     }
 }

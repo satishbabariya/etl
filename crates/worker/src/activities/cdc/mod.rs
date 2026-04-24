@@ -4,6 +4,7 @@ use arrow::datatypes::DataType;
 use catalog::{cdc::{CdcSlot, SlotState}, Catalog};
 use common_types::ids::PipelineId;
 use inputs::*;
+use metrics;
 use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -87,6 +88,8 @@ impl CdcActivities {
         )
         .await
         .map_err(retryable)?;
+        metrics::counter!(crate::metrics::CDC_EVENTS, "op" => "s")
+            .increment(chunk.batch.num_rows() as u64);
         if chunk.batch.num_rows() > 0 {
             CdcParquetLoader
                 .write(
@@ -145,6 +148,15 @@ impl CdcActivities {
             stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
                 .map_err(retryable)?;
         let rows = batch.num_rows();
+        for ev in &out.events {
+            let op = match ev {
+                crate::connectors::postgres::cdc::CdcEvent::Insert { .. } => "i",
+                crate::connectors::postgres::cdc::CdcEvent::Update { .. } => "u",
+                crate::connectors::postgres::cdc::CdcEvent::Delete { .. } => "d",
+                _ => continue,
+            };
+            metrics::counter!(crate::metrics::CDC_EVENTS, "op" => op).increment(1);
+        }
         if rows > 0 {
             CdcParquetLoader
                 .write(

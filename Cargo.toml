@@ -10,7 +10,7 @@ members = [
     "crates/cli",
     "tests/integration",
 ]
-exclude = ["examples/csv-source", "examples/upper-case-scalar"]
+exclude = ["examples/csv-source", "examples/upper-case-scalar", "examples/hello-world-source"]
 
 [workspace.package]
 edition = "2021"
@@ -67,6 +67,11 @@ postgres-protocol = "0.6"
 byteorder = "1"
 futures-util = "0.3"
 bytes = "1"
+
+# Observability (Era I exit — RFC-15 operational plane)
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+axum = "0.7"
 
 # Internal crates
 common-types = { path = "crates/common-types" }
