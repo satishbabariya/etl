@@ -3,6 +3,7 @@ pub mod activities;
 pub mod connectors;
 pub mod loaders;
 pub mod metrics;
+pub mod observability;
 pub mod schema_evolution;
 pub mod temporal;
 pub mod transform;

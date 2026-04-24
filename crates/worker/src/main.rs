@@ -23,6 +23,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let metrics_bind: std::net::SocketAddr = std::env::var("ETL_METRICS_BIND")
+        .unwrap_or_else(|_| "0.0.0.0:9898".into())
+        .parse()
+        .context("ETL_METRICS_BIND must be host:port")?;
+    let prom_handle = worker::metrics::init_recorder(metrics_bind)?;
+    worker::observability::spawn_metrics_endpoint(prom_handle, metrics_bind);
+
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Arc::new(Catalog::connect(&db_url).await?);
     catalog.migrate().await?;
