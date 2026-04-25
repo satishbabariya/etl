@@ -1,5 +1,6 @@
 mod dsl;
 mod status;
+mod tenant;
 mod terminate;
 
 use anyhow::Context;
@@ -55,6 +56,23 @@ enum Cmd {
         #[command(subcommand)]
         cmd: WorkflowCmd,
     },
+    /// Tenant lifecycle (admin operations).
+    Tenant {
+        #[command(subcommand)]
+        cmd: TenantCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TenantCmd {
+    /// Create a tenant: catalog row + Temporal namespace.
+    Create { name: String },
+    /// List all tenants.
+    List,
+    /// Rename a tenant to "suspended:<name>" so resolution misses it.
+    Suspend { name: String },
+    /// Cascade-delete catalog rows + remove ./data/<tenant_id>/.
+    Terminate { name: String },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +135,12 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Workflow { cmd: WorkflowCmd::Terminate { workflow_id, reason } } => {
             terminate::terminate(workflow_id, reason).await
         }
+        Cmd::Tenant { cmd } => match cmd {
+            TenantCmd::Create { name } => tenant::create(name).await,
+            TenantCmd::List => tenant::list().await,
+            TenantCmd::Suspend { name } => tenant::suspend(name).await,
+            TenantCmd::Terminate { name } => tenant::terminate(name).await,
+        },
     }
 }
 
@@ -451,7 +475,15 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .await?;
 
     let cfg = TemporalConfig::from_env()?;
-    let client = make_client(&cfg).await?;
+    // Idempotent: register the namespace if it doesn't exist yet. Lets
+    // tests + admin paths that bypass `platform tenant create` still work.
+    let _ = tenant::ensure_temporal_namespace(&pipeline.tenant_id).await;
+    // Fall back to the default namespace if the worker hasn't been
+    // restarted to pick up the new tenant namespace yet — Phase II.4
+    // will hot-reconfigure. For now, default polls everything as a backstop.
+    let namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into());
+    tracing::info!(%namespace, tenant = %pipeline.tenant_id, "starting workflow");
+    let client = worker::temporal::make_client_for_namespace(&cfg, &namespace).await?;
 
     let opts = WorkflowStartOptions::new(cfg.task_queue.clone(), workflow_id.clone())
         .execution_timeout(Duration::from_secs(3600))

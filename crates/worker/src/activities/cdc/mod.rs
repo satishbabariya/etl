@@ -12,6 +12,7 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use crate::connectors::postgres::cdc::{slot, snapshot, stream};
 use crate::loaders::cdc_parquet::CdcParquetLoader;
 
+#[derive(Clone)]
 pub struct CdcActivities {
     pub catalog: Arc<Catalog>,
 }
@@ -102,6 +103,7 @@ impl CdcActivities {
             CdcParquetLoader
                 .write(
                     &input.destination,
+                    input.tenant_id,
                     input.pipeline_id,
                     input.run_id,
                     input.batch_seq,
@@ -174,6 +176,7 @@ impl CdcActivities {
             CdcParquetLoader
                 .write(
                     &input.destination,
+                    input.tenant_id,
                     input.pipeline_id,
                     input.run_id,
                     input.batch_seq,

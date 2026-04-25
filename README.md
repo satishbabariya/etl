@@ -106,7 +106,24 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.1.b — TenantContext active in production paths (complete)**. Next: **Phase II.1.c — per-tenant Temporal namespace + storage prefix + tenant CLI** (deferred subset of II.1).
+Currently: **Phase II.1 — multi-tenancy turned real (complete: II.1.a + II.1.b + II.1.c)**. Next: **Phase II.2 — secrets, auth, security**.
+
+## Tenant lifecycle (Phase II.1.c)
+
+```bash
+# Provision a tenant — catalog row + Temporal namespace etl-<uuid>
+cargo run --bin platform -- tenant create acme
+
+# List
+cargo run --bin platform -- tenant list
+
+# Wind down (catalog cascade + ./data/<tenant_id>/ deletion)
+cargo run --bin platform -- tenant terminate acme
+```
+
+Each tenant's pipelines run in a Temporal namespace `etl-<tenant_id_simple>`, write Parquet under `./data/<tenant_id>/<pipeline_id>/...`, and emit metrics with a `tenant_id` label that filters every Grafana panel via the `tenant` template variable.
+
+The worker boots one Temporal worker per known tenant + a `default` backstop. New tenants picked up after restart (Phase II.4 will hot-reconfigure).
 
 ## Multi-tenancy (Phase II.1.a + II.1.b)
 

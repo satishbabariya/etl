@@ -22,6 +22,7 @@ use crate::loaders::parquet_local::LocalParquetLoader;
 use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
 use inputs::*;
 
+#[derive(Clone)]
 pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,
@@ -205,6 +206,7 @@ impl SyncActivities {
     ) -> Result<LoadBatchOutput, ActivityError> {
         let batch = decode_batch(&input.batch_ipc_b64).map_err(to_retryable)?;
         let load_id = LoadId {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
             pipeline_id: PipelineId::from_uuid_unchecked(input.pipeline_id),
             run_id: RunId::from_uuid_unchecked(input.run_id),
             batch_seq: input.batch_seq,
@@ -226,6 +228,7 @@ impl SyncActivities {
                 let dest_path = match &input.destination {
                     common_types::pipeline_spec::DestinationSpec::LocalParquet(s) => {
                         let mut p = std::path::PathBuf::from(&s.base_path);
+                        p.push(load_id.tenant_id.as_uuid().to_string());
                         p.push(load_id.pipeline_id.as_uuid().to_string());
                         p.push("dead-letter");
                         p.push(load_id.run_id.as_uuid().to_string());

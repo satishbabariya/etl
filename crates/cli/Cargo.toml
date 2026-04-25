@@ -24,3 +24,6 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sqlx = { workspace = true }
 temporalio-client = "0.2"
+temporalio-common = "0.2"
+prost-wkt-types = "0.7"
+tonic = "0.14"
