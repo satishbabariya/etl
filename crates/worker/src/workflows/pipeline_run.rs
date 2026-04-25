@@ -60,9 +60,24 @@ pub struct PipelineRunWorkflow {
     rows_rejected_so_far: u64,
 }
 
+/// Cap retries so failing activities don't spin forever in Temporal
+/// history — a failed workflow terminates after this many tries, and
+/// the next worker that starts doesn't re-pick-up stale attempts.
+fn retry_policy() -> temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
+    use prost_wkt_types::Duration as PbDuration;
+    temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
+        initial_interval: Some(PbDuration { seconds: 1, nanos: 0 }),
+        backoff_coefficient: 2.0,
+        maximum_interval: Some(PbDuration { seconds: 30, nanos: 0 }),
+        maximum_attempts: 5,
+        non_retryable_error_types: vec![],
+    }
+}
+
 fn opts_short() -> ActivityOptions {
     ActivityOptions {
         start_to_close_timeout: Some(Duration::from_secs(30)),
+        retry_policy: Some(retry_policy()),
         ..Default::default()
     }
 }
@@ -70,6 +85,7 @@ fn opts_short() -> ActivityOptions {
 fn opts_long() -> ActivityOptions {
     ActivityOptions {
         start_to_close_timeout: Some(Duration::from_secs(300)),
+        retry_policy: Some(retry_policy()),
         ..Default::default()
     }
 }
