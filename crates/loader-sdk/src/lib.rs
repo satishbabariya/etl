@@ -4,7 +4,7 @@
 //! Apply Change Stream, and Append-Only Event Log variants.
 
 use arrow::record_batch::RecordBatch;
-use common_types::ids::{PipelineId, RunId};
+use common_types::ids::{PipelineId, RunId, TenantId};
 use common_types::pipeline_spec::DestinationSpec;
 use serde::{Deserialize, Serialize};
 
@@ -24,9 +24,10 @@ pub trait DestinationLoader: Send + Sync {
 }
 
 /// Deterministic identifier for a single loaded batch.
-/// Same `(pipeline_id, run_id, batch_seq)` tuple ⇒ same underlying artifact.
+/// Same `(tenant_id, pipeline_id, run_id, batch_seq)` tuple ⇒ same artifact.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadId {
+    pub tenant_id: TenantId,
     pub pipeline_id: PipelineId,
     pub run_id: RunId,
     pub batch_seq: u32,
