@@ -106,7 +106,32 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.1 — multi-tenancy turned real (complete: II.1.a + II.1.b + II.1.c)**. Next: **Phase II.2 — secrets, auth, security**.
+Currently: **Phase II.2.a — secrets backend (complete)** on top of Phase II.1. Next: **Phase II.2.b — auth, JWT, RBAC, Vault backend**.
+
+## Secrets (Phase II.2.a)
+
+Connection credentials live behind `SecretRef` pointers in the catalog — never as plaintext rows. Two backends in II.2.a: env-var (`ETL_SECRET_<KEY>`) and a JSON file (`./.etl-secrets.json`, override with `ETL_SECRETS_FILE`). Vault lands in II.2.b.
+
+```bash
+# Stash a plaintext in the file backend AND register a catalog SecretRef row.
+cargo run --bin platform -- secret put pg-source-url \
+  "postgres://etl:etl@localhost:5432/etl_source_demo" --register
+
+# Reference it from a Connection YAML — `apply` rewrites the name to a full SecretRef:
+#
+#   spec:
+#     connector_ref: postgres@0.1.0
+#     config:
+#       url_secret: pg-source-url
+cargo run --bin platform -- apply -f examples/dsl/customers-sync-secret.yaml
+
+# List what's registered (no plaintexts).
+cargo run --bin platform -- secret list
+```
+
+Existing pipelines that use `config: { url: "postgres://..." }` keep working unchanged — `ConnectionConfig` accepts either `url` or `url_secret`. The CLI resolves the SecretRef before kicking off the workflow; the worker's `SyncActivities`/`CdcActivities` carry an `Arc<dyn Secrets>` ready for activity-side resolution in II.2.b.
+
+`PlaintextSecret` zeros on drop and refuses to serialize. `secrets` table is RLS-scoped per tenant.
 
 ## Tenant lifecycle (Phase II.1.c)
 

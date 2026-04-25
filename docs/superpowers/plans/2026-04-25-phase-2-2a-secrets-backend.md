@@ -1586,3 +1586,49 @@ Then use the finishing-a-development-branch skill to push and open a PR.
 **2. Inline Execution** — Execute tasks in this session using executing-plans. The 14 tasks are well-scoped; inline is feasible.
 
 **Which approach?**
+
+---
+
+## Phase II.2.a Completion Log
+
+Completed 2026-04-25 on branch `phase-2-2a-secrets-backend`.
+
+- [x] T1  — `zeroize` workspace dep + `SecretId` newtype
+- [x] T2  — `SecretRef` + `PlaintextSecret` core types (zeroize-on-drop, redacted Debug, no Serialize)
+- [x] T3  — Migration `0007_secrets.sql` — tenant-scoped table + RLS + GRANT
+- [x] T4  — Catalog secret CRUD (`create / get_by_name / list / delete`) wrapping a tenant-scoped tx
+- [x] T5  — Worker `Secrets` trait + `EnvSecrets` (reads `ETL_SECRET_<KEY>`)
+- [x] T6  — `FileSecrets` impl + `with_path` constructor (avoids env-var test races)
+- [x] T7  — `Arc<dyn Secrets>` constructed in `worker::main` via `DispatchSecrets { env, file }`
+- [x] T8  — `SyncActivities` and `CdcActivities` gain `secrets: Arc<dyn Secrets>` field
+- [x] T9  — `ConnectionConfig` becomes `{ url: Option<String>, url_secret: Option<SecretRef> }` with `from_url / from_secret / expect_url` helpers; legacy plaintext path preserved
+- [x] T10 — `worker::secrets::resolve_connection` helper; CLI `pipeline_run` resolves the source connection locally before kicking off the workflow (workflow code stays deterministic)
+- [x] T11 — `platform secret create | put | list | delete` CLI; `put --register` writes file backend AND inserts the catalog row
+- [x] T12 — DSL `apply` rewrites `url_secret: <name>` (string) to a full `SecretRef` JSON object before persisting; idempotent if already an object
+- [x] T13 — `secrets_e2e` integration test: `secret put --register` → `apply` → assert catalog row has no `postgres://` substring + `url_secret` is a resolved object + legacy `url` field is absent
+- [x] T14 — README + this log + final regression sweep
+
+### Exit criterion — MET
+
+- `platform secret put pg-source-url <plaintext> --register` writes the plaintext to the file backend AND registers a catalog SecretRef row.
+- `platform apply -f customers-sync-secret.yaml` (with `url_secret: pg-source-url`) resolves the name to a full SecretRef and stores ONLY the SecretRef in `connections.config`.
+- `connections.config` for the new pipeline contains no `postgres://` substring and no `url` field — `secrets_e2e` enforces this on every run.
+- Pre-existing pipelines using `config: {"url": "postgres://..."}` keep working unchanged (legacy path: `resolve_connection` short-circuits when `url` is `Some`).
+- 16 integration tests (15 prior + `secrets_e2e`) + 87 unit tests green.
+
+### Deviations from the plan
+
+- **`PlaintextSecret` doesn't reach activity bodies yet.** Plan called for the activity to receive a `SecretRef` and resolve via `Secrets` at activity start. II.2.a resolves at the CLI side (just before `start_workflow`) and threads the plaintext as `String` through workflow input. The `SyncActivities`/`CdcActivities.secrets` field is wired and ready but unused — II.2.b will switch the production path once auth-scoped secret resolution lands. Rationale: workflow determinism requires resolution outside the deterministic context, and the CLI is the natural entry point in single-controller deployments.
+- **No `import-from-config` migration tool.** Plan listed an opt-in tool to move existing plaintexts from `connections.config.url` into the secrets table. Skipped because backward-compat keeps legacy pipelines functional, and the operator workflow is covered by `platform secret put --register` + re-applying the YAML with `url_secret`.
+- **`ConnectionConfig.url` field kept (not removed).** Implemented as exclusive-or `Option`s so legacy `url`-only YAML still parses and the 15 pre-secrets integration tests stay untouched.
+- **File backend tests use `with_path` instead of `ETL_SECRETS_FILE` env var.** Initial impl used `set_var` in tests; that flaked under parallel test execution because env vars are global. Constructor added that takes a path directly.
+- **`platform secret put` and the catalog `--register` path target the hardcoded `dev` tenant.** Same shortcut used by `platform apply` and the rest of the CLI; replaced by auth-driven scoping in II.2.b.
+
+### Handoff to Phase II.2.b
+
+II.2.a establishes the seam. II.2.b picks up:
+- **Activity-side resolution.** Move `resolve_connection` out of the CLI and into the activity, passing `SecretRef` (not plaintext) through workflow input.
+- **Vault backend.** Third `Secrets` impl behind the same trait; `DispatchSecrets` extends to `{ env, file, vault }`.
+- **JWT auth + RBAC.** `TenantContext` carries `principal_id` + roles; `--tenant <name>` flag on CLI subcommands replaces the hardcoded `dev` shortcut.
+- **Audit log of secret reads.** Hash-chained `secret_audit` table populated from a wrapper around `Secrets::resolve` (deferred to II.2.d).
+- **`tenant terminate` cascades to secrets.** Already works via `ON DELETE CASCADE` in migration 0007; II.2.b should add the integration assertion.
