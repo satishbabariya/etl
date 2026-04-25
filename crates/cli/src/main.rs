@@ -1,4 +1,5 @@
 mod dsl;
+mod secret;
 mod status;
 mod tenant;
 mod terminate;
@@ -61,6 +62,35 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TenantCmd,
     },
+    /// Secret reference management (RFC-11).
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    /// Register a catalog SecretRef pointing at (backend, key).
+    Create {
+        name: String,
+        #[arg(long, default_value = "file")]
+        backend: String,
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Write a plaintext value into the file backend.
+    Put {
+        name: String,
+        value: String,
+        /// Also register a catalog SecretRef row (backend=file, key=name).
+        #[arg(long)]
+        register: bool,
+    },
+    /// List registered secrets (no plaintexts).
+    List,
+    /// Delete a SecretRef catalog row by name.
+    Delete { name: String },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +170,17 @@ async fn main() -> anyhow::Result<()> {
             TenantCmd::List => tenant::list().await,
             TenantCmd::Suspend { name } => tenant::suspend(name).await,
             TenantCmd::Terminate { name } => tenant::terminate(name).await,
+        },
+        Cmd::Secret { cmd } => match cmd {
+            SecretCmd::Create { name, backend, key } => {
+                let key = key.unwrap_or_else(|| name.clone());
+                secret::create(name, backend, key).await
+            }
+            SecretCmd::Put { name, value, register } => {
+                secret::put(name, value, register).await
+            }
+            SecretCmd::List => secret::list().await,
+            SecretCmd::Delete { name } => secret::delete(name).await,
         },
     }
 }
