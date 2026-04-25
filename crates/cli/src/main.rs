@@ -475,7 +475,9 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .await?;
 
     let cfg = TemporalConfig::from_env()?;
-    let client = make_client(&cfg).await?;
+    let namespace = format!("etl-{}", pipeline.tenant_id.as_uuid().simple());
+    tracing::info!(%namespace, "starting workflow in tenant namespace");
+    let client = worker::temporal::make_client_for_namespace(&cfg, &namespace).await?;
 
     let opts = WorkflowStartOptions::new(cfg.task_queue.clone(), workflow_id.clone())
         .execution_timeout(Duration::from_secs(3600))
