@@ -56,6 +56,7 @@ impl DestinationLoader for LocalParquetLoader {
 
 fn target_path(spec: &LocalParquetSpec, load_id: &LoadId) -> PathBuf {
     let mut p = PathBuf::from(&spec.base_path);
+    p.push(load_id.tenant_id.as_uuid().to_string());
     p.push(load_id.pipeline_id.as_uuid().to_string());
     p.push(load_id.run_id.as_uuid().to_string());
     p.push(format!("batch-{:05}.parquet", load_id.batch_seq));
@@ -67,7 +68,7 @@ mod tests {
     use super::*;
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
-    use common_types::ids::{PipelineId, RunId};
+    use common_types::ids::{PipelineId, RunId, TenantId};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::Arc;
 
@@ -96,6 +97,7 @@ mod tests {
         loader.validate(&spec).await.unwrap();
 
         let load_id = LoadId {
+            tenant_id: TenantId::new(),
             pipeline_id: PipelineId::new(),
             run_id: RunId::new(),
             batch_seq: 0,
@@ -120,6 +122,7 @@ mod tests {
         let loader = LocalParquetLoader;
         loader.validate(&spec).await.unwrap();
         let load_id = LoadId {
+            tenant_id: TenantId::new(),
             pipeline_id: PipelineId::new(),
             run_id: RunId::new(),
             batch_seq: 5,
