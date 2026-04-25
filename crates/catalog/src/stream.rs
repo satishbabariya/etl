@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::{PipelineId, SchemaId, StreamId, TenantId};
 use serde_json::Value;
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Stream {
@@ -29,8 +28,8 @@ pub struct NewStream {
 }
 
 /// Idempotent: if a stream with (pipeline_id, name) exists, returns its id.
-pub async fn ensure(pool: &PgPool, new: NewStream) -> sqlx::Result<StreamId> {
-    if let Some(existing) = get_by_name(pool, new.pipeline_id, &new.name).await? {
+pub async fn ensure(conn: &mut sqlx::PgConnection, new: NewStream) -> sqlx::Result<StreamId> {
+    if let Some(existing) = get_by_name(conn, new.pipeline_id, &new.name).await? {
         return Ok(existing.stream_id);
     }
     let id = StreamId::new();
@@ -48,16 +47,16 @@ pub async fn ensure(pool: &PgPool, new: NewStream) -> sqlx::Result<StreamId> {
     .bind(&new.cursor_config)
     .bind(&new.pk_config)
     .bind(&new.destination_table)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
-    Ok(get_by_name(pool, new.pipeline_id, &new.name)
+    Ok(get_by_name(conn, new.pipeline_id, &new.name)
         .await?
         .expect("inserted or conflicted row must exist")
         .stream_id)
 }
 
 pub async fn get_by_name(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     pipeline_id: PipelineId,
     name: &str,
 ) -> sqlx::Result<Option<Stream>> {
@@ -80,7 +79,7 @@ pub async fn get_by_name(
     )
     .bind(pipeline_id.as_uuid())
     .bind(name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(sid, tid, pid, name, mode, cur, pk, dest, cs, c, u)| Stream {
         stream_id: StreamId::from_uuid_unchecked(sid),
@@ -98,7 +97,7 @@ pub async fn get_by_name(
 }
 
 pub async fn set_current_schema(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     stream_id: StreamId,
     schema_id: SchemaId,
 ) -> sqlx::Result<()> {
@@ -107,7 +106,7 @@ pub async fn set_current_schema(
     )
     .bind(schema_id.as_uuid())
     .bind(stream_id.as_uuid())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

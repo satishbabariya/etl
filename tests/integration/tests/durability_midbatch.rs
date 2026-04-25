@@ -168,7 +168,8 @@ async fn sync_survives_worker_kill_midbatch() -> anyhow::Result<()> {
     let total = count_parquet_rows(&data);
     assert_eq!(total, 100, "final Parquet row count must equal source rows");
 
-    let state = cat.get_stream_state(pipe, "customers").await?.unwrap();
+    let ctx = catalog::TenantContext::new(tenant);
+    let state = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     // Row id=100 → 2026-04-20 00:00 + 100 minutes = 2026-04-20 01:40 UTC.
     assert!(
         state.cursor.as_ref().unwrap().value.starts_with("2026-04-20T01:40"),

@@ -3,7 +3,6 @@ use common_types::evolution::ChangeKind;
 use common_types::ids::{SchemaId, StreamId, TenantId};
 use common_types::schema_fingerprint::SchemaFingerprint;
 use serde_json::Value;
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Schema {
@@ -28,13 +27,13 @@ pub struct NewSchema {
     pub change_summary: Vec<ChangeKind>,
 }
 
-pub async fn insert(pool: &PgPool, new: NewSchema) -> sqlx::Result<SchemaId> {
-    let mut tx = pool.begin().await?;
+pub async fn insert(conn: &mut sqlx::PgConnection, new: NewSchema) -> sqlx::Result<SchemaId> {
+    // Note: caller wraps in a tenant-scoped transaction; we use it directly.
     let next_version: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(version), 0) + 1 FROM schemas WHERE stream_id = $1",
     )
     .bind(new.stream_id.as_uuid())
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     let id = SchemaId::new();
@@ -53,13 +52,12 @@ pub async fn insert(pool: &PgPool, new: NewSchema) -> sqlx::Result<SchemaId> {
     .bind(new.fingerprint.as_hex())
     .bind(&new.arrow_schema_json)
     .bind(&change_summary_json)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
-    tx.commit().await?;
     Ok(id)
 }
 
-pub async fn get_latest(pool: &PgPool, stream_id: StreamId) -> sqlx::Result<Option<Schema>> {
+pub async fn get_latest(conn: &mut sqlx::PgConnection, stream_id: StreamId) -> sqlx::Result<Option<Schema>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,
@@ -77,7 +75,7 @@ pub async fn get_latest(pool: &PgPool, stream_id: StreamId) -> sqlx::Result<Opti
          FROM schemas WHERE stream_id = $1 ORDER BY version DESC LIMIT 1",
     )
     .bind(stream_id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(sid, tid, stid, v, parent, fp, j, chg, d, app)| Schema {
         schema_id: SchemaId::from_uuid_unchecked(sid),

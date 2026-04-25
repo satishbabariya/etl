@@ -33,7 +33,8 @@ async fn connection_insert_scoped_to_tenant() {
         })
         .await
         .unwrap();
-    let got = cat.get_connection(conn).await.unwrap().unwrap();
+    let ctx = catalog::TenantContext::new(tenant);
+    let got = cat.get_connection(ctx, conn).await.unwrap().unwrap();
     assert_eq!(got.name, "main-pg");
     assert_eq!(got.tenant_id, tenant);
 }
@@ -71,8 +72,9 @@ async fn pipeline_run_lifecycle() {
         })
         .await
         .unwrap();
-    cat.mark_run_completed(run).await.unwrap();
-    let got = cat.get_run(run).await.unwrap().unwrap();
+    let ctx = catalog::TenantContext::new(tenant);
+    cat.mark_run_completed(ctx, run).await.unwrap();
+    let got = cat.get_run(ctx, run).await.unwrap().unwrap();
     assert_eq!(got.status, RunStatus::Completed);
     assert!(got.completed_at.is_some());
 }
@@ -101,10 +103,11 @@ async fn stream_state_upsert_then_get() {
         .await
         .unwrap();
 
-    assert!(cat.get_stream_state(pipe, "customers").await.unwrap().is_none());
+    let ctx = catalog::TenantContext::new(tenant);
+    assert!(cat.get_stream_state(ctx, pipe, "customers").await.unwrap().is_none());
 
     cat.upsert_stream_state(
-        tenant,
+        ctx,
         pipe,
         "customers",
         Some(CursorValue {
@@ -116,12 +119,12 @@ async fn stream_state_upsert_then_get() {
     .await
     .unwrap();
 
-    let got = cat.get_stream_state(pipe, "customers").await.unwrap().unwrap();
+    let got = cat.get_stream_state(ctx, pipe, "customers").await.unwrap().unwrap();
     assert_eq!(got.cursor.as_ref().unwrap().value, "2026-04-22T11:00:00Z");
     assert_eq!(got.cursor.as_ref().unwrap().kind, CursorKind::TimestampTz);
 
     cat.upsert_stream_state(
-        tenant,
+        ctx,
         pipe,
         "customers",
         Some(CursorValue {
@@ -132,7 +135,7 @@ async fn stream_state_upsert_then_get() {
     )
     .await
     .unwrap();
-    let got2 = cat.get_stream_state(pipe, "customers").await.unwrap().unwrap();
+    let got2 = cat.get_stream_state(ctx, pipe, "customers").await.unwrap().unwrap();
     assert_eq!(got2.cursor.as_ref().unwrap().value, "2026-04-23T10:00:00Z");
 }
 
@@ -140,10 +143,11 @@ async fn stream_state_upsert_then_get() {
 async fn default_workspace_is_idempotent() {
     let cat = test_catalog().await;
     let t = cat.create_tenant("acme").await.unwrap();
-    let w1 = cat.ensure_default_workspace(t).await.unwrap();
-    let w2 = cat.ensure_default_workspace(t).await.unwrap();
+    let ctx = catalog::TenantContext::new(t);
+    let w1 = cat.ensure_default_workspace(ctx).await.unwrap();
+    let w2 = cat.ensure_default_workspace(ctx).await.unwrap();
     assert_eq!(w1, w2);
-    let got = cat.get_workspace_by_name(t, "default").await.unwrap().unwrap();
+    let got = cat.get_workspace_by_name(ctx, "default").await.unwrap().unwrap();
     assert_eq!(got.workspace_id, w1);
 }
 
@@ -224,7 +228,8 @@ async fn schema_insert_assigns_versions_sequentially() {
         change_summary: vec![],
     }).await.unwrap();
 
-    let latest = cat.get_latest_schema(s).await.unwrap().unwrap();
+    let ctx = catalog::TenantContext::new(t);
+    let latest = cat.get_latest_schema(ctx, s).await.unwrap().unwrap();
     assert_eq!(latest.schema_id, s2);
     assert_eq!(latest.version, 2);
     assert_eq!(latest.parent_schema_id, Some(s1));

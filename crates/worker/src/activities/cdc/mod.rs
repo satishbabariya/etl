@@ -41,20 +41,22 @@ impl CdcActivities {
             .map_err(retryable)?;
         let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
         let tid = TenantId::from_uuid_unchecked(input.tenant_id);
-        catalog::cdc::upsert(
-            self.catalog.pool(),
-            &CdcSlot {
-                pipeline_id: pid,
-                tenant_id: tid,
-                slot_name: r.slot_name.clone(),
-                publication_name: pub_name.clone(),
-                consistent_point: r.consistent_point.clone(),
-                confirmed_flush: None,
-                state: SlotState::Active,
-            },
-        )
-        .await
-        .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        let ctx = common_types::ids::TenantContext::new(tid);
+        self.catalog
+            .cdc_upsert(
+                ctx,
+                &CdcSlot {
+                    pipeline_id: pid,
+                    tenant_id: tid,
+                    slot_name: r.slot_name.clone(),
+                    publication_name: pub_name.clone(),
+                    consistent_point: r.consistent_point.clone(),
+                    confirmed_flush: None,
+                    state: SlotState::Active,
+                },
+            )
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
         Ok(EnsureSlotOutput {
             slot_name: r.slot_name,
             publication_name: pub_name,
@@ -90,7 +92,11 @@ impl CdcActivities {
         )
         .await
         .map_err(retryable)?;
-        metrics::counter!(crate::metrics::CDC_EVENTS, "op" => "s")
+        metrics::counter!(
+            crate::metrics::CDC_EVENTS,
+            "op" => "s",
+            "tenant_id" => input.tenant_id.to_string(),
+        )
             .increment(chunk.batch.num_rows() as u64);
         if chunk.batch.num_rows() > 0 {
             CdcParquetLoader
@@ -157,7 +163,12 @@ impl CdcActivities {
                 crate::connectors::postgres::cdc::CdcEvent::Delete { .. } => "d",
                 _ => continue,
             };
-            metrics::counter!(crate::metrics::CDC_EVENTS, "op" => op).increment(1);
+            metrics::counter!(
+                crate::metrics::CDC_EVENTS,
+                "op" => op,
+                "tenant_id" => input.tenant_id.to_string(),
+            )
+            .increment(1);
         }
         if rows > 0 {
             CdcParquetLoader
@@ -174,7 +185,10 @@ impl CdcActivities {
         let new_lsn = out.new_position.map(common_types::cursor::lsn_to_string);
         if let Some(lsn) = &new_lsn {
             let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
-            catalog::cdc::update_confirmed_flush(self.catalog.pool(), pid, lsn)
+            let tid = TenantId::from_uuid_unchecked(input.tenant_id);
+            let ctx = common_types::ids::TenantContext::new(tid);
+            self.catalog
+                .cdc_update_confirmed_flush(ctx, pid, lsn)
                 .await
                 .map_err(|e| retryable(anyhow::anyhow!(e)))?;
         }

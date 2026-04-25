@@ -72,7 +72,8 @@ pub async fn apply(
     files: &[ParsedFile],
 ) -> anyhow::Result<ApplyReport> {
     let mut report = ApplyReport::default();
-    catalog.ensure_default_workspace(tenant_id).await?;
+    let ctx = catalog::TenantContext::new(tenant_id);
+    catalog.ensure_default_workspace(ctx).await?;
 
     let mut connections: HashMap<String, ConnectionSpec> = HashMap::new();
     let mut pipelines: HashMap<String, (Metadata, PipelineDslSpec)> = HashMap::new();

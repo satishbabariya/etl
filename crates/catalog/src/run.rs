@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::{PipelineId, RunId, TenantId};
-use sqlx::PgPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -57,7 +56,7 @@ pub struct NewRun {
     pub temporal_workflow_id: Option<String>,
 }
 
-pub async fn create(pool: &PgPool, new: NewRun) -> sqlx::Result<RunId> {
+pub async fn create(conn: &mut sqlx::PgConnection, new: NewRun) -> sqlx::Result<RunId> {
     sqlx::query(
         "INSERT INTO runs (run_id, tenant_id, pipeline_id, status, trigger, temporal_workflow_id) \
          VALUES ($1, $2, $3, 'queued', $4, $5)",
@@ -67,41 +66,41 @@ pub async fn create(pool: &PgPool, new: NewRun) -> sqlx::Result<RunId> {
     .bind(new.pipeline_id.as_uuid())
     .bind(&new.trigger)
     .bind(new.temporal_workflow_id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(new.run_id)
 }
 
-pub async fn mark_running(pool: &PgPool, id: RunId) -> sqlx::Result<()> {
+pub async fn mark_running(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Result<()> {
     sqlx::query("UPDATE runs SET status = 'running' WHERE run_id = $1")
         .bind(id.as_uuid())
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(())
 }
 
-pub async fn mark_completed(pool: &PgPool, id: RunId) -> sqlx::Result<()> {
+pub async fn mark_completed(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE runs SET status = 'completed', completed_at = NOW() WHERE run_id = $1",
     )
     .bind(id.as_uuid())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-pub async fn mark_failed(pool: &PgPool, id: RunId, err: &str) -> sqlx::Result<()> {
+pub async fn mark_failed(conn: &mut sqlx::PgConnection, id: RunId, err: &str) -> sqlx::Result<()> {
     sqlx::query(
         "UPDATE runs SET status = 'failed', completed_at = NOW(), error = $2 WHERE run_id = $1",
     )
     .bind(id.as_uuid())
     .bind(err)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-pub async fn get(pool: &PgPool, id: RunId) -> sqlx::Result<Option<Run>> {
+pub async fn get(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Result<Option<Run>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,
@@ -118,7 +117,7 @@ pub async fn get(pool: &PgPool, id: RunId) -> sqlx::Result<Option<Run>> {
          FROM runs WHERE run_id = $1",
     )
     .bind(id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(rid, tid, pid, status, trigger, wf, started_at, completed_at, error)| Run {
         run_id: RunId::from_uuid_unchecked(rid),

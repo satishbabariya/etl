@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::{ConnectionId, PipelineId, TenantId};
 use serde_json::Value;
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -23,8 +22,11 @@ pub struct NewPipeline {
     pub spec: Value,
 }
 
-pub async fn create(pool: &PgPool, new: NewPipeline) -> sqlx::Result<PipelineId> {
-    let workspace_id = crate::workspace::ensure_default(pool, new.tenant_id).await?;
+pub async fn create(
+    conn: &mut sqlx::PgConnection,
+    new: NewPipeline,
+) -> sqlx::Result<PipelineId> {
+    let workspace_id = crate::workspace::ensure_default(conn, new.tenant_id).await?;
     let id = PipelineId::new();
     sqlx::query(
         "INSERT INTO pipelines (pipeline_id, tenant_id, workspace_id, name, source_conn_id, dest_conn_id, spec) \
@@ -37,12 +39,15 @@ pub async fn create(pool: &PgPool, new: NewPipeline) -> sqlx::Result<PipelineId>
     .bind(new.source_conn_id.as_uuid())
     .bind(new.dest_conn_id.map(|d| d.as_uuid()))
     .bind(&new.spec)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(id)
 }
 
-pub async fn get(pool: &PgPool, id: PipelineId) -> sqlx::Result<Option<Pipeline>> {
+pub async fn get(
+    conn: &mut sqlx::PgConnection,
+    id: PipelineId,
+) -> sqlx::Result<Option<Pipeline>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,
@@ -57,7 +62,7 @@ pub async fn get(pool: &PgPool, id: PipelineId) -> sqlx::Result<Option<Pipeline>
          FROM pipelines WHERE pipeline_id = $1",
     )
     .bind(id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(pid, tid, name, src, dst, spec, c, u)| Pipeline {
         pipeline_id: PipelineId::from_uuid_unchecked(pid),

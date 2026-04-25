@@ -31,8 +31,15 @@ async fn main() -> anyhow::Result<()> {
     worker::observability::spawn_metrics_endpoint(prom_handle, metrics_bind);
 
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
-    let catalog = Arc::new(Catalog::connect(&db_url).await?);
-    catalog.migrate().await?;
+    let app_url = std::env::var("DATABASE_URL_APP")
+        .unwrap_or_else(|_| db_url.replace("etl:etl@", "etl_app:etl_app@"));
+
+    // Migrations run as superuser; app paths use etl_app for RLS enforcement.
+    {
+        let admin = Catalog::connect(&db_url).await?;
+        admin.migrate().await?;
+    }
+    let catalog = Arc::new(Catalog::connect_app(&app_url).await?);
 
     let cfg = TemporalConfig::from_env()?;
     tracing::info!(

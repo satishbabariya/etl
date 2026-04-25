@@ -18,16 +18,17 @@ pub async fn terminate(workflow_id: String, reason: Option<String>) -> anyhow::R
     // Best-effort catalog update.
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
-    let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-        "SELECT run_id FROM runs WHERE temporal_workflow_id = $1 ORDER BY started_at DESC LIMIT 1",
+    let row: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
+        "SELECT run_id, tenant_id FROM runs WHERE temporal_workflow_id = $1 ORDER BY started_at DESC LIMIT 1",
     )
     .bind(&workflow_id)
     .fetch_optional(catalog.pool())
     .await?;
-    if let Some((rid,)) = row {
+    if let Some((rid, tid)) = row {
         let rid = common_types::ids::RunId::from_uuid_unchecked(rid);
+        let ctx = catalog::TenantContext::new(common_types::ids::TenantId::from_uuid_unchecked(tid));
         catalog
-            .mark_run_failed(rid, &reason.unwrap_or_else(|| "terminated".into()))
+            .mark_run_failed(ctx, rid, &reason.unwrap_or_else(|| "terminated".into()))
             .await?;
         println!("marked run {} failed", rid);
     } else {

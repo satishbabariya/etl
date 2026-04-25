@@ -19,7 +19,7 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, WorkflowResult};
 use uuid::Uuid;
 
-use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
+use crate::activities::run_lifecycle::RunLifecycleActivities;
 use crate::activities::sync::SyncActivities;
 use crate::activities::sync::inputs::{
     CommitCursorInput, DiscoverInput, LoadBatchInput, ReadBatchInput,
@@ -114,18 +114,17 @@ impl PipelineRunWorkflow {
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
-        let run_id = ctx.state(|s| s.run_id);
+        let (run_id, tenant_id) = ctx.state(|s| (s.run_id, s.tenant_id));
         match Self::run_inner(ctx).await {
             Ok(()) => Ok(()),
             Err(termination) => {
                 let err_str = format!("{termination}");
-                // Best effort: record Failed status. If this sub-activity itself
-                // fails (e.g. catalog unreachable), bubble original error.
                 let _ = ctx
                     .start_activity(
                         RunLifecycleActivities::fail_run,
-                        FailRunInput {
+                        crate::activities::run_lifecycle::FailRunInput {
                             run_id,
+                            tenant_id,
                             error: err_str,
                         },
                         opts_short(),
@@ -165,8 +164,12 @@ impl PipelineRunWorkflow {
             )
         });
 
-        ctx.start_activity(RunLifecycleActivities::start_run, run_id, opts_short())
-            .await?;
+        ctx.start_activity(
+            RunLifecycleActivities::start_run,
+            crate::activities::run_lifecycle::StartRunInput { run_id, tenant_id },
+            opts_short(),
+        )
+        .await?;
 
         ctx.start_activity(
             SyncActivities::discover_stream,
@@ -206,6 +209,7 @@ impl PipelineRunWorkflow {
                         cursor,
                         batch_size: spec.batch_size,
                         connector_ref: connector_ref.clone(),
+                        tenant_id,
                         transform: spec.transform.clone(),
                     },
                     opts_long(),
@@ -232,6 +236,7 @@ impl PipelineRunWorkflow {
                     destination: spec.destination.clone(),
                     batch_ipc_b64: read_out.batch_ipc_b64,
                     pipeline_id,
+                    tenant_id,
                     run_id,
                     batch_seq,
                     rejected_ipc_b64: read_out.rejected_ipc_b64,
@@ -264,8 +269,12 @@ impl PipelineRunWorkflow {
             }
         }
 
-        ctx.start_activity(RunLifecycleActivities::complete_run, run_id, opts_short())
-            .await?;
+        ctx.start_activity(
+            RunLifecycleActivities::complete_run,
+            crate::activities::run_lifecycle::CompleteRunInput { run_id, tenant_id },
+            opts_short(),
+        )
+        .await?;
 
         Ok(())
     }

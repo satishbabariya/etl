@@ -106,20 +106,31 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.1.a — RLS foundation (complete)**. Next: **Phase II.1.b — TenantContext threading + per-tenant Temporal namespace + per-tenant storage prefix**. See the roadmap spec for the four-era trajectory.
+Currently: **Phase II.1.b — TenantContext active in production paths (complete)**. Next: **Phase II.1.c — per-tenant Temporal namespace + storage prefix + tenant CLI** (deferred subset of II.1).
 
-## Multi-tenancy — RLS foundation (Phase II.1.a)
+## Multi-tenancy (Phase II.1.a + II.1.b)
 
-The catalog now has Postgres row-level security on every tenant-scoped table (`connections`, `pipelines`, `runs`, `workspaces`, `streams`, `schemas`, `stream_state`, `cdc_slots`, `tenants`). The `etl_app` non-superuser role replaces direct `etl` access for app-layer queries; admin paths (migrations, tenant CRUD) keep using the superuser.
+The catalog uses Postgres row-level security on every tenant-scoped table. The `etl_app` non-superuser role is what the worker connects as for app-layer queries; admin paths (migrations, tenant CRUD) keep using the `etl` superuser. RLS is now **active in production paths**, not just dormant for tests.
 
-Policies key off `current_setting('app.tenant_id')` — callers wrap queries in a transaction and `SET LOCAL app.tenant_id = '<uuid>'` first. `NULL` (unset) is admin mode.
+- Every public `Catalog::*` method takes a `TenantContext` and opens a transaction with `SET LOCAL app.tenant_id`.
+- Worker boots with `Catalog::connect_app` (etl_app role); `DATABASE_URL_APP` overrides the auto-rewrite.
+- Every counter and gauge carries a `tenant_id` Prometheus label.
+- Admin-only paths (migrations, tenant CRUD, `truncate_all_for_tests`, the slot-lag poller) explicitly run with empty `app.tenant_id` (NULL = admin).
 
 ```bash
-# Adversarial test: cross-tenant reads/updates/inserts all blocked at the DB layer.
+# SQL-level adversarial test: cross-tenant reads/updates/inserts blocked at the DB layer.
 cargo test -p integration-tests --test rls_cross_tenant -- --ignored
+
+# API-level adversarial test: cross-tenant reads via Catalog::get_pipeline / get_connection
+# return None even when asking for the other tenant's id by-id.
+cargo test -p integration-tests --test tenant_api_isolation -- --ignored
 ```
 
-Phase II.1.b will thread `TenantContext` through every catalog method, switch the worker + CLI to connect as `etl_app`, add per-tenant Temporal namespaces, and prefix object storage with `<tenant_id>/`.
+What's still pending (Phase II.1.c):
+- `platform tenant create | list | suspend | terminate` CLI
+- Per-tenant Temporal namespace (`etl-<tenant_simple>`)
+- Per-tenant storage prefix (`./data/<tenant_id>/<pipeline_id>/...`)
+- Grafana dashboard `tenant` template variable
 
 ## Observability (Era I exit)
 
