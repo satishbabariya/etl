@@ -6770,6 +6770,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "parquet",
  "postgres-protocol",
+ "prost-wkt-types",
  "reqwest",
  "serde",
  "serde_json",

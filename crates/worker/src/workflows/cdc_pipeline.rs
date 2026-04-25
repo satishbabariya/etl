@@ -41,15 +41,31 @@ pub struct CdcPipelineWorkflow {
     input: CdcPipelineInput,
 }
 
+/// Bounded retry policy. CDC activities can fail transiently (slot
+/// gone, connection blip) and we want a small retry budget — but
+/// hitting the cap should fail the workflow, not retry indefinitely.
+fn retry_policy() -> temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
+    use prost_wkt_types::Duration as PbDuration;
+    temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
+        initial_interval: Some(PbDuration { seconds: 1, nanos: 0 }),
+        backoff_coefficient: 2.0,
+        maximum_interval: Some(PbDuration { seconds: 30, nanos: 0 }),
+        maximum_attempts: 5,
+        non_retryable_error_types: vec![],
+    }
+}
+
 fn opts_short() -> ActivityOptions {
     ActivityOptions {
         start_to_close_timeout: Some(Duration::from_secs(60)),
+        retry_policy: Some(retry_policy()),
         ..Default::default()
     }
 }
 fn opts_long() -> ActivityOptions {
     ActivityOptions {
         start_to_close_timeout: Some(Duration::from_secs(600)),
+        retry_policy: Some(retry_policy()),
         ..Default::default()
     }
 }
