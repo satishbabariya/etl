@@ -27,6 +27,7 @@ pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,
     pub scalar_runtime: Arc<WasmScalarRuntime>,
+    pub secrets: Arc<dyn crate::secrets::Secrets>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {

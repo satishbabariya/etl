@@ -56,6 +56,12 @@ async fn main() -> anyhow::Result<()> {
     let wasm_runtime = WasmSourceRuntime::new(&wasm_base)?;
     let scalar_runtime = WasmScalarRuntime::new(&wasm_base)?;
 
+    let secrets: Arc<dyn worker::secrets::Secrets> =
+        Arc::new(worker::secrets::DispatchSecrets {
+            env: worker::secrets::env::EnvSecrets,
+            file: worker::secrets::file::FileSecrets::new(),
+        });
+
     let lifecycle = RunLifecycleActivities {
         catalog: catalog.clone(),
     };
@@ -63,8 +69,12 @@ async fn main() -> anyhow::Result<()> {
         catalog: catalog.clone(),
         wasm_runtime: wasm_runtime.clone(),
         scalar_runtime: scalar_runtime.clone(),
+        secrets: secrets.clone(),
     };
-    let cdc = CdcActivities { catalog: catalog.clone() };
+    let cdc = CdcActivities {
+        catalog: catalog.clone(),
+        secrets: secrets.clone(),
+    };
 
     // Slot-lag poller: resolves each active slot's source URL via the
     // catalog and publishes etl_cdc_slot_lag_bytes every 15s.

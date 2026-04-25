@@ -15,6 +15,7 @@ use crate::loaders::cdc_parquet::CdcParquetLoader;
 #[derive(Clone)]
 pub struct CdcActivities {
     pub catalog: Arc<Catalog>,
+    pub secrets: Arc<dyn crate::secrets::Secrets>,
 }
 
 fn retryable(e: anyhow::Error) -> ActivityError {
