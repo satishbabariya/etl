@@ -102,6 +102,7 @@ impl CdcActivities {
             CdcParquetLoader
                 .write(
                     &input.destination,
+                    input.tenant_id,
                     input.pipeline_id,
                     input.run_id,
                     input.batch_seq,
@@ -174,6 +175,7 @@ impl CdcActivities {
             CdcParquetLoader
                 .write(
                     &input.destination,
+                    input.tenant_id,
                     input.pipeline_id,
                     input.run_id,
                     input.batch_seq,

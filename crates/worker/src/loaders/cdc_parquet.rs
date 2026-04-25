@@ -12,6 +12,7 @@ impl CdcParquetLoader {
     pub async fn write(
         &self,
         dest: &DestinationSpec,
+        tenant_id: Uuid,
         pipeline_id: Uuid,
         run_id: Uuid,
         batch_seq: u32,
@@ -21,6 +22,7 @@ impl CdcParquetLoader {
             DestinationSpec::LocalParquet(s) => s.base_path.clone(),
         };
         let mut path = PathBuf::from(&base);
+        path.push(tenant_id.to_string());
         path.push(pipeline_id.to_string());
         path.push("cdc");
         path.push(run_id.to_string());
