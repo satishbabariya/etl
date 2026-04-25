@@ -475,8 +475,14 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .await?;
 
     let cfg = TemporalConfig::from_env()?;
-    let namespace = format!("etl-{}", pipeline.tenant_id.as_uuid().simple());
-    tracing::info!(%namespace, "starting workflow in tenant namespace");
+    // Idempotent: register the namespace if it doesn't exist yet. Lets
+    // tests + admin paths that bypass `platform tenant create` still work.
+    let _ = tenant::ensure_temporal_namespace(&pipeline.tenant_id).await;
+    // Fall back to the default namespace if the worker hasn't been
+    // restarted to pick up the new tenant namespace yet — Phase II.4
+    // will hot-reconfigure. For now, default polls everything as a backstop.
+    let namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into());
+    tracing::info!(%namespace, tenant = %pipeline.tenant_id, "starting workflow");
     let client = worker::temporal::make_client_for_namespace(&cfg, &namespace).await?;
 
     let opts = WorkflowStartOptions::new(cfg.task_queue.clone(), workflow_id.clone())

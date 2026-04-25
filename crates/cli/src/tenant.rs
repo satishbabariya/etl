@@ -72,6 +72,12 @@ pub async fn terminate(name: String) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Idempotent: registers the per-tenant namespace, succeeding when
+/// it already exists. Used by `pipeline_run` and `tenant create`.
+pub async fn ensure_temporal_namespace(id: &TenantId) -> anyhow::Result<()> {
+    register_temporal_namespace(id).await
+}
+
 async fn register_temporal_namespace(id: &TenantId) -> anyhow::Result<()> {
     use temporalio_client::grpc::WorkflowService;
     use temporalio_common::protos::temporal::api::workflowservice::v1::RegisterNamespaceRequest;
