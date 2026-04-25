@@ -247,6 +247,7 @@ impl PipelineRunWorkflow {
                 SyncActivities::commit_cursor,
                 CommitCursorInput {
                     pipeline_id,
+                    tenant_id,
                     run_id,
                     stream_name: stream_name.clone(),
                     cursor: read_out.new_cursor.clone(),

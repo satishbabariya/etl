@@ -5,6 +5,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnsureSlotInput {
     pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
     pub source_url: String,
     pub schema: String,
     pub table: String,

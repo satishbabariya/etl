@@ -61,6 +61,20 @@ pub enum IdParseError {
 }
 
 define_id!(TenantId, "ten");
+
+/// Identity carried through every cross-component call. For Phase II.1
+/// it just wraps a TenantId; Phase II.2 adds principal/role/etc.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TenantContext {
+    pub tenant_id: TenantId,
+}
+
+impl TenantContext {
+    pub fn new(tenant_id: TenantId) -> Self {
+        Self { tenant_id }
+    }
+}
+
 define_id!(ConnectionId, "conn");
 define_id!(PipelineId, "pipe");
 define_id!(RunId, "run");

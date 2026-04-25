@@ -31,6 +31,7 @@ fn parse_kind(s: &str) -> CursorKind {
 
 pub async fn upsert(
     pool: &PgPool,
+    tenant_id: common_types::ids::TenantId,
     pipeline_id: PipelineId,
     stream_name: &str,
     cursor: Option<CursorValue>,
@@ -41,8 +42,8 @@ pub async fn upsert(
         None => ("int64".to_string(), None),
     };
     sqlx::query(
-        "INSERT INTO stream_state (pipeline_id, stream_name, cursor_kind, cursor_value, last_run_id, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, NOW()) \
+        "INSERT INTO stream_state (pipeline_id, tenant_id, stream_name, cursor_kind, cursor_value, last_run_id, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
          ON CONFLICT (pipeline_id, stream_name) DO UPDATE SET \
            cursor_kind = EXCLUDED.cursor_kind, \
            cursor_value = EXCLUDED.cursor_value, \
@@ -50,6 +51,7 @@ pub async fn upsert(
            updated_at = NOW()",
     )
     .bind(pipeline_id.as_uuid())
+    .bind(tenant_id.as_uuid())
     .bind(stream_name)
     .bind(kind)
     .bind(value)

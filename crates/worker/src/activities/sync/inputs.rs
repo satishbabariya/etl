@@ -78,6 +78,7 @@ pub struct LoadBatchOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommitCursorInput {
     pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub stream_name: String,
     pub cursor: Option<CursorValue>,

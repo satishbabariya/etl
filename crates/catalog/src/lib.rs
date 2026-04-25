@@ -95,12 +95,13 @@ impl Catalog {
 
     pub async fn upsert_stream_state(
         &self,
+        tenant_id: common_types::ids::TenantId,
         pipeline_id: PipelineId,
         stream_name: &str,
         cursor: Option<common_types::cursor::CursorValue>,
         last_run_id: Option<RunId>,
     ) -> sqlx::Result<()> {
-        stream_state::upsert(&self.pool, pipeline_id, stream_name, cursor, last_run_id).await
+        stream_state::upsert(&self.pool, tenant_id, pipeline_id, stream_name, cursor, last_run_id).await
     }
 
     // Workspaces
