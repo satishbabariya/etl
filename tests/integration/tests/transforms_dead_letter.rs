@@ -222,6 +222,7 @@ async fn validate_dead_letter_under_threshold_completes() -> anyhow::Result<()> 
 
     // Kept rows: three with non-null id.
     let mut happy = tmp.path().to_path_buf();
+    happy.push(tenant.as_uuid().to_string());
     happy.push(pipe.as_uuid().to_string());
     // Exclude dead-letter subtree.
     let kept: Vec<Option<i64>> = walkdir::WalkDir::new(&happy)
@@ -254,6 +255,7 @@ async fn validate_dead_letter_under_threshold_completes() -> anyhow::Result<()> 
 
     // Dead-letter rows: one with null id.
     let mut dl = tmp.path().to_path_buf();
+    dl.push(tenant.as_uuid().to_string());
     dl.push(pipe.as_uuid().to_string());
     dl.push("dead-letter");
     assert!(dl.exists(), "dead-letter dir missing at {}", dl.display());
