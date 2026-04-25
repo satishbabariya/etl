@@ -22,6 +22,7 @@ use crate::loaders::parquet_local::LocalParquetLoader;
 use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
 use inputs::*;
 
+#[derive(Clone)]
 pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,

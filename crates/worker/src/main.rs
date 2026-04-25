@@ -95,29 +95,69 @@ async fn main() -> anyhow::Result<()> {
         std::time::Duration::from_secs(15),
     );
 
-    let worker_options = WorkerOptions::new(cfg.task_queue.clone())
-        .task_types(WorkerTaskTypes::all())
-        .deployment_options(WorkerDeploymentOptions {
-            version: WorkerDeploymentVersion {
-                deployment_name: "etl".to_owned(),
-                build_id: "etl-worker-0.2".to_owned(),
-            },
-            use_worker_versioning: false,
-            default_versioning_behavior: None,
-        })
-        .register_activities(lifecycle)
-        .register_activities(sync)
-        .register_activities(cdc)
-        .register_workflow::<PipelineRunWorkflow>()
-        .register_workflow::<CdcPipelineWorkflow>()
-        .build();
+    drop(client); // we'll create per-namespace clients below
 
-    let mut worker = Worker::new(&runtime, client, worker_options)
-        .map_err(|e| anyhow::anyhow!("Worker::new: {e}"))?;
-    tracing::info!("worker polling");
-    worker
-        .run()
-        .await
-        .map_err(|e| anyhow::anyhow!("Worker::run: {e}"))?;
+    // One Temporal worker per known tenant + a `default` backstop for legacy
+    // workflows. Tenants created at runtime are picked up after restart
+    // (Phase II.4 will hot-reconfigure).
+    let admin = Catalog::connect(&db_url).await?;
+    let tenants = admin.list_tenants().await?;
+    drop(admin);
+
+    let mut namespaces: Vec<String> = tenants
+        .iter()
+        .map(|t| format!("etl-{}", t.tenant_id.as_uuid().simple()))
+        .collect();
+    if namespaces.is_empty() {
+        tracing::warn!("no tenants registered — only the legacy `default` namespace will be polled");
+    }
+    namespaces.push(cfg.namespace.clone());
+
+    let task_queue = cfg.task_queue.clone();
+    let mut workers = Vec::new();
+    for ns in namespaces {
+        let mut ns_cfg = cfg.clone();
+        ns_cfg.namespace = ns.clone();
+        let ns_client = match make_client(&ns_cfg).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(%ns, error = %e, "skipping namespace — connect failed");
+                continue;
+            }
+        };
+        let opts = WorkerOptions::new(task_queue.clone())
+            .task_types(WorkerTaskTypes::all())
+            .deployment_options(WorkerDeploymentOptions {
+                version: WorkerDeploymentVersion {
+                    deployment_name: "etl".to_owned(),
+                    build_id: "etl-worker-0.2".to_owned(),
+                },
+                use_worker_versioning: false,
+                default_versioning_behavior: None,
+            })
+            .register_activities(lifecycle.clone())
+            .register_activities(sync.clone())
+            .register_activities(cdc.clone())
+            .register_workflow::<PipelineRunWorkflow>()
+            .register_workflow::<CdcPipelineWorkflow>()
+            .build();
+        let mut w = match Worker::new(&runtime, ns_client, opts) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!(%ns, error = %e, "skipping namespace — Worker::new failed");
+                continue;
+            }
+        };
+        tracing::info!(%ns, "worker polling namespace");
+        let ns_for_log = ns.clone();
+        // Worker is !Send (holds non-Send Temporal core state); join as
+        // futures on the current task rather than spawning.
+        workers.push(Box::pin(async move {
+            if let Err(e) = w.run().await {
+                tracing::error!(ns = %ns_for_log, error = %e, "worker exited");
+            }
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>);
+    }
+    futures::future::join_all(workers).await;
     Ok(())
 }
