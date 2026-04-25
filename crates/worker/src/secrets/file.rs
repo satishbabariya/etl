@@ -21,6 +21,10 @@ impl FileSecrets {
         let path = std::env::var("ETL_SECRETS_FILE")
             .unwrap_or_else(|_| ".etl-secrets.json".into())
             .into();
+        Self::with_path(path)
+    }
+
+    pub fn with_path(path: PathBuf) -> Self {
         Self { path, cache: RwLock::new(HashMap::new()) }
     }
 
@@ -99,8 +103,7 @@ mod tests {
     async fn file_put_then_resolve() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".etl-secrets.json");
-        std::env::set_var("ETL_SECRETS_FILE", &path);
-        let fs = FileSecrets::new();
+        let fs = FileSecrets::with_path(path);
         fs.put("pg-url", "postgres://x").unwrap();
         let v = fs.resolve(&r("pg-url", "pg-url")).await.unwrap();
         assert_eq!(v.expose(), "postgres://x");
@@ -110,8 +113,7 @@ mod tests {
     async fn file_missing_key_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".etl-secrets.json");
-        std::env::set_var("ETL_SECRETS_FILE", &path);
-        let fs = FileSecrets::new();
+        let fs = FileSecrets::with_path(path);
         let err = fs.resolve(&r("nope", "nope")).await.unwrap_err();
         assert!(format!("{err}").contains("file secret nope"));
     }
