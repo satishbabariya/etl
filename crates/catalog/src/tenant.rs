@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::TenantId;
-use sqlx::PgPool;
+use sqlx::Postgres;
 
 #[derive(Debug, Clone)]
 pub struct Tenant {
@@ -9,22 +9,28 @@ pub struct Tenant {
     pub created_at: DateTime<Utc>,
 }
 
-pub async fn create(pool: &PgPool, name: &str) -> sqlx::Result<TenantId> {
+pub async fn create(
+    conn: &mut sqlx::PgConnection,
+    name: &str,
+) -> sqlx::Result<TenantId> {
     let id = TenantId::new();
     sqlx::query("INSERT INTO tenants (tenant_id, name) VALUES ($1, $2)")
         .bind(id.as_uuid())
         .bind(name)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(id)
 }
 
-pub async fn get(pool: &PgPool, id: TenantId) -> sqlx::Result<Option<Tenant>> {
+pub async fn get(
+    conn: &mut sqlx::PgConnection,
+    id: TenantId,
+) -> sqlx::Result<Option<Tenant>> {
     let row: Option<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT tenant_id, name, created_at FROM tenants WHERE tenant_id = $1",
     )
     .bind(id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(u, name, created_at)| Tenant {
         tenant_id: TenantId::from_uuid_unchecked(u),
@@ -32,3 +38,52 @@ pub async fn get(pool: &PgPool, id: TenantId) -> sqlx::Result<Option<Tenant>> {
         created_at,
     }))
 }
+
+pub async fn get_by_name(
+    conn: &mut sqlx::PgConnection,
+    name: &str,
+) -> sqlx::Result<Option<Tenant>> {
+    let row: Option<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT tenant_id, name, created_at FROM tenants WHERE name = $1",
+    )
+    .bind(name)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|(u, name, created_at)| Tenant {
+        tenant_id: TenantId::from_uuid_unchecked(u),
+        name,
+        created_at,
+    }))
+}
+
+pub async fn list(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<Tenant>> {
+    let rows: Vec<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT tenant_id, name, created_at FROM tenants ORDER BY created_at",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(u, name, created_at)| Tenant {
+            tenant_id: TenantId::from_uuid_unchecked(u),
+            name,
+            created_at,
+        })
+        .collect())
+}
+
+pub async fn delete(
+    conn: &mut sqlx::PgConnection,
+    id: TenantId,
+) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM tenants WHERE tenant_id = $1")
+        .bind(id.as_uuid())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+// Workaround: keep the old Postgres trait import live to avoid an unused-import
+// warning in dependent files; sqlx's PgConnection comes from sqlx::Postgres
+#[allow(dead_code)]
+type _PostgresMarker = Postgres;

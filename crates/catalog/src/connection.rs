@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::{ConnectionId, TenantId};
 use serde_json::Value;
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Connection {
@@ -21,9 +20,11 @@ pub struct NewConnection {
     pub config: Value,
 }
 
-pub async fn create(pool: &PgPool, new: NewConnection) -> sqlx::Result<ConnectionId> {
-    // Auto-resolve the tenant's default workspace for denormalization.
-    let workspace_id = crate::workspace::ensure_default(pool, new.tenant_id).await?;
+pub async fn create(
+    conn: &mut sqlx::PgConnection,
+    new: NewConnection,
+) -> sqlx::Result<ConnectionId> {
+    let workspace_id = crate::workspace::ensure_default(conn, new.tenant_id).await?;
     let id = ConnectionId::new();
     sqlx::query(
         "INSERT INTO connections (connection_id, tenant_id, workspace_id, name, connector_ref, config) \
@@ -35,12 +36,15 @@ pub async fn create(pool: &PgPool, new: NewConnection) -> sqlx::Result<Connectio
     .bind(&new.name)
     .bind(&new.connector_ref)
     .bind(&new.config)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(id)
 }
 
-pub async fn get(pool: &PgPool, id: ConnectionId) -> sqlx::Result<Option<Connection>> {
+pub async fn get(
+    conn: &mut sqlx::PgConnection,
+    id: ConnectionId,
+) -> sqlx::Result<Option<Connection>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,
@@ -54,7 +58,7 @@ pub async fn get(pool: &PgPool, id: ConnectionId) -> sqlx::Result<Option<Connect
          FROM connections WHERE connection_id = $1",
     )
     .bind(id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(cid, tid, name, connector_ref, config, c, u)| Connection {
         connection_id: ConnectionId::from_uuid_unchecked(cid),

@@ -1,5 +1,4 @@
 use common_types::ids::{PipelineId, TenantId};
-use sqlx::PgPool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotState {
@@ -19,7 +18,7 @@ pub struct CdcSlot {
     pub state: SlotState,
 }
 
-pub async fn upsert(pool: &PgPool, slot: &CdcSlot) -> sqlx::Result<()> {
+pub async fn upsert(conn: &mut sqlx::PgConnection, slot: &CdcSlot) -> sqlx::Result<()> {
     let state_s = match slot.state {
         SlotState::Active => "active",
         SlotState::Paused => "paused",
@@ -44,18 +43,18 @@ pub async fn upsert(pool: &PgPool, slot: &CdcSlot) -> sqlx::Result<()> {
     .bind(&slot.consistent_point)
     .bind(&slot.confirmed_flush)
     .bind(state_s)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-pub async fn get(pool: &PgPool, pipeline_id: PipelineId) -> sqlx::Result<Option<CdcSlot>> {
+pub async fn get(conn: &mut sqlx::PgConnection, pipeline_id: PipelineId) -> sqlx::Result<Option<CdcSlot>> {
     let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, Option<String>, String)> = sqlx::query_as(
         "SELECT pipeline_id, tenant_id, slot_name, publication_name, consistent_point, confirmed_flush, state \
          FROM cdc_slots WHERE pipeline_id = $1",
     )
     .bind(pipeline_id.as_uuid())
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(pid, tid, sn, pn, cp, cf, st)| CdcSlot {
         pipeline_id: PipelineId::from_uuid_unchecked(pid),
@@ -74,7 +73,7 @@ pub async fn get(pool: &PgPool, pipeline_id: PipelineId) -> sqlx::Result<Option<
 }
 
 pub async fn update_confirmed_flush(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     pipeline_id: PipelineId,
     lsn: &str,
 ) -> sqlx::Result<()> {
@@ -83,7 +82,7 @@ pub async fn update_confirmed_flush(
     )
     .bind(lsn)
     .bind(pipeline_id.as_uuid())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }

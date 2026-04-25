@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use common_types::ids::{TenantId, WorkspaceId};
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -10,8 +9,11 @@ pub struct Workspace {
     pub created_at: DateTime<Utc>,
 }
 
-pub async fn ensure_default(pool: &PgPool, tenant_id: TenantId) -> sqlx::Result<WorkspaceId> {
-    if let Some(existing) = get_by_name(pool, tenant_id, "default").await? {
+pub async fn ensure_default(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: TenantId,
+) -> sqlx::Result<WorkspaceId> {
+    if let Some(existing) = get_by_name(conn, tenant_id, "default").await? {
         return Ok(existing.workspace_id);
     }
     let id = WorkspaceId::new();
@@ -21,17 +23,16 @@ pub async fn ensure_default(pool: &PgPool, tenant_id: TenantId) -> sqlx::Result<
     )
     .bind(id.as_uuid())
     .bind(tenant_id.as_uuid())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
-    // Race-safe: read back by name.
-    Ok(get_by_name(pool, tenant_id, "default")
+    Ok(get_by_name(conn, tenant_id, "default")
         .await?
         .expect("inserted or conflicted row must exist")
         .workspace_id)
 }
 
 pub async fn get_by_name(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     tenant_id: TenantId,
     name: &str,
 ) -> sqlx::Result<Option<Workspace>> {
@@ -41,7 +42,7 @@ pub async fn get_by_name(
     )
     .bind(tenant_id.as_uuid())
     .bind(name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(w, t, name, ts)| Workspace {
         workspace_id: WorkspaceId::from_uuid_unchecked(w),

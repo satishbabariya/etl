@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use common_types::cursor::{CursorKind, CursorValue};
 use common_types::ids::{PipelineId, RunId};
-use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct StreamState {
@@ -30,7 +29,7 @@ fn parse_kind(s: &str) -> CursorKind {
 }
 
 pub async fn upsert(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     tenant_id: common_types::ids::TenantId,
     pipeline_id: PipelineId,
     stream_name: &str,
@@ -56,13 +55,13 @@ pub async fn upsert(
     .bind(kind)
     .bind(value)
     .bind(last_run_id.map(|r| r.as_uuid()))
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
 pub async fn get(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     pipeline_id: PipelineId,
     stream_name: &str,
 ) -> sqlx::Result<Option<StreamState>> {
@@ -79,7 +78,7 @@ pub async fn get(
     )
     .bind(pipeline_id.as_uuid())
     .bind(stream_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     Ok(row.map(|(pid, name, kind, val, lrid, ts)| StreamState {
         pipeline_id: PipelineId::from_uuid_unchecked(pid),
