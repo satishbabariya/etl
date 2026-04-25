@@ -139,6 +139,29 @@ impl Catalog {
         Ok(r)
     }
 
+    /// Admin-mode lookup: bypasses RLS to fetch a pipeline regardless
+    /// of tenant. Used by the superuser-mode CLI when the caller
+    /// doesn't yet know the tenant.
+    pub async fn get_pipeline_admin(
+        &self,
+        id: PipelineId,
+    ) -> sqlx::Result<Option<Pipeline>> {
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = pipeline::get(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+
+    pub async fn get_connection_admin(
+        &self,
+        id: ConnectionId,
+    ) -> sqlx::Result<Option<Connection>> {
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = connection::get(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+
     // Runs
     pub async fn create_run(&self, new: NewRun) -> sqlx::Result<RunId> {
         let ctx = TenantContext::new(new.tenant_id);

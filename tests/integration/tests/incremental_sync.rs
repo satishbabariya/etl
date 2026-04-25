@@ -205,7 +205,9 @@ async fn incremental_sync_picks_up_only_new_rows() -> anyhow::Result<()> {
     let run1_total = count_rows_in_dir(&data);
     assert_eq!(run1_total, 10, "run 1 should load 10 rows");
 
-    let state = cat.get_stream_state(pipe, "customers").await?.unwrap();
+    let tenant = cat.get_tenant_by_name("dev").await?.unwrap().tenant_id;
+    let ctx = catalog::TenantContext::new(tenant);
+    let state = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     assert!(
         state.cursor.as_ref().unwrap().value.starts_with("2026-04-22T11:00"),
         "cursor: {:?}",
@@ -219,7 +221,7 @@ async fn incremental_sync_picks_up_only_new_rows() -> anyhow::Result<()> {
     let run2_total = count_rows_in_dir(&data);
     assert_eq!(run2_total, 15, "after run 2 total should be 15 (10 + 5 new)");
 
-    let state2 = cat.get_stream_state(pipe, "customers").await?.unwrap();
+    let state2 = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     assert!(
         state2.cursor.as_ref().unwrap().value.starts_with("2026-04-23T13:00"),
         "cursor: {:?}",

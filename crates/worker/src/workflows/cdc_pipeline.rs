@@ -79,7 +79,7 @@ impl CdcPipelineWorkflow {
 
     #[run]
     pub async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<()> {
-        let run_id = ctx.state(|s| s.input.run_id);
+        let (run_id, tenant_id) = ctx.state(|s| (s.input.run_id, s.input.tenant_id));
         match Self::run_inner(ctx).await {
             Ok(()) => Ok(()),
             Err(t) => {
@@ -87,7 +87,7 @@ impl CdcPipelineWorkflow {
                 let _ = ctx
                     .start_activity(
                         RunLifecycleActivities::fail_run,
-                        FailRunInput { run_id, error: err_str },
+                        FailRunInput { run_id, tenant_id, error: err_str },
                         opts_short(),
                     )
                     .await;
@@ -112,7 +112,10 @@ impl CdcPipelineWorkflow {
 
         ctx.start_activity(
             RunLifecycleActivities::start_run,
-            input.run_id,
+            crate::activities::run_lifecycle::StartRunInput {
+                run_id: input.run_id,
+                tenant_id: input.tenant_id,
+            },
             opts_short(),
         )
         .await?;
@@ -145,6 +148,7 @@ impl CdcPipelineWorkflow {
                     CdcActivities::snapshot_chunk,
                     SnapshotChunkInput {
                         pipeline_id: input.pipeline_id,
+                        tenant_id: input.tenant_id,
                         run_id: input.run_id,
                         batch_seq,
                         source_url: input.source_url.clone(),
@@ -178,6 +182,7 @@ impl CdcPipelineWorkflow {
                     CdcActivities::read_window,
                     ReadWindowInput {
                         pipeline_id: input.pipeline_id,
+                        tenant_id: input.tenant_id,
                         run_id: input.run_id,
                         batch_seq,
                         source_url: input.source_url.clone(),
@@ -203,7 +208,10 @@ impl CdcPipelineWorkflow {
 
         ctx.start_activity(
             RunLifecycleActivities::complete_run,
-            input.run_id,
+            crate::activities::run_lifecycle::CompleteRunInput {
+                run_id: input.run_id,
+                tenant_id: input.tenant_id,
+            },
             opts_short(),
         )
         .await?;

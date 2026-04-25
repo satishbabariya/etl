@@ -22,6 +22,7 @@ pub struct EnsureSlotOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotChunkInput {
     pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
     pub source_url: String,
@@ -44,6 +45,7 @@ pub struct SnapshotChunkOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadWindowInput {
     pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
     pub source_url: String,

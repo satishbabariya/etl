@@ -26,8 +26,9 @@ pub async fn record_and_resolve(
     incoming: SchemaRef,
 ) -> anyhow::Result<ResolvedSchema> {
     let fp = fingerprint_schema(&incoming);
+    let ctx = common_types::ids::TenantContext::new(tenant_id);
 
-    let existing = catalog.get_latest_schema(stream_id).await?;
+    let existing = catalog.get_latest_schema(ctx, stream_id).await?;
 
     if let Some(ref prev) = existing {
         if prev.fingerprint == fp {
@@ -78,7 +79,7 @@ pub async fn record_and_resolve(
         .await
         .context("inserting schema")?;
     catalog
-        .set_stream_current_schema(stream_id, new_id)
+        .set_stream_current_schema(ctx, stream_id, new_id)
         .await
         .context("updating streams.current_schema_id")?;
 

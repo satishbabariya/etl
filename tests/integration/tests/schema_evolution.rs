@@ -185,12 +185,13 @@ async fn schema_evolution_adds_column_on_second_run() -> anyhow::Result<()> {
     run_cli(pipe).await?;
     wait_for_last_run_completed(&cat, Duration::from_secs(60)).await?;
 
+    let ctx = catalog::TenantContext::new(tenant);
     let stream = cat
-        .get_stream_by_name(pipe, "customers")
+        .get_stream_by_name(ctx, pipe, "customers")
         .await?
         .expect("stream auto-created");
     let v1 = cat
-        .get_latest_schema(stream.stream_id)
+        .get_latest_schema(ctx, stream.stream_id)
         .await?
         .expect("schema v1 recorded");
     assert_eq!(v1.version, 1);
@@ -214,7 +215,7 @@ async fn schema_evolution_adds_column_on_second_run() -> anyhow::Result<()> {
     wait_for_last_run_completed(&cat, Duration::from_secs(60)).await?;
 
     let v2 = cat
-        .get_latest_schema(stream.stream_id)
+        .get_latest_schema(ctx, stream.stream_id)
         .await?
         .expect("schema v2 recorded");
     assert_eq!(v2.version, 2);

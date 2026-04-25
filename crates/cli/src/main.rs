@@ -382,15 +382,16 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
     catalog.migrate().await?;
 
     let pipeline = catalog
-        .get_pipeline(pipeline_id)
+        .get_pipeline_admin(pipeline_id)
         .await?
         .with_context(|| format!("pipeline {} not found", pipeline_id))?;
+    let ctx = catalog::TenantContext::new(pipeline.tenant_id);
 
     let spec: PipelineSpec = serde_json::from_value(pipeline.spec.clone())
         .context("pipelines.spec did not deserialize as PipelineSpec")?;
 
     let source_conn_row = catalog
-        .get_connection(pipeline.source_conn_id)
+        .get_connection(ctx, pipeline.source_conn_id)
         .await?
         .with_context(|| format!("source connection {} not found", pipeline.source_conn_id))?;
     let source_connection: ConnectionConfig =
@@ -432,7 +433,7 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let initial_cursor = catalog
-        .get_stream_state(pipeline_id, &stream_name)
+        .get_stream_state(ctx, pipeline_id, &stream_name)
         .await?
         .and_then(|s| s.cursor);
 
