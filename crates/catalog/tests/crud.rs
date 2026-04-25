@@ -104,6 +104,7 @@ async fn stream_state_upsert_then_get() {
     assert!(cat.get_stream_state(pipe, "customers").await.unwrap().is_none());
 
     cat.upsert_stream_state(
+        tenant,
         pipe,
         "customers",
         Some(CursorValue {
@@ -120,6 +121,7 @@ async fn stream_state_upsert_then_get() {
     assert_eq!(got.cursor.as_ref().unwrap().kind, CursorKind::TimestampTz);
 
     cat.upsert_stream_state(
+        tenant,
         pipe,
         "customers",
         Some(CursorValue {

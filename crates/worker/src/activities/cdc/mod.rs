@@ -2,7 +2,7 @@ pub mod inputs;
 
 use arrow::datatypes::DataType;
 use catalog::{cdc::{CdcSlot, SlotState}, Catalog};
-use common_types::ids::PipelineId;
+use common_types::ids::{PipelineId, TenantId};
 use inputs::*;
 use metrics;
 use std::sync::Arc;
@@ -40,10 +40,12 @@ impl CdcActivities {
             .await
             .map_err(retryable)?;
         let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let tid = TenantId::from_uuid_unchecked(input.tenant_id);
         catalog::cdc::upsert(
             self.catalog.pool(),
             &CdcSlot {
                 pipeline_id: pid,
+                tenant_id: tid,
                 slot_name: r.slot_name.clone(),
                 publication_name: pub_name.clone(),
                 consistent_point: r.consistent_point.clone(),

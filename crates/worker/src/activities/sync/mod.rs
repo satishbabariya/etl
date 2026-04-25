@@ -274,9 +274,10 @@ impl SyncActivities {
         input: CommitCursorInput,
     ) -> Result<(), ActivityError> {
         let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let tid = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
         let rid = Some(RunId::from_uuid_unchecked(input.run_id));
         self.catalog
-            .upsert_stream_state(pid, &input.stream_name, input.cursor, rid)
+            .upsert_stream_state(tid, pid, &input.stream_name, input.cursor, rid)
             .await
             .map_err(|e| to_retryable(anyhow::anyhow!("upsert cursor: {e}")))?;
         Ok(())

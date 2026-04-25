@@ -106,7 +106,20 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Era I exit — observability + dogfood (complete)**. Next: **Phase II.1 — multi-tenancy**. See the roadmap spec for the four-era trajectory.
+Currently: **Phase II.1.a — RLS foundation (complete)**. Next: **Phase II.1.b — TenantContext threading + per-tenant Temporal namespace + per-tenant storage prefix**. See the roadmap spec for the four-era trajectory.
+
+## Multi-tenancy — RLS foundation (Phase II.1.a)
+
+The catalog now has Postgres row-level security on every tenant-scoped table (`connections`, `pipelines`, `runs`, `workspaces`, `streams`, `schemas`, `stream_state`, `cdc_slots`, `tenants`). The `etl_app` non-superuser role replaces direct `etl` access for app-layer queries; admin paths (migrations, tenant CRUD) keep using the superuser.
+
+Policies key off `current_setting('app.tenant_id')` — callers wrap queries in a transaction and `SET LOCAL app.tenant_id = '<uuid>'` first. `NULL` (unset) is admin mode.
+
+```bash
+# Adversarial test: cross-tenant reads/updates/inserts all blocked at the DB layer.
+cargo test -p integration-tests --test rls_cross_tenant -- --ignored
+```
+
+Phase II.1.b will thread `TenantContext` through every catalog method, switch the worker + CLI to connect as `etl_app`, add per-tenant Temporal namespaces, and prefix object storage with `<tenant_id>/`.
 
 ## Observability (Era I exit)
 

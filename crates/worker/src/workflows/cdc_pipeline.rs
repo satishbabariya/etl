@@ -122,6 +122,7 @@ impl CdcPipelineWorkflow {
                 CdcActivities::ensure_slot,
                 EnsureSlotInput {
                     pipeline_id: input.pipeline_id,
+                    tenant_id: input.tenant_id,
                     source_url: input.source_url.clone(),
                     schema: pg.schema.clone(),
                     table: pg.table.clone(),
