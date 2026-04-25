@@ -5,6 +5,7 @@ use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_common::telemetry::TelemetryOptions;
 use temporalio_sdk_core::{CoreRuntime, RuntimeOptions, Url};
 
+#[derive(Clone)]
 pub struct TemporalConfig {
     pub address: String,
     pub namespace: String,
@@ -49,4 +50,13 @@ pub async fn make_client(cfg: &TemporalConfig) -> anyhow::Result<Client> {
         .context("connecting to Temporal")?;
     let client_options = ClientOptions::new(cfg.namespace.clone()).build();
     Client::new(connection, client_options).context("building Client")
+}
+
+pub async fn make_client_for_namespace(
+    cfg: &TemporalConfig,
+    namespace: &str,
+) -> anyhow::Result<Client> {
+    let mut cfg = cfg.clone();
+    cfg.namespace = namespace.to_string();
+    make_client(&cfg).await
 }
