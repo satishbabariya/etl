@@ -73,7 +73,7 @@ pub async fn terminate(name: String) -> anyhow::Result<()> {
 }
 
 async fn register_temporal_namespace(id: &TenantId) -> anyhow::Result<()> {
-    use temporalio_client::WorkflowService;
+    use temporalio_client::grpc::WorkflowService;
     use temporalio_common::protos::temporal::api::workflowservice::v1::RegisterNamespaceRequest;
 
     let cfg = worker::temporal::TemporalConfig::from_env()?;
@@ -88,8 +88,8 @@ async fn register_temporal_namespace(id: &TenantId) -> anyhow::Result<()> {
         }),
         ..Default::default()
     };
-    let mut svc = client.workflow_service();
-    match svc.register_namespace(req).await {
+    let mut svc = client.connection().workflow_service();
+    match svc.register_namespace(tonic::Request::new(req)).await {
         Ok(_) => println!("registered Temporal namespace {ns}"),
         Err(s) => {
             let msg = format!("{s}");

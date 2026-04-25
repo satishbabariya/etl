@@ -1,5 +1,6 @@
 mod dsl;
 mod status;
+mod tenant;
 mod terminate;
 
 use anyhow::Context;
@@ -55,6 +56,23 @@ enum Cmd {
         #[command(subcommand)]
         cmd: WorkflowCmd,
     },
+    /// Tenant lifecycle (admin operations).
+    Tenant {
+        #[command(subcommand)]
+        cmd: TenantCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TenantCmd {
+    /// Create a tenant: catalog row + Temporal namespace.
+    Create { name: String },
+    /// List all tenants.
+    List,
+    /// Rename a tenant to "suspended:<name>" so resolution misses it.
+    Suspend { name: String },
+    /// Cascade-delete catalog rows + remove ./data/<tenant_id>/.
+    Terminate { name: String },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +135,12 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Workflow { cmd: WorkflowCmd::Terminate { workflow_id, reason } } => {
             terminate::terminate(workflow_id, reason).await
         }
+        Cmd::Tenant { cmd } => match cmd {
+            TenantCmd::Create { name } => tenant::create(name).await,
+            TenantCmd::List => tenant::list().await,
+            TenantCmd::Suspend { name } => tenant::suspend(name).await,
+            TenantCmd::Terminate { name } => tenant::terminate(name).await,
+        },
     }
 }
 
