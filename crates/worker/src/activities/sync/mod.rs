@@ -175,9 +175,17 @@ impl SyncActivities {
             .transpose()
             .map_err(to_retryable)?;
 
-        metrics::counter!(crate::metrics::ROWS_READ).increment(rows as u64);
+        metrics::counter!(
+            crate::metrics::ROWS_READ,
+            "tenant_id" => input.tenant_id.to_string(),
+        )
+        .increment(rows as u64);
         if rows_rejected > 0 {
-            metrics::counter!(crate::metrics::ROWS_REJECTED).increment(rows_rejected as u64);
+            metrics::counter!(
+                crate::metrics::ROWS_REJECTED,
+                "tenant_id" => input.tenant_id.to_string(),
+            )
+            .increment(rows_rejected as u64);
         }
         Ok(ReadBatchOutput {
             batch_ipc_b64: b64,
@@ -205,7 +213,11 @@ impl SyncActivities {
             .load(&input.destination, load_id.clone(), batch)
             .await
             .map_err(to_retryable)?;
-        metrics::counter!(crate::metrics::ROWS_LOADED).increment(res.rows_loaded as u64);
+        metrics::counter!(
+            crate::metrics::ROWS_LOADED,
+            "tenant_id" => input.tenant_id.to_string(),
+        )
+        .increment(res.rows_loaded as u64);
 
         // Dead-letter routing.
         if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {

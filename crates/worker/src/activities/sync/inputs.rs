@@ -34,6 +34,7 @@ pub struct ReadBatchInput {
     pub cursor: Option<CursorValue>,
     pub batch_size: usize,
     pub connector_ref: String,
+    pub tenant_id: Uuid,
     #[serde(default)]
     pub transform: Option<TransformSpec>,
 }
@@ -56,6 +57,7 @@ pub struct LoadBatchInput {
     pub destination: DestinationSpec,
     pub batch_ipc_b64: String,
     pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
     #[serde(default)]

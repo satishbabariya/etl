@@ -92,7 +92,11 @@ impl CdcActivities {
         )
         .await
         .map_err(retryable)?;
-        metrics::counter!(crate::metrics::CDC_EVENTS, "op" => "s")
+        metrics::counter!(
+            crate::metrics::CDC_EVENTS,
+            "op" => "s",
+            "tenant_id" => input.tenant_id.to_string(),
+        )
             .increment(chunk.batch.num_rows() as u64);
         if chunk.batch.num_rows() > 0 {
             CdcParquetLoader
@@ -159,7 +163,12 @@ impl CdcActivities {
                 crate::connectors::postgres::cdc::CdcEvent::Delete { .. } => "d",
                 _ => continue,
             };
-            metrics::counter!(crate::metrics::CDC_EVENTS, "op" => op).increment(1);
+            metrics::counter!(
+                crate::metrics::CDC_EVENTS,
+                "op" => op,
+                "tenant_id" => input.tenant_id.to_string(),
+            )
+            .increment(1);
         }
         if rows > 0 {
             CdcParquetLoader
