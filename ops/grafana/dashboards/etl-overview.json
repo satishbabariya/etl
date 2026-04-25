@@ -2,43 +2,57 @@
   "uid": "etl-overview",
   "title": "ETL — Overview",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(etl_runs_started_total, tenant_id)",
+        "includeAll": true,
+        "multi": true,
+        "current": { "selected": false, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
   "panels": [
     {
       "id": 1, "type": "stat", "title": "Runs started",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
-      "targets": [{"expr": "sum(etl_runs_started_total)", "refId": "A"}]
+      "targets": [{"expr": "sum(etl_runs_started_total{tenant_id=~\"$tenant\"})", "refId": "A"}]
     },
     {
       "id": 2, "type": "stat", "title": "Runs completed",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
-      "targets": [{"expr": "sum(etl_runs_completed_total)", "refId": "A"}]
+      "targets": [{"expr": "sum(etl_runs_completed_total{tenant_id=~\"$tenant\"})", "refId": "A"}]
     },
     {
       "id": 3, "type": "stat", "title": "Runs failed",
       "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-      "targets": [{"expr": "sum(etl_runs_failed_total)", "refId": "A"}]
+      "targets": [{"expr": "sum(etl_runs_failed_total{tenant_id=~\"$tenant\"})", "refId": "A"}]
     },
     {
       "id": 4, "type": "timeseries", "title": "Rows read / loaded per 10s",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "targets": [
-        {"expr": "rate(etl_rows_read_total[1m])*10", "refId": "A", "legendFormat": "read"},
-        {"expr": "rate(etl_rows_loaded_total[1m])*10", "refId": "B", "legendFormat": "loaded"}
+        {"expr": "rate(etl_rows_read_total{tenant_id=~\"$tenant\"}[1m])*10", "refId": "A", "legendFormat": "read"},
+        {"expr": "rate(etl_rows_loaded_total{tenant_id=~\"$tenant\"}[1m])*10", "refId": "B", "legendFormat": "loaded"}
       ]
     },
     {
       "id": 5, "type": "timeseries", "title": "CDC events by op",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
       "targets": [
-        {"expr": "rate(etl_cdc_events_total[1m])*60", "refId": "A", "legendFormat": "{{op}}"}
+        {"expr": "rate(etl_cdc_events_total{tenant_id=~\"$tenant\"}[1m])*60", "refId": "A", "legendFormat": "{{op}}"}
       ]
     },
     {
       "id": 6, "type": "timeseries", "title": "CDC slot lag (bytes)",
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
       "targets": [
-        {"expr": "etl_cdc_slot_lag_bytes", "refId": "A", "legendFormat": "{{pipeline_id}}"}
+        {"expr": "etl_cdc_slot_lag_bytes{tenant_id=~\"$tenant\"}", "refId": "A", "legendFormat": "{{pipeline_id}}"}
       ]
     }
   ]
