@@ -81,6 +81,7 @@ define_id!(RunId, "run");
 define_id!(WorkspaceId, "ws");
 define_id!(StreamId, "stream");
 define_id!(SchemaId, "sch");
+define_id!(SecretId, "sec");
 
 #[cfg(test)]
 mod tests {
