@@ -10,6 +10,7 @@ pub mod connection;
 pub mod pipeline;
 pub mod run;
 pub mod schema;
+pub mod secret;
 pub mod stream;
 pub mod stream_state;
 pub mod tenant;
@@ -19,9 +20,12 @@ pub use common_types::ids::TenantContext;
 pub use connection::{Connection, NewConnection};
 pub use pipeline::{NewPipeline, Pipeline};
 pub use run::{NewRun, Run, RunStatus};
+pub use secret::NewSecret;
 pub use tenant::Tenant;
 
-use common_types::ids::{ConnectionId, PipelineId, RunId, SchemaId, StreamId, TenantId, WorkspaceId};
+use common_types::ids::{
+    ConnectionId, PipelineId, RunId, SchemaId, SecretId, StreamId, TenantId, WorkspaceId,
+};
 use sqlx::PgPool;
 
 /// Wrapper that exposes catalog operations as methods.
@@ -327,6 +331,47 @@ impl Catalog {
     ) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
         cdc::update_confirmed_flush(&mut tx, pipeline_id, lsn).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    // Secrets
+    pub async fn secret_create(
+        &self,
+        ctx: TenantContext,
+        new: NewSecret,
+    ) -> sqlx::Result<SecretId> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let id = secret::create(&mut tx, new).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+    pub async fn secret_get_by_name(
+        &self,
+        ctx: TenantContext,
+        name: &str,
+    ) -> sqlx::Result<Option<secret::Secret>> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let r = secret::get_by_name(&mut tx, name).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+    pub async fn secret_list(
+        &self,
+        ctx: TenantContext,
+    ) -> sqlx::Result<Vec<secret::Secret>> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let r = secret::list(&mut tx).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+    pub async fn secret_delete(
+        &self,
+        ctx: TenantContext,
+        id: SecretId,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        secret::delete(&mut tx, id).await?;
         tx.commit().await?;
         Ok(())
     }
