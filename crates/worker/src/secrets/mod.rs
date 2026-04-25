@@ -5,8 +5,9 @@
 pub mod env;
 pub mod file;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use common_types::connection_config::ConnectionConfig;
 use common_types::secrets::{PlaintextSecret, SecretBackendKind, SecretRef};
 
 #[async_trait]
@@ -29,5 +30,28 @@ impl Secrets for DispatchSecrets {
             SecretBackendKind::File => self.file.resolve(r).await,
         }
     }
+}
+
+/// Resolve the URL out of a ConnectionConfig, preferring `url_secret`
+/// when set. Returns a fresh `ConnectionConfig` with `url` populated and
+/// `url_secret` cleared — safe to hand to a connector.
+///
+/// The plaintext lives in the returned config's String for the lifetime
+/// of the activity. Drop semantics are NOT zeroizing for that copy; callers
+/// who need stricter handling should keep using `PlaintextSecret`.
+pub async fn resolve_connection(
+    secrets: &dyn Secrets,
+    conn: &ConnectionConfig,
+) -> Result<ConnectionConfig> {
+    if let Some(r) = conn.url_secret.as_ref() {
+        let plaintext = secrets.resolve(r).await?;
+        return Ok(ConnectionConfig::from_url(plaintext.expose().to_owned()));
+    }
+    if let Some(u) = conn.url.as_deref() {
+        return Ok(ConnectionConfig::from_url(u.to_owned()));
+    }
+    Err(anyhow!(
+        "ConnectionConfig has neither `url` nor `url_secret` populated"
+    ))
 }
 

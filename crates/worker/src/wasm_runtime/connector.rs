@@ -68,7 +68,7 @@ impl SourceConnector for WasmSourceConnector {
         .context("instantiating component")?;
 
         let wit_conn = wit_types::ConnectionConfig {
-            url: conn.url.clone(),
+            url: conn.expect_url().to_owned(),
         };
         let wit_source = wit_types::SourceConfig {
             json: Self::wasm_source_json(source)?,
@@ -103,7 +103,7 @@ impl SourceConnector for WasmSourceConnector {
         .context("instantiating component")?;
 
         let wit_conn = wit_types::ConnectionConfig {
-            url: conn.url.clone(),
+            url: conn.expect_url().to_owned(),
         };
         let wit_source = wit_types::SourceConfig {
             json: Self::wasm_source_json(source)?,

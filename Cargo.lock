@@ -6796,6 +6796,7 @@ dependencies = [
  "wasmtime-wasi",
  "wat",
  "wit-bindgen 0.37.0",
+ "zeroize",
 ]
 
 [[package]]

@@ -418,9 +418,17 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .get_connection(ctx, pipeline.source_conn_id)
         .await?
         .with_context(|| format!("source connection {} not found", pipeline.source_conn_id))?;
-    let source_connection: ConnectionConfig =
+    let source_connection_raw: ConnectionConfig =
         serde_json::from_value(source_conn_row.config.clone())
             .context("source connections.config did not deserialize as ConnectionConfig")?;
+    let secrets = worker::secrets::DispatchSecrets {
+        env: worker::secrets::env::EnvSecrets,
+        file: worker::secrets::file::FileSecrets::new(),
+    };
+    let source_connection =
+        worker::secrets::resolve_connection(&secrets, &source_connection_raw)
+            .await
+            .context("resolving source connection secret")?;
 
     let connector_ref = source_conn_row.connector_ref.clone();
 
@@ -503,7 +511,7 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
             pipeline_id: pipeline_id.as_uuid(),
             tenant_id: pipeline.tenant_id.as_uuid(),
             spec: spec.clone(),
-            source_url: source_connection.url.clone(),
+            source_url: source_connection.expect_url().to_owned(),
             max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
                 .ok()
                 .and_then(|s| s.parse().ok())
