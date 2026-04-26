@@ -1,8 +1,6 @@
-//! stripe-source — source connector skeleton.
-//!
-//! Implement `discover()` and `read_batch()` to make this connector
-//! useful. The stub returns errors so a fresh skeleton compiles
-//! cleanly without doing any I/O.
+//! stripe-source — Stripe /v1/customers source connector.
+
+pub mod parse;
 
 wit_bindgen::generate!({
     path: "wit",
