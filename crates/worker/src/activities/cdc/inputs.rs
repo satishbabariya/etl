@@ -7,6 +7,10 @@ use uuid::Uuid;
 pub struct EnsureSlotInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub source_conn: ConnectionConfig,
     pub schema: String,
     pub table: String,
@@ -24,6 +28,10 @@ pub struct EnsureSlotOutput {
 pub struct SnapshotChunkInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
     pub source_conn: ConnectionConfig,
@@ -47,6 +55,10 @@ pub struct SnapshotChunkOutput {
 pub struct ReadWindowInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
     pub source_conn: ConnectionConfig,
@@ -67,6 +79,10 @@ pub struct ReadWindowOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReleaseSlotInput {
     pub pipeline_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub source_conn: ConnectionConfig,
     pub slot_name: String,
 }

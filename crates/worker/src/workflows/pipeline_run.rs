@@ -40,6 +40,10 @@ pub struct PipelineRunInput {
     pub cursor_kind: common_types::cursor::CursorKind,
     pub pk_columns: Vec<String>,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
 }
 
 #[workflow]
@@ -56,6 +60,8 @@ pub struct PipelineRunWorkflow {
     cursor_kind: common_types::cursor::CursorKind,
     pk_columns: Vec<String>,
     tenant_id: Uuid,
+    principal_id: Uuid,
+    jti: Uuid,
     rows_total_so_far: u64,
     rows_rejected_so_far: u64,
 }
@@ -107,6 +113,8 @@ impl PipelineRunWorkflow {
             cursor_kind: input.cursor_kind,
             pk_columns: input.pk_columns,
             tenant_id: input.tenant_id,
+            principal_id: input.principal_id,
+            jti: input.jti,
             rows_total_so_far: 0,
             rows_rejected_so_far: 0,
         }
@@ -148,6 +156,8 @@ impl PipelineRunWorkflow {
             cursor_kind,
             pk_columns,
             tenant_id,
+            principal_id,
+            jti,
         ) = ctx.state(|s| {
             (
                 s.run_id,
@@ -161,6 +171,8 @@ impl PipelineRunWorkflow {
                 s.cursor_kind,
                 s.pk_columns.clone(),
                 s.tenant_id,
+                s.principal_id,
+                s.jti,
             )
         });
 
@@ -178,6 +190,8 @@ impl PipelineRunWorkflow {
                 source_conn: conn.clone(),
                 connector_ref: connector_ref.clone(),
                 tenant_id,
+                principal_id,
+                jti,
                 stream_name: stream_name.clone(),
                 pipeline_id,
                 cursor_column: cursor_column.clone(),
@@ -210,6 +224,8 @@ impl PipelineRunWorkflow {
                         batch_size: spec.batch_size,
                         connector_ref: connector_ref.clone(),
                         tenant_id,
+                        principal_id,
+                        jti,
                         transform: spec.transform.clone(),
                     },
                     opts_long(),

@@ -629,6 +629,8 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
             run_id: run_id.as_uuid(),
             pipeline_id: pipeline_id.as_uuid(),
             tenant_id: pipeline.tenant_id.as_uuid(),
+            principal_id: p.principal_id.as_uuid(),
+            jti: p.jti,
             spec: spec.clone(),
             source_conn: source_connection.clone(),
             max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
@@ -658,6 +660,8 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         cursor_kind,
         pk_columns,
         tenant_id: pipeline.tenant_id.as_uuid(),
+        principal_id: p.principal_id.as_uuid(),
+        jti: p.jti,
     };
 
     client
