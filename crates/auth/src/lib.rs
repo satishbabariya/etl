@@ -4,6 +4,7 @@
 //! `common-types → auth` cycle (TenantContext carries Role).
 
 pub mod jwt;
+pub mod keystore;
 
 pub use common_types::auth::{Action, Role};
 pub use jwt::{AuthError, Claims, JwtIssuer, JwtVerifier, Principal};
