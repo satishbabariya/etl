@@ -3,6 +3,7 @@
 //! `Role` and `Action` live in `common-types::auth` to avoid a
 //! `common-types → auth` cycle (TenantContext carries Role).
 
+pub mod jwks;
 pub mod jwt;
 pub mod keystore;
 
