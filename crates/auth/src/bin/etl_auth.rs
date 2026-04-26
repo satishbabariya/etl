@@ -200,13 +200,48 @@ async fn login_endpoint(
         .principal_get_by_name(&req.name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (principal, hash) = row.ok_or((StatusCode::UNAUTHORIZED, "invalid login".into()))?;
+    let (principal, hash) = match row {
+        Some(r) => r,
+        None => {
+            audit_record(
+                &s.catalog,
+                None,
+                None,
+                None,
+                audit::AuditEvent::AuthLoginFailed,
+                Some(req.name.clone()),
+                serde_json::json!({"reason": "no_such_principal"}),
+            )
+            .await;
+            return Err((StatusCode::UNAUTHORIZED, "invalid login".into()));
+        }
+    };
     if !catalog::principal::verify_password(&req.password, &hash) {
+        audit_record(
+            &s.catalog,
+            Some(principal.tenant_id),
+            None,
+            None,
+            audit::AuditEvent::AuthLoginFailed,
+            Some(req.name.clone()),
+            serde_json::json!({"reason": "wrong_password"}),
+        )
+        .await;
         return Err((StatusCode::UNAUTHORIZED, "invalid login".into()));
     }
     let role: Role = serde_json::from_str(&format!("\"{}\"", principal.role))
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "bad role".into()))?;
     let mut resp = issue_pair(&s, &principal, role)?;
+    audit_record(
+        &s.catalog,
+        Some(principal.tenant_id),
+        Some(principal.principal_id),
+        None,
+        audit::AuditEvent::AuthLogin,
+        Some(principal.name.clone()),
+        serde_json::json!({}),
+    )
+    .await;
     let (secret, hash, exp) = refresh::mint()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let token_id = s
@@ -224,6 +259,29 @@ async fn login_endpoint(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     resp.refresh_token = refresh::format_plaintext(token_id, &secret);
     Ok(Json(resp))
+}
+
+async fn audit_record(
+    cat: &Catalog,
+    tenant_id: Option<common_types::ids::TenantId>,
+    principal_id: Option<common_types::ids::PrincipalId>,
+    jti: Option<uuid::Uuid>,
+    event: audit::AuditEvent,
+    target: Option<String>,
+    payload: serde_json::Value,
+) {
+    let row = audit::AuditRow {
+        tenant_id,
+        principal_id,
+        jti,
+        event,
+        target,
+        occurred_at: chrono::Utc::now(),
+        payload,
+    };
+    if let Err(e) = cat.audit_write(&row).await {
+        tracing::warn!(error = %e, "audit_write failed");
+    }
 }
 
 #[derive(Deserialize)]
@@ -277,6 +335,16 @@ async fn refresh_endpoint(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     resp.refresh_token = refresh::format_plaintext(new_id, &new_secret);
+    audit_record(
+        &s.catalog,
+        Some(p.tenant_id),
+        Some(p.principal_id),
+        None,
+        audit::AuditEvent::AuthRefresh,
+        Some(p.name.clone()),
+        serde_json::json!({}),
+    )
+    .await;
     Ok(Json(resp))
 }
 
@@ -292,6 +360,16 @@ async fn logout_endpoint(
     if let Ok((token_id, _)) = refresh::parse_plaintext(&req.refresh_token) {
         let _ = s.catalog.refresh_delete(token_id).await;
     }
+    audit_record(
+        &s.catalog,
+        None,
+        None,
+        None,
+        audit::AuditEvent::AuthLogout,
+        None,
+        serde_json::json!({}),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -306,6 +384,16 @@ async fn revoke(jti: String, tenant: String, database_url: String) -> Result<()>
     let exp = Utc::now() + chrono::Duration::days(1);
     cat.revoke_insert(TenantContext::new(t.tenant_id), jti_uuid, exp)
         .await?;
+    audit_record(
+        &cat,
+        Some(t.tenant_id),
+        None,
+        None,
+        audit::AuditEvent::TokenRevoke,
+        Some(jti.clone()),
+        serde_json::json!({}),
+    )
+    .await;
     println!("revoked jti={jti} for tenant={tenant}");
     Ok(())
 }

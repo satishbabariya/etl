@@ -1,3 +1,5 @@
+mod audit_cmd;
+mod auditlog;
 mod auth;
 mod auth_client;
 mod dsl;
@@ -78,6 +80,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
+    /// Audit-log queries (RFC-15).
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditCmd {
+    /// Print the most recent audit rows for the current tenant.
+    Tail {
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// Walk the chain and report the first integrity break.
+    VerifyChain,
 }
 
 #[derive(Subcommand)]
@@ -244,6 +262,10 @@ async fn main() -> anyhow::Result<()> {
                 auth::create_principal(tenant, name, password, role).await
             }
         },
+        Cmd::Audit { cmd } => match cmd {
+            AuditCmd::Tail { limit } => audit_cmd::tail(tenant_override.clone(), limit).await,
+            AuditCmd::VerifyChain => audit_cmd::verify_chain(tenant_override.clone()).await,
+        },
     }
 }
 
@@ -260,7 +282,7 @@ async fn apply_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Resul
     auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Write)?;
     let ctx = auth::resolve_context(&catalog, tenant_override).await?;
-    let report = dsl::apply(&catalog, ctx.tenant_id, &files).await?;
+    let report = dsl::apply(&catalog, ctx.tenant_id, &files, &p).await?;
 
     println!(
         "applied:\n  connections: {} created, {} updated, {} unchanged\n  pipelines:   {} created, {} updated, {} unchanged",
@@ -628,6 +650,8 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
             run_id: run_id.as_uuid(),
             pipeline_id: pipeline_id.as_uuid(),
             tenant_id: pipeline.tenant_id.as_uuid(),
+            principal_id: p.principal_id.as_uuid(),
+            jti: p.jti,
             spec: spec.clone(),
             source_conn: source_connection.clone(),
             max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
@@ -657,6 +681,8 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         cursor_kind,
         pk_columns,
         tenant_id: pipeline.tenant_id.as_uuid(),
+        principal_id: p.principal_id.as_uuid(),
+        jti: p.jti,
     };
 
     client

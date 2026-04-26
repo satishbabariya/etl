@@ -11,6 +11,10 @@ pub struct DiscoverInput {
     pub source_conn: ConnectionConfig,
     pub connector_ref: String,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub stream_name: String,
     pub pipeline_id: Uuid,
     pub cursor_column: String,
@@ -36,6 +40,10 @@ pub struct ReadBatchInput {
     pub batch_size: usize,
     pub connector_ref: String,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     #[serde(default)]
     pub transform: Option<TransformSpec>,
 }

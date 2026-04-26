@@ -15,7 +15,7 @@ use crate::loaders::cdc_parquet::CdcParquetLoader;
 #[derive(Clone)]
 pub struct CdcActivities {
     pub catalog: Arc<Catalog>,
-    pub secrets: Arc<dyn crate::secrets::Secrets>,
+    pub secrets: Arc<crate::secrets::auditing::AuditingSecrets>,
 }
 
 fn retryable(e: anyhow::Error) -> ActivityError {
@@ -35,9 +35,19 @@ impl CdcActivities {
         let slot_name = format!("etl_{}", input.pipeline_id.as_simple());
         let pub_name = format!("etl_{}_pub", input.pipeline_id.as_simple());
         let qualified = format!("{}.{}", input.schema, input.table);
-        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
-            .await
-            .map_err(retryable)?;
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(retryable)?;
         let url = resolved.expect_url();
         slot::ensure_publication(url, &pub_name, &qualified)
             .await
@@ -86,9 +96,19 @@ impl CdcActivities {
         // the pk_col and rely on the Parquet loader preserving _cdc.*.
         let cdc_schema =
             snapshot::cdc_schema_for(&[(input.pk_col.as_str(), DataType::Utf8)]);
-        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
-            .await
-            .map_err(retryable)?;
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(retryable)?;
         let chunk = snapshot::read_chunk(
             resolved.expect_url(),
             &input.schema,
@@ -134,9 +154,19 @@ impl CdcActivities {
         input: ReadWindowInput,
     ) -> Result<ReadWindowOutput, ActivityError> {
         tracing::info!(slot = %input.slot_name, batch_seq = input.batch_seq, "cdc: read_window entering");
-        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
-            .await
-            .map_err(retryable)?;
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(retryable)?;
         let out = stream::read_window(
             resolved.expect_url(),
             &input.slot_name,

@@ -28,6 +28,10 @@ pub struct CdcPipelineInput {
     pub run_id: Uuid,
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
     pub spec: PipelineSpec,
     pub source_conn: common_types::connection_config::ConnectionConfig,
     /// Max number of streaming windows to process before returning (useful
@@ -126,6 +130,8 @@ impl CdcPipelineWorkflow {
                 EnsureSlotInput {
                     pipeline_id: input.pipeline_id,
                     tenant_id: input.tenant_id,
+                    principal_id: input.principal_id,
+                    jti: input.jti,
                     source_conn: input.source_conn.clone(),
                     schema: pg.schema.clone(),
                     table: pg.table.clone(),
@@ -149,6 +155,8 @@ impl CdcPipelineWorkflow {
                     SnapshotChunkInput {
                         pipeline_id: input.pipeline_id,
                         tenant_id: input.tenant_id,
+                        principal_id: input.principal_id,
+                        jti: input.jti,
                         run_id: input.run_id,
                         batch_seq,
                         source_conn: input.source_conn.clone(),
@@ -183,6 +191,8 @@ impl CdcPipelineWorkflow {
                     ReadWindowInput {
                         pipeline_id: input.pipeline_id,
                         tenant_id: input.tenant_id,
+                        principal_id: input.principal_id,
+                        jti: input.jti,
                         run_id: input.run_id,
                         batch_seq,
                         source_conn: input.source_conn.clone(),

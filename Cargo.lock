@@ -430,11 +430,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "common-types",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "auth"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "audit",
  "axum 0.7.9",
  "base64 0.22.1",
  "catalog",
@@ -796,6 +813,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "audit",
  "chrono",
  "common-types",
  "rand 0.8.6",
@@ -903,6 +921,7 @@ name = "cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "audit",
  "auth",
  "base64 0.22.1",
  "catalog",
@@ -2526,9 +2545,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "audit",
  "auth",
  "base64 0.22.1",
  "catalog",
+ "chrono",
  "common-types",
  "dirs 5.0.1",
  "parquet",
@@ -7091,6 +7112,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "async-trait",
+ "audit",
  "axum 0.7.9",
  "base64 0.22.1",
  "blake3",

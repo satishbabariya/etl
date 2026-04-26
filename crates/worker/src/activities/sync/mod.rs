@@ -27,7 +27,7 @@ pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,
     pub scalar_runtime: Arc<WasmScalarRuntime>,
-    pub secrets: Arc<dyn crate::secrets::Secrets>,
+    pub secrets: Arc<crate::secrets::auditing::AuditingSecrets>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {
@@ -69,9 +69,19 @@ impl SyncActivities {
         let connector =
             build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
                 .map_err(to_retryable)?;
-        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
-            .await
-            .map_err(to_retryable)?;
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(to_retryable)?;
         let discovered_schema = connector
             .discover(&resolved, &input.source)
             .await
@@ -138,9 +148,19 @@ impl SyncActivities {
         let connector =
             build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
                 .map_err(to_retryable)?;
-        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
-            .await
-            .map_err(to_retryable)?;
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(to_retryable)?;
         let outcome = connector
             .read_batch(
                 &resolved,

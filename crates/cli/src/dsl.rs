@@ -70,10 +70,12 @@ pub async fn apply(
     catalog: &Catalog,
     tenant_id: TenantId,
     files: &[ParsedFile],
+    principal: &auth::Principal,
 ) -> anyhow::Result<ApplyReport> {
     let mut report = ApplyReport::default();
     let ctx = catalog::TenantContext::new(tenant_id);
     catalog.ensure_default_workspace(ctx.clone()).await?;
+    let (pid, jti) = crate::auditlog::principal_into(principal);
 
     let mut connections: HashMap<String, ConnectionSpec> = HashMap::new();
     let mut pipelines: HashMap<String, (Metadata, PipelineDslSpec)> = HashMap::new();
@@ -107,6 +109,16 @@ pub async fn apply(
             UpsertAction::Updated => report.connections_updated += 1,
             UpsertAction::Unchanged => report.connections_unchanged += 1,
         }
+        crate::auditlog::record(
+            catalog,
+            Some(tenant_id),
+            pid,
+            jti,
+            audit::AuditEvent::ConnectionApply,
+            Some(name.clone()),
+            serde_json::json!({"action": format!("{:?}", action)}),
+        )
+        .await;
     }
 
     for (name, (_meta, spec)) in &pipelines {
@@ -125,6 +137,16 @@ pub async fn apply(
             UpsertAction::Updated => report.pipelines_updated += 1,
             UpsertAction::Unchanged => report.pipelines_unchanged += 1,
         }
+        crate::auditlog::record(
+            catalog,
+            Some(tenant_id),
+            pid,
+            jti,
+            audit::AuditEvent::PipelineApply,
+            Some(name.clone()),
+            serde_json::json!({"action": format!("{:?}", action)}),
+        )
+        .await;
     }
 
     Ok(report)

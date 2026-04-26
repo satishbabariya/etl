@@ -56,12 +56,16 @@ async fn main() -> anyhow::Result<()> {
     let wasm_runtime = WasmSourceRuntime::new(&wasm_base)?;
     let scalar_runtime = WasmScalarRuntime::new(&wasm_base)?;
 
-    let secrets: Arc<dyn worker::secrets::Secrets> =
+    let raw_secrets: Arc<dyn worker::secrets::Secrets> =
         Arc::new(worker::secrets::DispatchSecrets {
             env: worker::secrets::env::EnvSecrets,
             file: worker::secrets::file::FileSecrets::new(),
             vault: worker::secrets::vault::VaultSecrets::from_env()?,
         });
+    let secrets = Arc::new(worker::secrets::auditing::AuditingSecrets::new(
+        raw_secrets,
+        catalog.clone(),
+    ));
 
     let lifecycle = RunLifecycleActivities {
         catalog: catalog.clone(),

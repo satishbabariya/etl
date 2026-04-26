@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.2.c — OIDC + JWKS + refresh tokens + revocation (complete)** on top of Phase II.2.b. Next: **Phase II.2.d — audit log of secret reads**.
+Currently: **Phase II.2.d — hash-chained audit log (complete)** on top of Phase II.2.c. Next: **Phase II.4 — productionization (sealed-secrets, retention, anchoring)**.
 
 ## Auth (Phase II.2.b + II.2.c)
 
@@ -170,6 +170,23 @@ cargo run --bin platform -- tenant resume acme
 | Admin    | yes  | yes | yes   | yes   |
 | Operator | yes  | yes | yes   | no    |
 | Viewer   | yes  | no  | no    | no    |
+
+## Audit (Phase II.2.d)
+
+Every security-relevant action — auth login/refresh/logout/revoke, secret read/create/delete, tenant create/suspend/resume, connection/pipeline apply, `--tenant` admin override — writes one row to a per-tenant `audit_log` table. Each row's hash chains the prior row (SHA-256 of `prev_hash || canonical_bytes`). Tampering with any row's payload trips `audit verify-chain`.
+
+```bash
+# Tail recent events for the current tenant.
+platform audit tail --limit 20
+
+# Walk the chain and report the first integrity break.
+platform audit verify-chain
+
+# Admin: see the chain for another tenant.
+platform --tenant acme audit verify-chain
+```
+
+`tenant_id IS NULL` rows are system-scoped (e.g. AUTH_LOGIN_FAILED before the principal is identified). `tenant terminate` cascades the audit history with the tenant — no retention beyond that today; II.4 will add an admin-tenant audit copy.
 
 ## Secrets (Phase II.2.a)
 
