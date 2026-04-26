@@ -34,6 +34,7 @@ pub enum AuditEvent {
     AuthLogout,
     TokenRevoke,
     TenantOverride,
+    AuditChainBreak,
 }
 
 impl AuditEvent {
@@ -55,6 +56,7 @@ impl AuditEvent {
             Self::AuthLogout => "AUTH_LOGOUT",
             Self::TokenRevoke => "TOKEN_REVOKE",
             Self::TenantOverride => "TENANT_OVERRIDE",
+            Self::AuditChainBreak => "AUDIT_CHAIN_BREAK",
         }
     }
 }

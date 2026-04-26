@@ -31,7 +31,15 @@ enum Cmd {
     ShowJwks,
     /// Generate a new keypair, mark it active; old keys remain in JWKS for verification.
     RotateKey,
-    /// Run the issuer HTTP server (login + refresh + JWKS).
+    /// Encrypt every key in the keystore in place using ETL_MASTER_KEY.
+    /// Removes the plaintext files. Idempotent for already-sealed keys.
+    SealKeys {
+        /// Required confirmation flag — sealing is irreversible without
+        /// the master key.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Run the issuer HTTP server (login + refresh + JWKS + healthz/readyz).
     Serve {
         #[arg(long, default_value = "0.0.0.0:8400")]
         bind: String,
@@ -41,6 +49,20 @@ enum Cmd {
         audience: String,
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
+        #[arg(long, env = "ETL_AUDIT_RETENTION_DAYS", default_value_t = 365)]
+        audit_retention_days: i64,
+    },
+    /// Run the audit chain verification job once and exit.
+    VerifyOnce {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+    },
+    /// Run the audit retention prune once and exit.
+    PruneAudit {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value_t = 365)]
+        retention_days: i64,
     },
     /// Revoke an access token by its jti.
     Revoke {
@@ -88,12 +110,40 @@ async fn main() -> Result<()> {
             println!("rotated to new active kid {kid} (old keys retained for verification)");
             Ok(())
         }
+        Cmd::SealKeys { confirm } => {
+            if !confirm {
+                anyhow::bail!(
+                    "seal-keys is destructive (removes plaintext). Re-run with --confirm."
+                );
+            }
+            let n = ks.seal_in_place()?;
+            println!("sealed {n} keypair(s) under {}", ks.root().display());
+            Ok(())
+        }
         Cmd::Serve {
             bind,
             issuer_url,
             audience,
             database_url,
-        } => serve(ks, bind, issuer_url, audience, database_url).await,
+            audit_retention_days,
+        } => serve(ks, bind, issuer_url, audience, database_url, audit_retention_days).await,
+        Cmd::VerifyOnce { database_url } => {
+            let cat = Catalog::connect(&database_url).await?;
+            cat.migrate().await?;
+            auth::jobs::audit_verify_once(&cat).await?;
+            println!("verify-once: complete");
+            Ok(())
+        }
+        Cmd::PruneAudit {
+            database_url,
+            retention_days,
+        } => {
+            let cat = Catalog::connect(&database_url).await?;
+            cat.migrate().await?;
+            auth::jobs::audit_retention_once_pub(&cat, retention_days).await?;
+            println!("prune-audit: complete (retention {} days)", retention_days);
+            Ok(())
+        }
         Cmd::Revoke {
             jti,
             tenant,
@@ -116,27 +166,51 @@ async fn serve(
     issuer_url: String,
     audience: String,
     database_url: String,
+    audit_retention_days: i64,
 ) -> Result<()> {
     let cat = Arc::new(Catalog::connect(&database_url).await?);
     cat.migrate().await?;
     let state = AppState {
         keystore: Arc::new(ks),
-        catalog: cat,
+        catalog: cat.clone(),
         issuer_url,
         audience,
     };
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let job_handles =
+        auth::jobs::spawn_all(cat.clone(), audit_retention_days, shutdown_rx.clone());
     let app = Router::new()
         .route("/.well-known/jwks.json", get(jwks_endpoint))
         .route("/auth/login", post(login_endpoint))
         .route("/auth/refresh", post(refresh_endpoint))
         .route("/auth/logout", post(logout_endpoint))
+        .route("/healthz", get(|| async { axum::http::StatusCode::OK }))
+        .route("/readyz", get(readyz_endpoint))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(%bind, "etl-auth issuer serving");
-    axum::serve(listener, app).await?;
-    Ok(())
+    let server = axum::serve(listener, app);
+    let result = tokio::select! {
+        r = server => r.map_err(anyhow::Error::from),
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("ctrl-c received, shutting down");
+            Ok(())
+        }
+    };
+    let _ = shutdown_tx.send(true);
+    for h in job_handles {
+        let _ = h.await;
+    }
+    result
+}
+
+async fn readyz_endpoint(State(s): State<AppState>) -> axum::http::StatusCode {
+    match sqlx::query("SELECT 1").execute(s.catalog.pool()).await {
+        Ok(_) => axum::http::StatusCode::OK,
+        Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 async fn jwks_endpoint(State(s): State<AppState>) -> Json<auth::jwks::JwkSet> {

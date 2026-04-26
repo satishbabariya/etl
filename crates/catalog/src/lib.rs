@@ -513,6 +513,36 @@ impl Catalog {
         audit::verify::verify_chain(&self.pool, tenant_id).await
     }
 
+    pub async fn audit_record_checkpoint(
+        &self,
+        tenant_id: Option<common_types::ids::TenantId>,
+        cp: audit::chain::Checkpoint,
+    ) -> Result<(), audit::ChainError> {
+        audit::chain::record_checkpoint(&self.pool, tenant_id, cp).await
+    }
+
+    pub async fn audit_get_checkpoint(
+        &self,
+        tenant_id: Option<common_types::ids::TenantId>,
+    ) -> Result<Option<audit::chain::Checkpoint>, audit::ChainError> {
+        audit::chain::get_checkpoint(&self.pool, tenant_id).await
+    }
+
+    pub async fn audit_prune_before(
+        &self,
+        tenant_id: Option<common_types::ids::TenantId>,
+        older_than_audit_id: i64,
+    ) -> Result<u64, audit::ChainError> {
+        audit::chain::prune_before(&self.pool, tenant_id, older_than_audit_id).await
+    }
+
+    pub async fn audit_verify_and_checkpoint(
+        &self,
+        tenant_id: Option<common_types::ids::TenantId>,
+    ) -> Result<audit::verify::VerifyResult, audit::ChainError> {
+        audit::verify::verify_and_checkpoint(&self.pool, tenant_id).await
+    }
+
     pub async fn audit_tail(
         &self,
         tenant_id: common_types::ids::TenantId,
@@ -543,7 +573,7 @@ impl Catalog {
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE audit_log, revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE audit_verified_chain, audit_log, revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;

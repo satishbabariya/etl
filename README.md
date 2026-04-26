@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.2.d — hash-chained audit log (complete)** on top of Phase II.2.c. Next: **Phase II.4 — productionization (sealed-secrets, retention, anchoring)**.
+Currently: **Phase II.4 — productionization (complete)** on top of Phase II.2.d. Next: **Phase II.5 — external chain anchor + KMS-backed master key**.
 
 ## Auth (Phase II.2.b + II.2.c)
 
@@ -170,6 +170,23 @@ cargo run --bin platform -- tenant resume acme
 | Admin    | yes  | yes | yes   | yes   |
 | Operator | yes  | yes | yes   | no    |
 | Viewer   | yes  | no  | no    | no    |
+
+## Productionization (Phase II.4)
+
+**Sealed issuer keys.** Set `ETL_MASTER_KEY` (32-byte hex) and `etl-auth init-issuer` writes `private.enc` (XChaCha20-Poly1305 envelope) instead of `private.pem`. Upgrade an existing keystore with `etl-auth seal-keys --confirm`.
+
+```bash
+ETL_MASTER_KEY=$(openssl rand -hex 32)
+export ETL_MASTER_KEY
+etl-auth init-issuer        # writes private.enc
+etl-auth serve              # decrypts to memory on boot
+```
+
+**Audit retention + chain verification.** `etl-auth serve` runs three background tasks: hourly audit retention prune (`--audit-retention-days N`, default 365), 6-hourly chain verification (records a checkpoint on success, emits `AUDIT_CHAIN_BREAK` on mismatch), and hourly `revoked_tokens` cleanup. One-shot equivalents: `etl-auth verify-once`, `etl-auth prune-audit`, `platform audit prune --older-than-days N`. Pruning never breaks `verify-chain` because the checkpoint table records the last verified `(audit_id, hash)` and verify resumes from there.
+
+**Hot-reload tenants.** The worker watches `tenants` every 30s and spawns a Temporal poller for newly-created tenants without restart.
+
+**Health endpoints.** `/healthz` (always 200) and `/readyz` (catalog reachable) on both worker (`:9898`) and etl-auth (`:8400`). Use these as k8s liveness/readiness probes.
 
 ## Audit (Phase II.2.d)
 
