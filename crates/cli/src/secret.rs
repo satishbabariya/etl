@@ -17,6 +17,8 @@ async fn open_admin() -> Result<(Catalog, TenantContext)> {
     let cat = Catalog::connect(&url).await?;
     cat.migrate().await?;
     crate::auth::ensure_bypass_tenant(&cat).await?;
+    let p = crate::auth::current_principal()?;
+    crate::auth::assert_not_revoked(&cat, &p).await?;
     let ctx = crate::auth::resolve_context(&cat, None).await?;
     Ok((cat, ctx))
 }

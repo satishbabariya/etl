@@ -82,6 +82,11 @@ jsonwebtoken = "9"
 argon2 = "0.5"
 vaultrs = "0.7"
 
+# Auth Phase II.2.c — RS256 + JWKS
+rsa = "0.9"
+pem = "3"
+tower-http = { version = "0.6", features = ["trace"] }
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }

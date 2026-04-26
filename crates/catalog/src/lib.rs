@@ -23,6 +23,9 @@ pub use run::{NewRun, Run, RunStatus};
 pub use secret::NewSecret;
 pub mod principal;
 pub use principal::NewPrincipal;
+pub mod refresh;
+pub mod revoke;
+pub use refresh::NewRefreshToken;
 pub use tenant::Tenant;
 
 use common_types::ids::{
@@ -438,12 +441,72 @@ impl Catalog {
         principal::get_by_name(&mut conn, name).await
     }
 
+    /// Used by the issuer's refresh endpoint: re-load a principal by id
+    /// to recover the role for a new access token.
+    pub async fn principal_get_by_id(
+        &self,
+        id: common_types::ids::PrincipalId,
+    ) -> sqlx::Result<Option<(principal::Principal, String)>> {
+        let mut conn = self.pool.acquire().await?;
+        principal::get_by_id(&mut conn, id).await
+    }
+
+    // Refresh tokens
+    pub async fn refresh_create(
+        &self,
+        ctx: TenantContext,
+        new: NewRefreshToken,
+    ) -> sqlx::Result<uuid::Uuid> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let id = refresh::create(&mut tx, new).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn refresh_get(
+        &self,
+        token_id: uuid::Uuid,
+    ) -> sqlx::Result<Option<refresh::RefreshTokenRow>> {
+        let mut conn = self.pool.acquire().await?;
+        refresh::get(&mut conn, token_id).await
+    }
+
+    pub async fn refresh_delete(
+        &self,
+        token_id: uuid::Uuid,
+    ) -> sqlx::Result<u64> {
+        let mut conn = self.pool.acquire().await?;
+        refresh::delete(&mut conn, token_id).await
+    }
+
+    // Revoked tokens
+    pub async fn revoke_insert(
+        &self,
+        ctx: TenantContext,
+        jti: uuid::Uuid,
+        exp: chrono::DateTime<chrono::Utc>,
+    ) -> sqlx::Result<()> {
+        let tid = ctx.tenant_id;
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        revoke::insert(&mut tx, jti, tid, exp).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn revoke_is_revoked(
+        &self,
+        jti: uuid::Uuid,
+    ) -> sqlx::Result<bool> {
+        let mut conn = self.pool.acquire().await?;
+        revoke::is_revoked(&mut conn, jti).await
+    }
+
     /// Truncates every table. Intended for test cleanup only — admin only.
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;

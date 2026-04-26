@@ -18,12 +18,51 @@ fn workspace_root() -> PathBuf {
     p
 }
 
-async fn login(name: &str, password: &str) {
+async fn spawn_issuer(port: u16) -> (tokio::process::Child, tempfile::TempDir, String) {
+    let keys = tempfile::tempdir().unwrap();
+    Command::new(cargo_bin("etl-auth"))
+        .args(["--keys-dir", keys.path().to_str().unwrap(), "init-issuer"])
+        .status()
+        .await
+        .unwrap();
+    let bind = format!("127.0.0.1:{port}");
+    let issuer = format!("http://{bind}");
+    let child = Command::new(cargo_bin("etl-auth"))
+        .args([
+            "--keys-dir",
+            keys.path().to_str().unwrap(),
+            "serve",
+            "--bind",
+            &bind,
+            "--issuer-url",
+            &issuer,
+            "--audience",
+            "etl-platform",
+            "--database-url",
+            &catalog_url(),
+        ])
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    for _ in 0..30 {
+        if reqwest::get(format!("{issuer}/.well-known/jwks.json"))
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    (child, keys, issuer)
+}
+
+async fn login(name: &str, password: &str, issuer: &str) {
     let creds_path = dirs::home_dir().unwrap().join(".etl/credentials.json");
     let _ = std::fs::remove_file(&creds_path);
     let out = Command::new(cargo_bin("platform"))
         .args(["auth", "login", name, "--password", password])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_ISSUER", issuer)
         .current_dir(workspace_root())
         .output()
         .await
@@ -47,6 +86,8 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
     let cat = Catalog::connect(&catalog_url()).await?;
     cat.migrate().await?;
     cat.truncate_all_for_tests().await?;
+
+    let (mut server, _keys, issuer) = spawn_issuer(18405).await;
 
     Command::new(cargo_bin("platform"))
         .args(["tenant", "create", "rbacco"])
@@ -80,7 +121,7 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         );
     }
 
-    login("v_user", "pw").await;
+    login("v_user", "pw", &issuer).await;
     let put = Command::new(cargo_bin("platform"))
         .args(["secret", "put", "k", "v", "--register"])
         .env("DATABASE_URL", catalog_url())
@@ -94,7 +135,7 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         "expected not-permitted: {stderr}"
     );
 
-    login("o_user", "pw").await;
+    login("o_user", "pw", &issuer).await;
     let put = Command::new(cargo_bin("platform"))
         .args(["secret", "put", "k", "v", "--register"])
         .env("DATABASE_URL", catalog_url())
@@ -115,7 +156,7 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         .await?;
     assert!(!create.status.success(), "operator should not create tenants");
 
-    login("a_user", "pw").await;
+    login("a_user", "pw", &issuer).await;
     let create = Command::new(cargo_bin("platform"))
         .args(["tenant", "create", "another"])
         .env("DATABASE_URL", catalog_url())
@@ -128,5 +169,6 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         String::from_utf8_lossy(&create.stderr)
     );
 
+    let _ = server.start_kill();
     Ok(())
 }

@@ -434,12 +434,29 @@ name = "auth"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
+ "axum 0.7.9",
+ "base64 0.22.1",
+ "catalog",
  "chrono",
+ "clap",
  "common-types",
+ "dirs 5.0.1",
  "jsonwebtoken",
+ "pem",
+ "rand 0.8.6",
+ "reqwest",
+ "rsa",
  "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -887,11 +904,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auth",
+ "base64 0.22.1",
  "catalog",
+ "chrono",
  "clap",
  "common-types",
  "dirs 5.0.1",
+ "jsonwebtoken",
  "prost-wkt-types",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2505,10 +2526,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "auth",
+ "base64 0.22.1",
  "catalog",
  "common-types",
  "dirs 5.0.1",
  "parquet",
+ "reqwest",
  "serde_json",
  "sqlx",
  "tempfile",
@@ -5522,6 +5546,7 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

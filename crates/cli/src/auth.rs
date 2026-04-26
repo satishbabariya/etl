@@ -7,26 +7,20 @@
 //! user to log in).
 
 use anyhow::{Context, Result};
-use auth::{JwtIssuer, JwtVerifier, Principal};
+use auth::Principal;
 use catalog::Catalog;
 use common_types::auth::{Action, Role};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const DEFAULT_TTL_SECONDS: i64 = 8 * 60 * 60;
-
 #[derive(Serialize, Deserialize)]
 pub struct CachedCreds {
-    pub token: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub access_exp: i64,
     pub principal_name: String,
     pub tenant_id: String,
     pub role: Role,
-}
-
-pub fn jwt_secret() -> Vec<u8> {
-    std::env::var("ETL_JWT_SECRET")
-        .unwrap_or_else(|_| "dev-only-jwt-secret-change-in-prod".into())
-        .into_bytes()
 }
 
 pub fn creds_path() -> PathBuf {
@@ -69,13 +63,42 @@ pub fn current_principal() -> Result<Principal> {
             principal_id: dev_principal,
             tenant_id: dev_tenant,
             role: Role::Admin,
+            jti: uuid::Uuid::nil(),
         });
     }
     let creds = load_creds()?;
-    let p = JwtVerifier::new(&jwt_secret())
-        .verify(&creds.token)
-        .map_err(|e| anyhow::anyhow!("cached token invalid: {e} — run 'platform auth login'"))?;
-    Ok(p)
+    // Decode-from-cache without verifying — the issuer signed it and
+    // any server that needs verification re-checks via JWKS. If access
+    // expired the caller should run `platform auth refresh` first.
+    let now = chrono::Utc::now().timestamp();
+    if now >= creds.access_exp.saturating_sub(30) {
+        anyhow::bail!("access token expired — run 'platform auth refresh'");
+    }
+    use base64::Engine;
+    let parts: Vec<&str> = creds.access_token.split('.').collect();
+    anyhow::ensure!(parts.len() == 3, "malformed cached token");
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .context("decoding cached token claims")?;
+    let claims: serde_json::Value =
+        serde_json::from_slice(&payload).context("parsing cached token claims")?;
+    Ok(Principal {
+        principal_id: claims["sub"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing sub claim"))?
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad sub: {e:?}"))?,
+        tenant_id: claims["tenant_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing tenant_id claim"))?
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad tenant_id: {e:?}"))?,
+        role: serde_json::from_value(claims["role"].clone()).context("decoding role")?,
+        jti: claims["jti"]
+            .as_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or(uuid::Uuid::nil()),
+    })
 }
 
 pub fn require_role(p: &Principal, action: Action) -> Result<()> {
@@ -116,44 +139,64 @@ pub async fn resolve_context(
     ))
 }
 
+/// Decode the role + tenant_id + access_exp out of a freshly-issued
+/// access token. Trusts the issuer; verification happens server-side.
+fn extract_claims(access_token: &str) -> Result<(Role, String, i64)> {
+    use base64::Engine;
+    let parts: Vec<&str> = access_token.split('.').collect();
+    anyhow::ensure!(parts.len() == 3, "malformed access token");
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .context("base64-decoding access claims")?;
+    let claims: serde_json::Value = serde_json::from_slice(&payload)?;
+    let role: Role = serde_json::from_value(claims["role"].clone())?;
+    let tenant_id = claims["tenant_id"].as_str().unwrap_or("").to_string();
+    let exp = claims["exp"].as_i64().unwrap_or(0);
+    Ok((role, tenant_id, exp))
+}
+
 pub async fn login(name: String, password: String) -> Result<()> {
-    let url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
-    let cat = Catalog::connect(&url).await?;
-    cat.migrate().await?;
-
-    let (principal, password_hash) = cat
-        .principal_get_by_name(&name)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no such principal '{}'", name))?;
-
-    if !catalog::principal::verify_password(&password, &password_hash) {
-        anyhow::bail!("invalid password for '{}'", name);
-    }
-
-    let role: Role = serde_json::from_str(&format!("\"{}\"", principal.role))
-        .with_context(|| format!("unknown role string in catalog: {}", principal.role))?;
-
-    let issuer = JwtIssuer::new(&jwt_secret(), DEFAULT_TTL_SECONDS);
-    let token = issuer.issue(Principal {
-        principal_id: principal.principal_id,
-        tenant_id: principal.tenant_id,
-        role,
-    })?;
-
+    let resp = crate::auth_client::login(&name, &password).await?;
+    let (role, tenant_id, access_exp) = extract_claims(&resp.access_token)?;
     save_creds(&CachedCreds {
-        token,
-        principal_name: principal.name.clone(),
-        tenant_id: principal.tenant_id.to_string(),
+        access_token: resp.access_token,
+        refresh_token: resp.refresh_token,
+        access_exp,
+        principal_name: name.clone(),
+        tenant_id,
         role,
     })?;
-
     println!(
-        "logged in as {} (tenant {}, role {:?}) — credentials cached at {}",
-        principal.name,
-        principal.tenant_id,
+        "logged in as {} (role {:?}) — credentials cached at {}",
+        name,
         role,
         creds_path().display()
     );
+    Ok(())
+}
+
+pub async fn refresh_now() -> Result<()> {
+    let creds = load_creds()?;
+    let resp = crate::auth_client::refresh(&creds.refresh_token).await?;
+    let (role, tenant_id, access_exp) = extract_claims(&resp.access_token)?;
+    save_creds(&CachedCreds {
+        access_token: resp.access_token,
+        refresh_token: resp.refresh_token,
+        access_exp,
+        principal_name: creds.principal_name,
+        tenant_id,
+        role,
+    })?;
+    println!("refreshed access token (exp {access_exp})");
+    Ok(())
+}
+
+pub async fn logout() -> Result<()> {
+    if let Ok(creds) = load_creds() {
+        let _ = crate::auth_client::logout(&creds.refresh_token).await;
+    }
+    let _ = std::fs::remove_file(creds_path());
+    println!("logged out");
     Ok(())
 }
 
@@ -209,5 +252,21 @@ pub async fn ensure_bypass_tenant(cat: &Catalog) -> anyhow::Result<()> {
     )
     .execute(cat.pool())
     .await?;
+    Ok(())
+}
+
+/// When ETL_AUTH_REVOCATION_CHECK=1 is set, check the principal's jti
+/// against the revoked_tokens table and refuse if revoked. The bypass
+/// principal carries jti = nil and is exempt.
+pub async fn assert_not_revoked(catalog: &Catalog, p: &Principal) -> Result<()> {
+    if std::env::var("ETL_AUTH_REVOCATION_CHECK").ok().as_deref() != Some("1") {
+        return Ok(());
+    }
+    if p.jti.is_nil() {
+        return Ok(());
+    }
+    if catalog.revoke_is_revoked(p.jti).await? {
+        anyhow::bail!("access token revoked (jti {})", p.jti);
+    }
     Ok(())
 }

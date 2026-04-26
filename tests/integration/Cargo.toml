@@ -15,5 +15,8 @@ sqlx = { workspace = true }
 tempfile = "3"
 walkdir = "2"
 dirs = "5"
+auth = { workspace = true }
+reqwest = { workspace = true }
+base64 = "0.22"
 parquet = { workspace = true }
 arrow = { workspace = true }

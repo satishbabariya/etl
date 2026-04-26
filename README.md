@@ -106,11 +106,42 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.2.b — auth + JWT + RBAC + Vault (complete)** on top of Phase II.2.a. Next: **Phase II.2.c — OIDC + refresh tokens + audit log**.
+Currently: **Phase II.2.c — OIDC + JWKS + refresh tokens + revocation (complete)** on top of Phase II.2.b. Next: **Phase II.2.d — audit log of secret reads**.
 
-## Auth (Phase II.2.b)
+## Auth (Phase II.2.b + II.2.c)
 
-Every CLI call carries a JWT (HS256, signed by `ETL_JWT_SECRET`). Three roles: `admin`, `operator`, `viewer`. Tenants gain a `status` column (`active` / `suspended`); suspended tenants cannot run pipelines.
+Phase II.2.c moves auth to a separate `etl-auth` issuer that owns RSA keypairs and exposes a JWKS endpoint. Tokens are RS256-signed with `kid`, `iss`, `aud`, `jti` claims; verifiers fetch the public set over HTTP and cache for 10 minutes. Login issues a 15-minute access token + a 30-day refresh token; refresh tokens rotate on use (replay rejected). `etl-auth revoke <jti>` blocks a stolen access token immediately when `ETL_AUTH_REVOCATION_CHECK=1` is set.
+
+```bash
+# Generate the issuer keypair.
+etl-auth init-issuer
+
+# Start the issuer (HTTP + JWKS on :8400 by default).
+etl-auth serve --database-url $DATABASE_URL &
+
+# Provision a principal.
+platform tenant create acme
+platform auth create-principal --tenant acme alice --password hunter2 --role operator
+
+# Log in (15m access + 30d refresh, cached at ~/.etl/credentials.json).
+ETL_AUTH_ISSUER=http://localhost:8400 platform auth login alice --password hunter2
+
+# Manually refresh the access token.
+platform auth refresh
+
+# Logout invalidates the refresh server-side and clears the cache.
+platform auth logout
+
+# Rotate the issuer key (old keys remain in JWKS for verification).
+etl-auth rotate-key
+
+# Revoke a compromised access token by jti.
+etl-auth revoke <jti> --tenant acme
+```
+
+Set `ETL_AUTH_REVOCATION_CHECK=1` in production to enforce the revocation list at every CLI write path. The HS256 dev seam from II.2.b stays alive behind `ETL_JWT_SECRET` for back-compat. `ETL_AUTH_BYPASS=1` is the integration-test escape hatch — forges a fake admin JWT.
+
+Three roles: `admin`, `operator`, `viewer`. Tenants gain a `status` column (`active` / `suspended`); suspended tenants cannot run pipelines.
 
 ```bash
 # Bootstrap an admin in tenant 'acme'.
