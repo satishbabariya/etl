@@ -60,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(worker::secrets::DispatchSecrets {
             env: worker::secrets::env::EnvSecrets,
             file: worker::secrets::file::FileSecrets::new(),
+            vault: worker::secrets::vault::VaultSecrets::from_env()?,
         });
 
     let lifecycle = RunLifecycleActivities {

@@ -536,6 +536,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
     let secrets = worker::secrets::DispatchSecrets {
         env: worker::secrets::env::EnvSecrets,
         file: worker::secrets::file::FileSecrets::new(),
+        vault: worker::secrets::vault::VaultSecrets::from_env()?,
     };
     let source_connection =
         worker::secrets::resolve_connection(&secrets, &source_connection_raw)
