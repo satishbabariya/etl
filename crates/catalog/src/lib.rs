@@ -506,7 +506,7 @@ impl Catalog {
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE audit_log, revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;
