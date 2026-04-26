@@ -19,8 +19,11 @@ pub async fn verify_chain(
     pool: &PgPool,
     tenant_id: Option<TenantId>,
 ) -> Result<VerifyResult, ChainError> {
-    let mut prev = GENESIS_PREV_HASH;
-    let mut last_id: i64 = 0;
+    let cp = crate::chain::get_checkpoint(pool, tenant_id).await?;
+    let (mut prev, mut last_id) = match cp {
+        Some(c) => (c.last_verified_hash, c.last_verified_audit_id),
+        None => (GENESIS_PREV_HASH, 0),
+    };
     let mut count: u64 = 0;
     loop {
         let rows: Vec<(
@@ -85,6 +88,48 @@ pub async fn verify_chain(
             count += 1;
         }
     }
+}
+
+/// Verify the chain AND record a checkpoint at the highest audit_id
+/// successfully verified. Used by the periodic verify job.
+pub async fn verify_and_checkpoint(
+    pool: &PgPool,
+    tenant_id: Option<TenantId>,
+) -> Result<VerifyResult, ChainError> {
+    let result = verify_chain(pool, tenant_id).await?;
+    if let VerifyResult::Ok { rows_checked } = &result {
+        if *rows_checked > 0 {
+            let last: Option<(i64, Vec<u8>)> = match tenant_id {
+                Some(tid) => sqlx::query_as(
+                    "SELECT audit_id, hash FROM audit_log \
+                     WHERE tenant_id = $1 ORDER BY audit_id DESC LIMIT 1",
+                )
+                .bind(tid.as_uuid())
+                .fetch_optional(pool)
+                .await?,
+                None => sqlx::query_as(
+                    "SELECT audit_id, hash FROM audit_log \
+                     WHERE tenant_id IS NULL ORDER BY audit_id DESC LIMIT 1",
+                )
+                .fetch_optional(pool)
+                .await?,
+            };
+            if let Some((id, h)) = last {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&h);
+                crate::chain::record_checkpoint(
+                    pool,
+                    tenant_id,
+                    crate::chain::Checkpoint {
+                        last_verified_audit_id: id,
+                        last_verified_hash: hash,
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn parse_action(s: &str) -> Option<AuditEvent> {

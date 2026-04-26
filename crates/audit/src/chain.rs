@@ -105,6 +105,87 @@ pub async fn write_event(pool: &PgPool, row: &AuditRow) -> Result<i64, ChainErro
     Ok(id_row.0)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Checkpoint {
+    pub last_verified_audit_id: i64,
+    pub last_verified_hash: [u8; 32],
+}
+
+pub async fn record_checkpoint(
+    pool: &PgPool,
+    tenant_id: Option<common_types::ids::TenantId>,
+    cp: Checkpoint,
+) -> Result<(), ChainError> {
+    sqlx::query(
+        "INSERT INTO audit_verified_chain (tenant_id, last_verified_audit_id, last_verified_hash, last_verified_at) \
+         VALUES ($1, $2, $3, now()) \
+         ON CONFLICT ((COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::UUID))) \
+         DO UPDATE SET last_verified_audit_id = EXCLUDED.last_verified_audit_id, \
+                       last_verified_hash = EXCLUDED.last_verified_hash, \
+                       last_verified_at = EXCLUDED.last_verified_at",
+    )
+    .bind(tenant_id.map(|t| t.as_uuid()))
+    .bind(cp.last_verified_audit_id)
+    .bind(cp.last_verified_hash.as_slice())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_checkpoint(
+    pool: &PgPool,
+    tenant_id: Option<common_types::ids::TenantId>,
+) -> Result<Option<Checkpoint>, ChainError> {
+    let row: Option<(i64, Vec<u8>)> = match tenant_id {
+        Some(tid) => sqlx::query_as(
+            "SELECT last_verified_audit_id, last_verified_hash \
+             FROM audit_verified_chain WHERE tenant_id = $1",
+        )
+        .bind(tid.as_uuid())
+        .fetch_optional(pool)
+        .await?,
+        None => sqlx::query_as(
+            "SELECT last_verified_audit_id, last_verified_hash \
+             FROM audit_verified_chain WHERE tenant_id IS NULL",
+        )
+        .fetch_optional(pool)
+        .await?,
+    };
+    Ok(row.map(|(id, h)| {
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&h);
+        Checkpoint {
+            last_verified_audit_id: id,
+            last_verified_hash: hash,
+        }
+    }))
+}
+
+/// Delete audit rows older than `older_than_audit_id` for the given
+/// tenant. Returns the number of rows pruned.
+pub async fn prune_before(
+    pool: &PgPool,
+    tenant_id: Option<common_types::ids::TenantId>,
+    older_than_audit_id: i64,
+) -> Result<u64, ChainError> {
+    let r = match tenant_id {
+        Some(tid) => sqlx::query(
+            "DELETE FROM audit_log WHERE tenant_id = $1 AND audit_id < $2",
+        )
+        .bind(tid.as_uuid())
+        .bind(older_than_audit_id)
+        .execute(pool)
+        .await?,
+        None => sqlx::query(
+            "DELETE FROM audit_log WHERE tenant_id IS NULL AND audit_id < $1",
+        )
+        .bind(older_than_audit_id)
+        .execute(pool)
+        .await?,
+    };
+    Ok(r.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
