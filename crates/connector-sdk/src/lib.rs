@@ -46,3 +46,4 @@ pub struct ReadOutcome {
 pub const WIT_PATH: &str = "crates/connector-sdk/wit/source-connector.wit";
 
 pub mod templates;
+pub mod test_harness;
