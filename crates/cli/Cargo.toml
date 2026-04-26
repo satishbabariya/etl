@@ -27,6 +27,9 @@ temporalio-client = "0.2"
 temporalio-common = "0.2"
 prost-wkt-types = "0.7"
 tonic = "0.14"
+chrono = { workspace = true }
 auth = { workspace = true }
 dirs = "5"
 base64 = "0.22"
+reqwest = { workspace = true }
+jsonwebtoken = { workspace = true }
