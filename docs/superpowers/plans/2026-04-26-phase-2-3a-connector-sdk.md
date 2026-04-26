@@ -1158,3 +1158,45 @@ Then use the **finishing-a-development-branch** skill.
 **2. Inline Execution** — feasible; 8 tasks, mostly mechanical. The wasm32-wasip1 build inside T7 is the long-pole at ~60s.
 
 **Which approach?**
+
+---
+
+## Phase II.3.a Completion Log
+
+Completed 2026-04-26 on branch `phase-2-3a-connector-sdk`.
+
+- [x] T1 — connector-sdk templates + materialize_source_template (2 unit tests)
+- [x] T2 — platform connector create
+- [x] T3 — connector-sdk test_harness::run_smoke (2 unit tests)
+- [x] T4 — platform connector test (wasm32-wasip2 + cargo test)
+- [x] T5 — platform connector publish (registry + manifest.yaml)
+- [x] T6 — Connector SDK authoring guide
+- [x] T7 — connector_lifecycle integration test
+- [x] T8 — README + this log + sweep
+
+### Exit criterion — MET
+
+- `platform connector create <name>` scaffolds a buildable, standalone connector crate (with embedded WIT).
+- `platform connector test <path>` builds wasm32-wasip2 + runs cargo test.
+- `platform connector publish <path>` writes `<registry>/<name>@<version>/component.cwasm` + `manifest.yaml`.
+- Authoring guide (`docs/connector-sdk-guide.md`) walks an external operator from `connector create` to a usable artifact.
+- 31 integration tests + 121 unit tests green.
+
+### Deviations from the plan
+
+- **Used `wasm32-wasip2` not `wasm32-wasip1`.** Existing convention (csv-source, hello-world-source) targets wasip2; matched it.
+- **Embedded the WIT file in the template.** Plan referenced `path: "../../crates/connector-sdk/wit"` but a scaffolded connector outside the workspace can't resolve that. Template now ships `wit/source-connector.wit` and the `wit_bindgen::generate!` macro reads `path: "wit"`.
+- **Dropped `arrow-array` from template deps.** The stub doesn't construct RecordBatches (returns an empty schema-only IPC payload), so only `arrow-schema` + `arrow-ipc` are needed.
+- **`rustup target add wasm32-wasip2`** was nominally listed by `rustup target list --installed` but not actually present in the active sysroot. Re-added explicitly to make T4/T7 work.
+
+### Handoff to Phase II.3.b / II.3.c
+
+II.3.b — TypeScript SDK via `jco` (deferred):
+- Mirror the Rust trait shape in TS: `discover()`, `readBatch()`.
+- `platform connector create --kind source --lang typescript` materializes a TS template.
+- `connector test` runs `npm test` plus `jco componentize` to produce the same `.cwasm`.
+
+II.3.c — first new connector (Stripe):
+- HTTP client with pagination + OAuth + rate-limit handling.
+- JSON-schema discovery.
+- Cursor on `created_at`.
