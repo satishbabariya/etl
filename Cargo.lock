@@ -975,6 +975,7 @@ dependencies = [
  "chrono",
  "clap",
  "common-types",
+ "connector-sdk",
  "dirs 5.0.1",
  "jsonwebtoken",
  "prost-wkt-types",
