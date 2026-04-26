@@ -92,6 +92,35 @@ pub async fn build(
     Ok(())
 }
 
+pub async fn test(path: String) -> Result<()> {
+    use std::process::Command as StdCommand;
+
+    let path = PathBuf::from(&path);
+    if !path.join("Cargo.toml").exists() {
+        anyhow::bail!("{} is not a cargo crate (no Cargo.toml)", path.display());
+    }
+    println!("[1/2] cargo build --release --target wasm32-wasip2");
+    let status = StdCommand::new("cargo")
+        .args(["build", "--release", "--target", "wasm32-wasip2"])
+        .current_dir(&path)
+        .status()
+        .context("running cargo build")?;
+    if !status.success() {
+        anyhow::bail!("cargo build failed");
+    }
+    println!("[2/2] cargo test (host-side unit tests)");
+    let status = StdCommand::new("cargo")
+        .args(["test"])
+        .current_dir(&path)
+        .status()
+        .context("running cargo test")?;
+    if !status.success() {
+        anyhow::bail!("cargo test failed");
+    }
+    println!("connector test: ok");
+    Ok(())
+}
+
 fn read_toml_value(text: &str, key: &str) -> Option<String> {
     let mut in_package = false;
     for line in text.lines() {

@@ -14,7 +14,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.37"
-arrow-array = { version = "53", default-features = false }
 arrow-schema = { version = "53", default-features = false }
 arrow-ipc = { version = "53", default-features = false }
 
@@ -37,6 +36,70 @@ platform connector publish . --registry ./connectors
 
 The published artifact lands at `./connectors/{{NAME}}@<version>/component.cwasm`.
 
+===FILE: wit/source-connector.wit===
+package platform:connector@0.1.0;
+
+interface types {
+    enum cursor-kind { int64, timestamp-tz }
+
+    record cursor-value {
+        kind: cursor-kind,
+        value: string,
+    }
+
+    record connection-config {
+        url: string,
+    }
+
+    record source-config {
+        json: string,
+    }
+
+    record read-outcome {
+        batch-ipc: list<u8>,
+        rows: u32,
+        new-cursor: option<cursor-value>,
+        is-final: bool,
+    }
+
+    variant connector-error {
+        invalid-config(string),
+        source-unavailable(string),
+        schema-incompatible(string),
+        other(string),
+    }
+}
+
+interface host {
+    enum log-level { trace, debug, info, warn, error }
+    log: func(level: log-level, message: string);
+
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+    }
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+    http-fetch: func(request: http-request) -> result<http-response, string>;
+}
+
+world source-connector {
+    use types.{connection-config, source-config, cursor-value, read-outcome, connector-error};
+    import host;
+    export discover: func(conn: connection-config, source: source-config) -> result<list<u8>, connector-error>;
+    export read-batch: func(
+        conn: connection-config,
+        source: source-config,
+        cursor: option<cursor-value>,
+        batch-size: u32,
+    ) -> result<read-outcome, connector-error>;
+}
+
 ===FILE: src/lib.rs===
 //! {{NAME}} — source connector skeleton.
 //!
@@ -45,14 +108,10 @@ The published artifact lands at `./connectors/{{NAME}}@<version>/component.cwasm
 //! cleanly without doing any I/O.
 
 wit_bindgen::generate!({
-    path: "../../crates/connector-sdk/wit",
+    path: "wit",
     world: "source-connector",
 });
 
-use platform::connector::types::CursorKind;
-use std::sync::Arc;
-
-use arrow_array::RecordBatch;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema};
 
@@ -88,7 +147,6 @@ impl Guest for Component {
     ) -> Result<ReadOutcome, ConnectorError> {
         // TODO: implement. Return rows after the cursor; set is_final
         // when fewer than batch_size rows are available.
-        let _ = (Arc::new(()), CursorKind::Int64);
         let s = schema();
         let batch_ipc = ipc_schema_bytes(&s)
             .map_err(|e| ConnectorError::Other(format!("ipc: {e}")))?;
@@ -100,9 +158,6 @@ impl Guest for Component {
         })
     }
 }
-
-#[allow(dead_code)]
-fn _kept_for_doc(_b: &RecordBatch) {}
 "#;
 
 /// Materialize `SOURCE_TEMPLATE` into a new directory at `target_dir`,

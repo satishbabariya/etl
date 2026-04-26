@@ -202,6 +202,10 @@ enum ConnectorCmd {
         #[arg(long)]
         out: Option<String>,
     },
+    /// Build (wasm32-wasip2) and run host-side unit tests for a connector crate.
+    Test {
+        path: String,
+    },
     /// Compile a guest Rust crate to a precompiled .cwasm artifact.
     Build {
         path: String,
@@ -236,6 +240,7 @@ async fn main() -> anyhow::Result<()> {
             ConnectorCmd::Create { name, kind, out } => {
                 connector_cmd::create(name, kind, out).await
             }
+            ConnectorCmd::Test { path } => connector_cmd::test(path).await,
             ConnectorCmd::Build { path, name, version, out, kind } => {
                 connector_cmd::build(path, name, version, out, kind).await
             }
