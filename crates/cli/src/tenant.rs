@@ -75,10 +75,33 @@ pub async fn terminate(name: String) -> anyhow::Result<()> {
             .with_context(|| format!("removing {}", path.display()))?;
         println!("removed {}", path.display());
     }
-    println!(
-        "note: Temporal namespace etl-{} deprecated — `tctl namespace delete` for full cleanup",
-        t.tenant_id.as_uuid().simple()
-    );
+    deprecate_temporal_namespace(&t.tenant_id).await?;
+    Ok(())
+}
+
+async fn deprecate_temporal_namespace(id: &TenantId) -> anyhow::Result<()> {
+    use temporalio_client::grpc::WorkflowService;
+    use temporalio_common::protos::temporal::api::workflowservice::v1::DeprecateNamespaceRequest;
+
+    let cfg = worker::temporal::TemporalConfig::from_env()?;
+    let client = worker::temporal::make_client(&cfg).await?;
+    let ns = format!("etl-{}", id.as_uuid().simple());
+    let req = DeprecateNamespaceRequest {
+        namespace: ns.clone(),
+        ..Default::default()
+    };
+    let mut svc = client.connection().workflow_service();
+    match svc.deprecate_namespace(tonic::Request::new(req)).await {
+        Ok(_) => println!("deprecated Temporal namespace {ns}"),
+        Err(s) => {
+            let msg = format!("{s}").to_lowercase();
+            if msg.contains("notfound") || msg.contains("not found") {
+                println!("Temporal namespace {ns} already gone");
+            } else {
+                eprintln!("warning: deprecate_namespace failed: {s}");
+            }
+        }
+    }
     Ok(())
 }
 
