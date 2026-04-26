@@ -104,6 +104,23 @@ impl Catalog {
         tx.commit().await?;
         Ok(())
     }
+    pub async fn tenant_set_status(
+        &self,
+        tenant_id: TenantId,
+        status: &str,
+    ) -> sqlx::Result<u64> {
+        if status != "active" && status != "suspended" {
+            return Err(sqlx::Error::Protocol(format!(
+                "invalid status '{status}' (expected active|suspended)"
+            )));
+        }
+        let r = sqlx::query("UPDATE tenants SET status = $1 WHERE tenant_id = $2")
+            .bind(status)
+            .bind(tenant_id.as_uuid())
+            .execute(self.pool())
+            .await?;
+        Ok(r.rows_affected())
+    }
 
     // Connections
     pub async fn create_connection(&self, new: NewConnection) -> sqlx::Result<ConnectionId> {

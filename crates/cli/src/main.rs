@@ -99,8 +99,10 @@ enum TenantCmd {
     Create { name: String },
     /// List all tenants.
     List,
-    /// Rename a tenant to "suspended:<name>" so resolution misses it.
+    /// Flip tenants.status to 'suspended' (blocks pipeline runs).
     Suspend { name: String },
+    /// Flip tenants.status back to 'active'.
+    Resume { name: String },
     /// Cascade-delete catalog rows + remove ./data/<tenant_id>/.
     Terminate { name: String },
 }
@@ -169,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
             TenantCmd::Create { name } => tenant::create(name).await,
             TenantCmd::List => tenant::list().await,
             TenantCmd::Suspend { name } => tenant::suspend(name).await,
+            TenantCmd::Resume { name } => tenant::resume(name).await,
             TenantCmd::Terminate { name } => tenant::terminate(name).await,
         },
         Cmd::Secret { cmd } => match cmd {
@@ -451,6 +454,18 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .await?
         .with_context(|| format!("pipeline {} not found", pipeline_id))?;
     let ctx = catalog::TenantContext::new(pipeline.tenant_id);
+
+    let tenant_row = catalog
+        .get_tenant(pipeline.tenant_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tenant {} not found", pipeline.tenant_id))?;
+    if tenant_row.status == "suspended" {
+        anyhow::bail!(
+            "tenant '{}' is suspended — use 'platform tenant resume {}' to re-enable",
+            tenant_row.name,
+            tenant_row.name,
+        );
+    }
 
     let spec: PipelineSpec = serde_json::from_value(pipeline.spec.clone())
         .context("pipelines.spec did not deserialize as PipelineSpec")?;

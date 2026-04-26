@@ -33,18 +33,28 @@ pub async fn list() -> anyhow::Result<()> {
 pub async fn suspend(name: String) -> anyhow::Result<()> {
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let admin = Catalog::connect(&url).await?;
-    let result = sqlx::query(
-        "UPDATE tenants SET name = 'suspended:' || name \
-         WHERE name = $1 AND name NOT LIKE 'suspended:%'",
-    )
-    .bind(&name)
-    .execute(admin.pool())
-    .await?;
-    if result.rows_affected() == 0 {
-        println!("no active tenant named {} (already suspended or missing)", name);
+    let t = admin
+        .get_tenant_by_name(&name)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tenant {} not found", name))?;
+    let n = admin.tenant_set_status(t.tenant_id, "suspended").await?;
+    if n == 0 {
+        println!("tenant {} unchanged", name);
     } else {
-        println!("suspended tenant {} (renamed to suspended:{})", name, name);
+        println!("suspended tenant {} ({})", name, t.tenant_id);
     }
+    Ok(())
+}
+
+pub async fn resume(name: String) -> anyhow::Result<()> {
+    let url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    let admin = Catalog::connect(&url).await?;
+    let t = admin
+        .get_tenant_by_name(&name)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("tenant {} not found", name))?;
+    admin.tenant_set_status(t.tenant_id, "active").await?;
+    println!("resumed tenant {} ({})", name, t.tenant_id);
     Ok(())
 }
 
