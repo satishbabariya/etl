@@ -118,66 +118,94 @@ async fn main() -> anyhow::Result<()> {
     drop(client); // we'll create per-namespace clients below
 
     // One Temporal worker per known tenant + a `default` backstop for legacy
-    // workflows. Tenants created at runtime are picked up after restart
-    // (Phase II.4 will hot-reconfigure).
+    // workflows. Phase II.4: tenant_watcher spawns workers for new tenants
+    // without restart.
     let admin = Catalog::connect(&db_url).await?;
     let tenants = admin.list_tenants().await?;
     drop(admin);
 
-    let mut namespaces: Vec<String> = tenants
-        .iter()
-        .map(|t| format!("etl-{}", t.tenant_id.as_uuid().simple()))
-        .collect();
-    if namespaces.is_empty() {
-        tracing::warn!("no tenants registered — only the legacy `default` namespace will be polled");
-    }
-    namespaces.push(cfg.namespace.clone());
-
     let task_queue = cfg.task_queue.clone();
-    let mut workers = Vec::new();
-    for ns in namespaces {
-        let mut ns_cfg = cfg.clone();
+    let local = tokio::task::LocalSet::new();
+
+    // Build a closure that spawns one Temporal worker for a tenant.
+    // Worker is !Send so we use spawn_local on a LocalSet.
+    let runtime_clone = runtime.clone();
+    let cfg_clone = cfg.clone();
+    let lifecycle_clone = lifecycle.clone();
+    let sync_clone = sync.clone();
+    let cdc_clone = cdc.clone();
+    let task_queue_clone = task_queue.clone();
+
+    let spawn_one = move |tenant_id: common_types::ids::TenantId| -> tokio::task::JoinHandle<()> {
+        let ns = if tenant_id.as_uuid().is_nil() {
+            cfg_clone.namespace.clone()
+        } else {
+            format!("etl-{}", tenant_id.as_uuid().simple())
+        };
+        let mut ns_cfg = cfg_clone.clone();
         ns_cfg.namespace = ns.clone();
-        let ns_client = match make_client(&ns_cfg).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(%ns, error = %e, "skipping namespace — connect failed");
-                continue;
-            }
-        };
-        let opts = WorkerOptions::new(task_queue.clone())
-            .task_types(WorkerTaskTypes::all())
-            .deployment_options(WorkerDeploymentOptions {
-                version: WorkerDeploymentVersion {
-                    deployment_name: "etl".to_owned(),
-                    build_id: "etl-worker-0.2".to_owned(),
-                },
-                use_worker_versioning: false,
-                default_versioning_behavior: None,
-            })
-            .register_activities(lifecycle.clone())
-            .register_activities(sync.clone())
-            .register_activities(cdc.clone())
-            .register_workflow::<PipelineRunWorkflow>()
-            .register_workflow::<CdcPipelineWorkflow>()
-            .build();
-        let mut w = match Worker::new(&runtime, ns_client, opts) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::warn!(%ns, error = %e, "skipping namespace — Worker::new failed");
-                continue;
-            }
-        };
-        tracing::info!(%ns, "worker polling namespace");
-        let ns_for_log = ns.clone();
-        // Worker is !Send (holds non-Send Temporal core state); join as
-        // futures on the current task rather than spawning.
-        workers.push(Box::pin(async move {
+        let task_queue = task_queue_clone.clone();
+        let runtime = runtime_clone.clone();
+        let lifecycle = lifecycle_clone.clone();
+        let sync = sync_clone.clone();
+        let cdc = cdc_clone.clone();
+        tokio::task::spawn_local(async move {
+            let ns_client = match make_client(&ns_cfg).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(%ns, error = %e, "skipping namespace — connect failed");
+                    return;
+                }
+            };
+            let opts = WorkerOptions::new(task_queue)
+                .task_types(WorkerTaskTypes::all())
+                .deployment_options(WorkerDeploymentOptions {
+                    version: WorkerDeploymentVersion {
+                        deployment_name: "etl".to_owned(),
+                        build_id: "etl-worker-0.2".to_owned(),
+                    },
+                    use_worker_versioning: false,
+                    default_versioning_behavior: None,
+                })
+                .register_activities(lifecycle)
+                .register_activities(sync)
+                .register_activities(cdc)
+                .register_workflow::<PipelineRunWorkflow>()
+                .register_workflow::<CdcPipelineWorkflow>()
+                .build();
+            let mut w = match Worker::new(&runtime, ns_client, opts) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!(%ns, error = %e, "skipping namespace — Worker::new failed");
+                    return;
+                }
+            };
+            tracing::info!(%ns, "worker polling namespace");
             if let Err(e) = w.run().await {
-                tracing::error!(ns = %ns_for_log, error = %e, "worker exited");
+                tracing::error!(%ns, error = %e, "worker exited");
             }
-        }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>);
-    }
-    futures::future::join_all(workers).await;
+        })
+    };
+
+    let mut initial_ids: Vec<common_types::ids::TenantId> =
+        tenants.iter().map(|t| t.tenant_id).collect();
+    let nil_tenant = common_types::ids::TenantId::from_uuid_unchecked(uuid::Uuid::nil());
+
+    local.run_until(async move {
+        for t in &tenants {
+            spawn_one(t.tenant_id);
+        }
+        spawn_one(nil_tenant);
+        initial_ids.push(nil_tenant);
+
+        tokio::task::spawn_local(worker::tenant_watcher::run(
+            catalog.clone(),
+            initial_ids,
+            Box::new(spawn_one),
+        ));
+
+        // Park: workers run on the LocalSet; this future never completes.
+        futures::future::pending::<()>().await
+    }).await;
     Ok(())
 }
