@@ -91,3 +91,45 @@ pub fn parse_page(json_bytes: &[u8]) -> Result<ParsedPage, String> {
         has_more: resp.has_more,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_two_customers() {
+        let body = br#"{
+            "data": [
+                {"id":"cus_1","email":"a@x.com","name":"Alice","created":1700000000},
+                {"id":"cus_2","email":null,"name":null,"created":1700000123}
+            ],
+            "has_more": false
+        }"#;
+        let page = parse_page(body).unwrap();
+        assert_eq!(page.rows, 2);
+        assert_eq!(page.last_id.as_deref(), Some("cus_2"));
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn parses_empty_page() {
+        let body = br#"{"data":[], "has_more":false}"#;
+        let page = parse_page(body).unwrap();
+        assert_eq!(page.rows, 0);
+        assert!(page.last_id.is_none());
+        assert!(!page.has_more);
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        let err = parse_page(b"not json").unwrap_err();
+        assert!(err.to_lowercase().contains("parse"));
+    }
+
+    #[test]
+    fn schema_has_four_columns() {
+        let s = schema();
+        let names: Vec<_> = s.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["id", "email", "name", "created"]);
+    }
+}
