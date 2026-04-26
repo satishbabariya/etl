@@ -119,8 +119,8 @@ pub async fn resolve_context(
     tenant_override: Option<&str>,
 ) -> Result<common_types::ids::TenantContext> {
     let p = current_principal()?;
-    let tenant_id = match tenant_override {
-        None => p.tenant_id,
+    let (tenant_id, was_override) = match tenant_override {
+        None => (p.tenant_id, false),
         Some(name) => {
             if p.role != Role::Admin {
                 anyhow::bail!("--tenant requires admin role (current: {:?})", p.role);
@@ -129,9 +129,39 @@ pub async fn resolve_context(
                 .get_tenant_by_name(name)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("tenant '{}' not found", name))?;
-            t.tenant_id
+            (t.tenant_id, t.tenant_id != p.tenant_id)
         }
     };
+
+    if was_override {
+        let target_name = tenant_override.unwrap();
+        let payload = serde_json::json!({
+            "from_tenant": p.tenant_id.to_string(),
+            "to_tenant": tenant_id.to_string(),
+        });
+        let jti_opt = (!p.jti.is_nil()).then_some(p.jti);
+        crate::auditlog::record(
+            catalog,
+            Some(p.tenant_id),
+            Some(p.principal_id),
+            jti_opt,
+            ::audit::AuditEvent::TenantOverride,
+            Some(format!("--tenant {}", target_name)),
+            payload.clone(),
+        )
+        .await;
+        crate::auditlog::record(
+            catalog,
+            Some(tenant_id),
+            Some(p.principal_id),
+            jti_opt,
+            ::audit::AuditEvent::TenantOverride,
+            Some(format!("--tenant {}", target_name)),
+            payload,
+        )
+        .await;
+    }
+
     Ok(common_types::ids::TenantContext::authed(
         tenant_id,
         p.principal_id,
