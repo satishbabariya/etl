@@ -126,7 +126,11 @@ impl Keystore {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn run_with_env<F: FnOnce()>(key: &str, val: Option<&str>, f: F) {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var(key).ok();
         match val {
             Some(v) => std::env::set_var(key, v),
