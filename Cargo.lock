@@ -2507,6 +2507,7 @@ dependencies = [
  "arrow",
  "catalog",
  "common-types",
+ "dirs 5.0.1",
  "parquet",
  "serde_json",
  "sqlx",
