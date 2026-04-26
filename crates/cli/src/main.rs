@@ -1,3 +1,4 @@
+mod auth;
 mod dsl;
 mod secret;
 mod status;
@@ -66,6 +67,33 @@ enum Cmd {
     Secret {
         #[command(subcommand)]
         cmd: SecretCmd,
+    },
+    /// Authentication: login, whoami, create-principal (RFC-12).
+    Auth {
+        #[command(subcommand)]
+        cmd: AuthCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCmd {
+    /// Verify password and cache a JWT at ~/.etl/credentials.json.
+    Login {
+        name: String,
+        #[arg(long)]
+        password: String,
+    },
+    /// Print the cached principal's id, tenant, and role.
+    Whoami,
+    /// Admin: create a principal in the named tenant.
+    CreatePrincipal {
+        #[arg(long)]
+        tenant: String,
+        name: String,
+        #[arg(long)]
+        password: String,
+        #[arg(long, default_value = "operator")]
+        role: String,
     },
 }
 
@@ -184,6 +212,13 @@ async fn main() -> anyhow::Result<()> {
             }
             SecretCmd::List => secret::list().await,
             SecretCmd::Delete { name } => secret::delete(name).await,
+        },
+        Cmd::Auth { cmd } => match cmd {
+            AuthCmd::Login { name, password } => auth::login(name, password).await,
+            AuthCmd::Whoami => auth::whoami().await,
+            AuthCmd::CreatePrincipal { tenant, name, password, role } => {
+                auth::create_principal(tenant, name, password, role).await
+            }
         },
     }
 }
