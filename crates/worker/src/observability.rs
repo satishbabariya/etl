@@ -1,18 +1,30 @@
-//! `/metrics` HTTP endpoint. Spawns a tokio task; errors are logged
-//! but don't bring down the worker.
+//! HTTP endpoints on the metrics port: `/metrics`, `/healthz`, `/readyz`.
 
-use axum::{routing::get, Router};
+use axum::{extract::State, http::StatusCode, routing::get, Router};
+use catalog::Catalog;
 use metrics_exporter_prometheus::PrometheusHandle;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
-pub fn spawn_metrics_endpoint(handle: PrometheusHandle, bind: SocketAddr) {
-    let app = Router::new().route(
-        "/metrics",
-        get(move || {
-            let h = handle.clone();
-            async move { h.render() }
-        }),
-    );
+#[derive(Clone)]
+struct ObsState {
+    metrics: PrometheusHandle,
+    catalog: Arc<Catalog>,
+}
+
+pub fn spawn_metrics_endpoint(handle: PrometheusHandle, bind: SocketAddr, catalog: Arc<Catalog>) {
+    let state = ObsState {
+        metrics: handle,
+        catalog,
+    };
+    let app = Router::new()
+        .route(
+            "/metrics",
+            get(|State(s): State<ObsState>| async move { s.metrics.render() }),
+        )
+        .route("/healthz", get(|| async { StatusCode::OK }))
+        .route("/readyz", get(readyz))
+        .with_state(state);
     tokio::spawn(async move {
         match tokio::net::TcpListener::bind(bind).await {
             Ok(listener) => {
@@ -26,4 +38,11 @@ pub fn spawn_metrics_endpoint(handle: PrometheusHandle, bind: SocketAddr) {
             }
         }
     });
+}
+
+async fn readyz(State(s): State<ObsState>) -> StatusCode {
+    match sqlx::query("SELECT 1").execute(s.catalog.pool()).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }

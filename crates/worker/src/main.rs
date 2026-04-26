@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("ETL_METRICS_BIND must be host:port")?;
     let prom_handle = worker::metrics::init_recorder(metrics_bind)?;
-    worker::observability::spawn_metrics_endpoint(prom_handle, metrics_bind);
+    // (catalog is initialized just below; spawn_metrics_endpoint moved after)
 
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let app_url = std::env::var("DATABASE_URL_APP")
@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
         admin.migrate().await?;
     }
     let catalog = Arc::new(Catalog::connect_app(&app_url).await?);
+    worker::observability::spawn_metrics_endpoint(prom_handle, metrics_bind, catalog.clone());
 
     let cfg = TemporalConfig::from_env()?;
     tracing::info!(
