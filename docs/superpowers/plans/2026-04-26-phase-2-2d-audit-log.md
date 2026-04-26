@@ -2154,7 +2154,13 @@ Completed 2026-04-26 on branch `phase-2-2d-audit-log`.
 
 ### Deviations from the plan
 
-_(Fill in after execution.)_
+- **CLI helper module is `auditlog` (not `audit`).** Cli has `audit = { workspace = true }` so a local `mod audit;` would shadow the crate name inside cli source. Renamed to `auditlog` to keep both reachable; T7's `audit::record` becomes `auditlog::record` and the CLI subcommand at T12 lives in `audit_cmd`.
+- **`SELECT … FOR UPDATE` replaced with `pg_advisory_xact_lock`.** Plan called for a row lock on the latest audit row. Implemented as an advisory lock keyed off the tenant_id (or 0 for system) so concurrent inserts within a tenant serialize without needing an existing row to lock. Same correctness, simpler bootstrap (no row-not-found edge case for the first insert).
+- **`AuditingSecrets` does NOT change `Secrets::resolve` semantics.** The trait impl delegates without auditing (system-scoped); only `resolve_with_audit(r, ctx)` writes a SECRET_READ row. Activities call `resolve_connection_audited`; the slot-lag poller and other system contexts use the unaudited path.
+- **`release_slot` uses unaudited resolve.** Cleanup path; no SECRET_READ emitted. Acceptable because the slot release doesn't expose plaintext beyond the activity body.
+- **Workflow input fields use `#[serde(default)]` for principal_id/jti.** Existing in-flight workflows from II.2.c don't carry these fields — defaulting to `Uuid::nil()` keeps deserialization compatible. New workflows from the CLI populate them properly.
+- **Tenant terminate skipped from auditing.** ON DELETE CASCADE wipes audit_log alongside the tenant, so the row would not survive. Documented in the README; II.4 adds an admin-tenant copy that survives the cascade.
+- **`--tenant` override audits TWO rows but in sequence, not atomically.** The home-tenant row writes first, then the target-tenant row. If the second write fails, the first is still recorded. Acceptable for II.2.d; the chain in each tenant remains valid.
 
 ### Handoff to Phase II.4 / III
 
