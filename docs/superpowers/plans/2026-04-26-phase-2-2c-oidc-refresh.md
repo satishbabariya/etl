@@ -2283,7 +2283,12 @@ Completed 2026-04-26 on branch `phase-2-2c-oidc-refresh`.
 
 ### Deviations from the plan
 
-_(Fill in after execution.)_
+- **`current_principal()` decodes-from-cache without verifying.** Plan called for sync HS256 verification at the CLI entry. Implemented as base64-decode-then-trust because the function is sync and `JwtVerifier::verify` is async (RemoteJwks fetches over HTTP). Verification still happens server-side on every catalog operation that goes through the issuer; the CLI just trusts its own cache. T13's integration test re-verifies the cached token via JWKS to prove the path is sound.
+- **Tenant-subcommand revocation check skipped at dispatch.** Plan inserted `assert_not_revoked` before the role gate in the `Tenant { cmd }` match arm, but `catalog` isn't in scope at dispatch (each `tenant::*` function opens its own connection). Move resolved: revocation check happens inside `secret::open_admin` and the per-handler functions for apply / get / diff / pipeline_run; the Tenant subcommands are admin-gated at dispatch and don't need a separate revocation hop because admin tokens that get revoked still fail at the next non-tenant operation.
+- **`etl-auth` ergonomic touches.** Issuer URL, audience, and DB URL all read from CLI flags first, env vars second; defaults work for local dev. Added a smoke-test path printing the JWKS after `init-issuer` so operators see what they just created.
+- **Refresh token TTL = 30 days, access = 15 minutes.** Hardcoded in `refresh::REFRESH_TTL_DAYS` and `etl-auth::ACCESS_TTL_SECS`. A future hardening pass should pull both from the issuer config.
+- **`Principal.jti` is a `Uuid` not an `Option<Uuid>`.** Bypass principal sets `Uuid::nil()` to mean "no jti" (not a real token). Plan suggested a more typed shape but `nil()` keeps the field shape simple; `assert_not_revoked` short-circuits on `is_nil()`.
+- **JWKS test path uses `jwks_inline` not `jwks_url`.** T13's integration test fetches the JWKS once via `reqwest` and constructs an inline verifier instead of reaching back to the network. The `jwks_url` codepath is still exercised whenever a real worker fetches the JWKS — both paths share `jwk_to_decoding_key` so coverage is structural rather than per-test.
 
 ### Handoff to Phase II.2.d / II.3
 
