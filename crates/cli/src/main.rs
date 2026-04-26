@@ -1,3 +1,4 @@
+mod auditlog;
 mod auth;
 mod auth_client;
 mod dsl;
