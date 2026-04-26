@@ -1,3 +1,4 @@
+mod audit_cmd;
 mod auditlog;
 mod auth;
 mod auth_client;
@@ -79,6 +80,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AuthCmd,
     },
+    /// Audit-log queries (RFC-15).
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditCmd {
+    /// Print the most recent audit rows for the current tenant.
+    Tail {
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// Walk the chain and report the first integrity break.
+    VerifyChain,
 }
 
 #[derive(Subcommand)]
@@ -244,6 +261,10 @@ async fn main() -> anyhow::Result<()> {
             AuthCmd::CreatePrincipal { tenant, name, password, role } => {
                 auth::create_principal(tenant, name, password, role).await
             }
+        },
+        Cmd::Audit { cmd } => match cmd {
+            AuditCmd::Tail { limit } => audit_cmd::tail(tenant_override.clone(), limit).await,
+            AuditCmd::VerifyChain => audit_cmd::verify_chain(tenant_override.clone()).await,
         },
     }
 }
