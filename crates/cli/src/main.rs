@@ -206,6 +206,14 @@ enum ConnectorCmd {
     Test {
         path: String,
     },
+    /// Build the connector and write to a local registry directory.
+    Publish {
+        path: String,
+        #[arg(long, default_value = "./connectors")]
+        registry: String,
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Compile a guest Rust crate to a precompiled .cwasm artifact.
     Build {
         path: String,
@@ -241,6 +249,9 @@ async fn main() -> anyhow::Result<()> {
                 connector_cmd::create(name, kind, out).await
             }
             ConnectorCmd::Test { path } => connector_cmd::test(path).await,
+            ConnectorCmd::Publish { path, registry, version } => {
+                connector_cmd::publish(path, registry, version).await
+            }
             ConnectorCmd::Build { path, name, version, out, kind } => {
                 connector_cmd::build(path, name, version, out, kind).await
             }

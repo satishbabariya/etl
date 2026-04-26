@@ -1,7 +1,17 @@
 //! `platform connector` subcommand handlers — create / build / test / publish.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Manifest {
+    name: String,
+    version: String,
+    kind: String,
+    sdk_version: String,
+    sha256: String,
+}
 
 pub async fn create(name: String, kind: String, out_dir: Option<String>) -> Result<()> {
     if kind != "source" {
@@ -118,6 +128,63 @@ pub async fn test(path: String) -> Result<()> {
         anyhow::bail!("cargo test failed");
     }
     println!("connector test: ok");
+    Ok(())
+}
+
+pub async fn publish(
+    path: String,
+    registry: String,
+    version: Option<String>,
+) -> Result<()> {
+    let path = PathBuf::from(&path);
+    if !path.join("Cargo.toml").exists() {
+        anyhow::bail!("{} is not a cargo crate", path.display());
+    }
+    let cargo_toml = std::fs::read_to_string(path.join("Cargo.toml"))?;
+    let name = read_toml_value(&cargo_toml, "name")
+        .context("connector Cargo.toml missing a [package].name")?;
+    let cargo_version =
+        read_toml_value(&cargo_toml, "version").unwrap_or_else(|| "0.0.0".into());
+    let final_version = version.unwrap_or(cargo_version);
+
+    build(
+        path.to_string_lossy().to_string(),
+        Some(name.clone()),
+        Some(final_version.clone()),
+        registry.clone(),
+        "source".to_string(),
+    )
+    .await?;
+
+    let target_dir = PathBuf::from(&registry).join(format!("{name}@{final_version}"));
+    let cwasm_path = target_dir.join("component.cwasm");
+    if !cwasm_path.exists() {
+        anyhow::bail!(
+            "expected built artifact at {} but it's missing",
+            cwasm_path.display()
+        );
+    }
+    let bytes = std::fs::read(&cwasm_path)?;
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(&bytes);
+    let hash_hex = hex::encode(h.finalize());
+    let manifest = Manifest {
+        name: name.clone(),
+        version: final_version.clone(),
+        kind: "source".into(),
+        sdk_version: "0.1.0".into(),
+        sha256: hash_hex.clone(),
+    };
+    let manifest_yaml = serde_yaml::to_string(&manifest)?;
+    std::fs::write(target_dir.join("manifest.yaml"), manifest_yaml)?;
+    println!(
+        "published {}@{} → {} (sha256={})",
+        name,
+        final_version,
+        target_dir.display(),
+        &hash_hex[..16]
+    );
     Ok(())
 }
 
