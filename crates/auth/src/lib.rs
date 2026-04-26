@@ -6,6 +6,7 @@
 pub mod jwks;
 pub mod jwt;
 pub mod keystore;
+pub mod refresh;
 
 pub use common_types::auth::{Action, Role};
 pub use jwt::{AuthError, Claims, JwtIssuer, JwtVerifier, Principal};
