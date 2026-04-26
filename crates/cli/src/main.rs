@@ -530,18 +530,12 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         .get_connection(ctx, pipeline.source_conn_id)
         .await?
         .with_context(|| format!("source connection {} not found", pipeline.source_conn_id))?;
-    let source_connection_raw: ConnectionConfig =
+    // Phase II.2.b: pass the unresolved ConnectionConfig through; the
+    // worker activity resolves at activity start so plaintext lifetime
+    // is the activity body only.
+    let source_connection: ConnectionConfig =
         serde_json::from_value(source_conn_row.config.clone())
             .context("source connections.config did not deserialize as ConnectionConfig")?;
-    let secrets = worker::secrets::DispatchSecrets {
-        env: worker::secrets::env::EnvSecrets,
-        file: worker::secrets::file::FileSecrets::new(),
-        vault: worker::secrets::vault::VaultSecrets::from_env()?,
-    };
-    let source_connection =
-        worker::secrets::resolve_connection(&secrets, &source_connection_raw)
-            .await
-            .context("resolving source connection secret")?;
 
     let connector_ref = source_conn_row.connector_ref.clone();
 

@@ -69,11 +69,11 @@ impl SyncActivities {
         let connector =
             build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
                 .map_err(to_retryable)?;
+        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
+            .await
+            .map_err(to_retryable)?;
         let discovered_schema = connector
-            .discover(
-                &ConnectionConfig::from_url(input.source_url.clone()),
-                &input.source,
-            )
+            .discover(&resolved, &input.source)
             .await
             .map_err(to_retryable)?;
 
@@ -138,9 +138,12 @@ impl SyncActivities {
         let connector =
             build_source_connector(&input.connector_ref, Some(self.wasm_runtime.clone()))
                 .map_err(to_retryable)?;
+        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
+            .await
+            .map_err(to_retryable)?;
         let outcome = connector
             .read_batch(
-                &ConnectionConfig::from_url(input.source_url),
+                &resolved,
                 &input.source,
                 input.cursor,
                 input.batch_size,
