@@ -812,6 +812,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "audit",
  "chrono",
  "common-types",
  "rand 0.8.6",
