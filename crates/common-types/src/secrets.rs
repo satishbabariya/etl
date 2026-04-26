@@ -17,6 +17,7 @@ use crate::ids::SecretId;
 pub enum SecretBackendKind {
     Env,
     File,
+    Vault,
 }
 
 /// Opaque reference to a secret. Stored in catalog rows. Resolves at

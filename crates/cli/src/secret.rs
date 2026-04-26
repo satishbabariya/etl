@@ -30,6 +30,7 @@ fn parse_backend(s: &str) -> Result<SecretBackendKind> {
     match s.to_ascii_lowercase().as_str() {
         "env" => Ok(SecretBackendKind::Env),
         "file" => Ok(SecretBackendKind::File),
+        "vault" => Ok(SecretBackendKind::Vault),
         other => anyhow::bail!("unknown backend '{other}' (expected env|file)"),
     }
 }
@@ -94,6 +95,7 @@ pub async fn list() -> Result<()> {
         let backend = match s.backend {
             SecretBackendKind::Env => "env",
             SecretBackendKind::File => "file",
+            SecretBackendKind::Vault => "vault",
         };
         println!("{}\t{}\t{}\t{}", s.name, backend, s.key, s.created_at);
     }

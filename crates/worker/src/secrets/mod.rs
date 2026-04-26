@@ -28,6 +28,9 @@ impl Secrets for DispatchSecrets {
         match r.backend {
             SecretBackendKind::Env => self.env.resolve(r).await,
             SecretBackendKind::File => self.file.resolve(r).await,
+            SecretBackendKind::Vault => Err(anyhow!(
+                "vault backend not yet wired — see Phase II.2.b T10"
+            )),
         }
     }
 }
