@@ -904,6 +904,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auth",
+ "base64 0.22.1",
  "catalog",
  "clap",
  "common-types",

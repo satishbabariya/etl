@@ -69,13 +69,38 @@ pub fn current_principal() -> Result<Principal> {
             principal_id: dev_principal,
             tenant_id: dev_tenant,
             role: Role::Admin,
+            jti: uuid::Uuid::nil(),
         });
     }
     let creds = load_creds()?;
-    let p = JwtVerifier::new(&jwt_secret())
-        .verify(&creds.token)
-        .map_err(|e| anyhow::anyhow!("cached token invalid: {e} — run 'platform auth login'"))?;
-    Ok(p)
+    // Phase II.2.c bridge: decode-from-cache without verifying. The
+    // worker / API server still verifies via JWKS on every request.
+    // T10 replaces this with the proper async path.
+    use base64::Engine;
+    let parts: Vec<&str> = creds.token.split('.').collect();
+    anyhow::ensure!(parts.len() == 3, "malformed cached token");
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .context("decoding cached token claims")?;
+    let claims: serde_json::Value =
+        serde_json::from_slice(&payload).context("parsing cached token claims")?;
+    Ok(Principal {
+        principal_id: claims["sub"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing sub claim"))?
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad sub: {e:?}"))?,
+        tenant_id: claims["tenant_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing tenant_id claim"))?
+            .parse()
+            .map_err(|e| anyhow::anyhow!("bad tenant_id: {e:?}"))?,
+        role: serde_json::from_value(claims["role"].clone()).context("decoding role")?,
+        jti: claims["jti"]
+            .as_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or(uuid::Uuid::nil()),
+    })
 }
 
 pub fn require_role(p: &Principal, action: Action) -> Result<()> {
@@ -133,12 +158,8 @@ pub async fn login(name: String, password: String) -> Result<()> {
     let role: Role = serde_json::from_str(&format!("\"{}\"", principal.role))
         .with_context(|| format!("unknown role string in catalog: {}", principal.role))?;
 
-    let issuer = JwtIssuer::new(&jwt_secret(), DEFAULT_TTL_SECONDS);
-    let token = issuer.issue(Principal {
-        principal_id: principal.principal_id,
-        tenant_id: principal.tenant_id,
-        role,
-    })?;
+    let issuer = JwtIssuer::hs256(&jwt_secret(), DEFAULT_TTL_SECONDS, "etl-cli", "etl-platform");
+    let token = issuer.issue(principal.principal_id, principal.tenant_id, role)?;
 
     save_creds(&CachedCreds {
         token,

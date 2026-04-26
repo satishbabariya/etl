@@ -29,3 +29,4 @@ prost-wkt-types = "0.7"
 tonic = "0.14"
 auth = { workspace = true }
 dirs = "5"
+base64 = "0.22"
