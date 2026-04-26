@@ -1,4 +1,5 @@
 mod dsl;
+mod secret;
 mod status;
 mod tenant;
 mod terminate;
@@ -61,6 +62,35 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TenantCmd,
     },
+    /// Secret reference management (RFC-11).
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    /// Register a catalog SecretRef pointing at (backend, key).
+    Create {
+        name: String,
+        #[arg(long, default_value = "file")]
+        backend: String,
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Write a plaintext value into the file backend.
+    Put {
+        name: String,
+        value: String,
+        /// Also register a catalog SecretRef row (backend=file, key=name).
+        #[arg(long)]
+        register: bool,
+    },
+    /// List registered secrets (no plaintexts).
+    List,
+    /// Delete a SecretRef catalog row by name.
+    Delete { name: String },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +170,17 @@ async fn main() -> anyhow::Result<()> {
             TenantCmd::List => tenant::list().await,
             TenantCmd::Suspend { name } => tenant::suspend(name).await,
             TenantCmd::Terminate { name } => tenant::terminate(name).await,
+        },
+        Cmd::Secret { cmd } => match cmd {
+            SecretCmd::Create { name, backend, key } => {
+                let key = key.unwrap_or_else(|| name.clone());
+                secret::create(name, backend, key).await
+            }
+            SecretCmd::Put { name, value, register } => {
+                secret::put(name, value, register).await
+            }
+            SecretCmd::List => secret::list().await,
+            SecretCmd::Delete { name } => secret::delete(name).await,
         },
     }
 }
@@ -418,9 +459,17 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
         .get_connection(ctx, pipeline.source_conn_id)
         .await?
         .with_context(|| format!("source connection {} not found", pipeline.source_conn_id))?;
-    let source_connection: ConnectionConfig =
+    let source_connection_raw: ConnectionConfig =
         serde_json::from_value(source_conn_row.config.clone())
             .context("source connections.config did not deserialize as ConnectionConfig")?;
+    let secrets = worker::secrets::DispatchSecrets {
+        env: worker::secrets::env::EnvSecrets,
+        file: worker::secrets::file::FileSecrets::new(),
+    };
+    let source_connection =
+        worker::secrets::resolve_connection(&secrets, &source_connection_raw)
+            .await
+            .context("resolving source connection secret")?;
 
     let connector_ref = source_conn_row.connector_ref.clone();
 
@@ -503,7 +552,7 @@ async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
             pipeline_id: pipeline_id.as_uuid(),
             tenant_id: pipeline.tenant_id.as_uuid(),
             spec: spec.clone(),
-            source_url: source_connection.url.clone(),
+            source_url: source_connection.expect_url().to_owned(),
             max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
                 .ok()
                 .and_then(|s| s.parse().ok())

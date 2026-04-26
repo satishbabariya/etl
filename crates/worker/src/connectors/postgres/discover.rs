@@ -13,7 +13,7 @@ pub async fn run(
 ) -> anyhow::Result<SchemaRef> {
     let pool = PgPoolOptions::new()
         .max_connections(2)
-        .connect(&conn.url)
+        .connect(conn.expect_url())
         .await
         .with_context(|| format!("connecting to source for discover: {}", spec.table))?;
 
@@ -72,7 +72,7 @@ mod tests {
     #[ignore = "requires dockerized etl_source_demo with seeded customers table"]
     async fn discover_customers() {
         let schema = run(
-            &ConnectionConfig { url: test_url() },
+            &ConnectionConfig::from_url(test_url()),
             &PostgresSourceSpec {
                 schema: "public".into(),
                 table: "customers".into(),

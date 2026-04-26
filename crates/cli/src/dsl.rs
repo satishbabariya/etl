@@ -73,7 +73,7 @@ pub async fn apply(
 ) -> anyhow::Result<ApplyReport> {
     let mut report = ApplyReport::default();
     let ctx = catalog::TenantContext::new(tenant_id);
-    catalog.ensure_default_workspace(ctx).await?;
+    catalog.ensure_default_workspace(ctx.clone()).await?;
 
     let mut connections: HashMap<String, ConnectionSpec> = HashMap::new();
     let mut pipelines: HashMap<String, (Metadata, PipelineDslSpec)> = HashMap::new();
@@ -96,7 +96,10 @@ pub async fn apply(
     }
 
     let mut conn_name_to_id = HashMap::new();
-    for (name, spec) in &connections {
+    for (name, spec) in &mut connections {
+        resolve_url_secret(catalog, &ctx, &mut spec.config)
+            .await
+            .with_context(|| format!("resolving url_secret for connection '{name}'"))?;
         let (id, action) = upsert_connection(catalog, tenant_id, name, spec).await?;
         conn_name_to_id.insert(name.clone(), id);
         match action {
@@ -322,6 +325,35 @@ pub async fn diff(
         }
     }
     Ok(out)
+}
+
+/// If a connection config has `url_secret: <name>` (string form), look
+/// the name up in the catalog and rewrite the field to a full SecretRef
+/// JSON object. Idempotent: if `url_secret` is already an object or
+/// missing, do nothing.
+async fn resolve_url_secret(
+    catalog: &Catalog,
+    ctx: &catalog::TenantContext,
+    config: &mut serde_json::Value,
+) -> anyhow::Result<()> {
+    let obj = match config.as_object_mut() {
+        Some(o) => o,
+        None => return Ok(()),
+    };
+    let name = match obj.get("url_secret") {
+        Some(serde_json::Value::String(n)) => n.clone(),
+        _ => return Ok(()),
+    };
+    let row = catalog
+        .secret_get_by_name(ctx.clone(), &name)
+        .await
+        .context("secret_get_by_name")?
+        .ok_or_else(|| anyhow::anyhow!("url_secret '{}' not registered — run 'platform secret create' first", name))?;
+    obj.insert(
+        "url_secret".to_string(),
+        serde_json::to_value(catalog::secret::to_ref(&row))?,
+    );
+    Ok(())
 }
 
 fn diff_json_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {

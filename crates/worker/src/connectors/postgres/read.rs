@@ -22,7 +22,7 @@ pub async fn run(
 
     let pool = PgPoolOptions::new()
         .max_connections(2)
-        .connect(&conn.url)
+        .connect(conn.expect_url())
         .await
         .context("connecting to source for read_batch")?;
 
@@ -218,7 +218,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires dockerized etl_source_demo with seeded customers table"]
     async fn fresh_read_returns_first_batch_sorted() {
-        let conn = ConnectionConfig { url: test_url() };
+        let conn = ConnectionConfig::from_url(test_url());
         let out = run(&conn, &spec(), None, 3).await.unwrap();
         assert_eq!(out.batch.num_rows(), 3);
         assert!(!out.is_final);
@@ -228,7 +228,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires dockerized etl_source_demo with seeded customers table"]
     async fn cursor_advance_reads_subsequent_rows() {
-        let conn = ConnectionConfig { url: test_url() };
+        let conn = ConnectionConfig::from_url(test_url());
         let first = run(&conn, &spec(), None, 3).await.unwrap();
         let second = run(&conn, &spec(), first.new_cursor.clone(), 3).await.unwrap();
         assert_eq!(second.batch.num_rows(), 3);
@@ -245,7 +245,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires dockerized etl_source_demo with seeded customers table"]
     async fn is_final_when_batch_smaller_than_requested() {
-        let conn = ConnectionConfig { url: test_url() };
+        let conn = ConnectionConfig::from_url(test_url());
         let out = run(&conn, &spec(), None, 100).await.unwrap();
         assert_eq!(out.batch.num_rows(), 10);
         assert!(out.is_final);

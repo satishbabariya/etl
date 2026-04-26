@@ -6,6 +6,7 @@ pub mod loaders;
 pub mod metrics;
 pub mod observability;
 pub mod schema_evolution;
+pub mod secrets;
 pub mod temporal;
 pub mod transform;
 pub mod wasm_runtime;

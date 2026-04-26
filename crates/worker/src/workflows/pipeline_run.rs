@@ -175,7 +175,7 @@ impl PipelineRunWorkflow {
             SyncActivities::discover_stream,
             DiscoverInput {
                 source: spec.source.clone(),
-                source_url: conn.url.clone(),
+                source_url: conn.expect_url().to_owned(),
                 connector_ref: connector_ref.clone(),
                 tenant_id,
                 stream_name: stream_name.clone(),
@@ -205,7 +205,7 @@ impl PipelineRunWorkflow {
                     SyncActivities::read_batch,
                     ReadBatchInput {
                         source: spec.source.clone(),
-                        source_url: conn.url.clone(),
+                        source_url: conn.expect_url().to_owned(),
                         cursor,
                         batch_size: spec.batch_size,
                         connector_ref: connector_ref.clone(),

@@ -27,6 +27,7 @@ pub struct SyncActivities {
     pub catalog: Arc<Catalog>,
     pub wasm_runtime: Arc<WasmSourceRuntime>,
     pub scalar_runtime: Arc<WasmScalarRuntime>,
+    pub secrets: Arc<dyn crate::secrets::Secrets>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {
@@ -70,7 +71,7 @@ impl SyncActivities {
                 .map_err(to_retryable)?;
         let discovered_schema = connector
             .discover(
-                &ConnectionConfig { url: input.source_url.clone() },
+                &ConnectionConfig::from_url(input.source_url.clone()),
                 &input.source,
             )
             .await
@@ -139,7 +140,7 @@ impl SyncActivities {
                 .map_err(to_retryable)?;
         let outcome = connector
             .read_batch(
-                &ConnectionConfig { url: input.source_url },
+                &ConnectionConfig::from_url(input.source_url),
                 &input.source,
                 input.cursor,
                 input.batch_size,

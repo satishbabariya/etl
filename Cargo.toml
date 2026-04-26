@@ -73,6 +73,9 @@ metrics = "0.23"
 metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
 axum = "0.7"
 
+# Secrets (Phase II.2.a — RFC-11)
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }
