@@ -16,8 +16,14 @@ async fn open_admin() -> Result<(Catalog, TenantContext)> {
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let cat = Catalog::connect(&url).await?;
     cat.migrate().await?;
-    let tid = crate::ensure_dev_tenant(&cat).await?;
-    Ok((cat, TenantContext::new(tid)))
+    crate::auth::ensure_bypass_tenant(&cat).await?;
+    let ctx = crate::auth::resolve_context(&cat, None).await?;
+    Ok((cat, ctx))
+}
+
+fn require(action: common_types::auth::Action) -> Result<()> {
+    let p = crate::auth::current_principal()?;
+    crate::auth::require_role(&p, action)
 }
 
 fn parse_backend(s: &str) -> Result<SecretBackendKind> {
@@ -29,6 +35,7 @@ fn parse_backend(s: &str) -> Result<SecretBackendKind> {
 }
 
 pub async fn create(name: String, backend: String, key: String) -> Result<()> {
+    require(common_types::auth::Action::Write)?;
     let (cat, ctx) = open_admin().await?;
     let backend_kind = parse_backend(&backend)?;
     let id = cat
@@ -48,6 +55,7 @@ pub async fn create(name: String, backend: String, key: String) -> Result<()> {
 }
 
 pub async fn put(name: String, value: String, register: bool) -> Result<()> {
+    require(common_types::auth::Action::Write)?;
     let file = FileSecrets::new();
     file.put(&name, &value)?;
     println!("wrote secret '{}' to file backend", name);
@@ -75,6 +83,7 @@ pub async fn put(name: String, value: String, register: bool) -> Result<()> {
 }
 
 pub async fn list() -> Result<()> {
+    require(common_types::auth::Action::Read)?;
     let (cat, ctx) = open_admin().await?;
     let rows = cat.secret_list(ctx).await?;
     if rows.is_empty() {
@@ -92,6 +101,7 @@ pub async fn list() -> Result<()> {
 }
 
 pub async fn delete(name: String) -> Result<()> {
+    require(common_types::auth::Action::Write)?;
     let (cat, ctx) = open_admin().await?;
     let row = cat
         .secret_get_by_name(ctx.clone(), &name)

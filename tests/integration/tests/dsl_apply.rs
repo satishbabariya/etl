@@ -34,6 +34,7 @@ async fn apply_is_idempotent() -> anyhow::Result<()> {
     let out1 = Command::new(cargo_bin("platform"))
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
@@ -51,6 +52,7 @@ async fn apply_is_idempotent() -> anyhow::Result<()> {
     let out2 = Command::new(cargo_bin("platform"))
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
@@ -64,6 +66,7 @@ async fn apply_is_idempotent() -> anyhow::Result<()> {
     let out3 = Command::new(cargo_bin("platform"))
         .args(["diff", "-f", "examples/dsl/customers-sync.yaml"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;

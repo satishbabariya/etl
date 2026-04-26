@@ -19,6 +19,10 @@ use worker::workflows::{PipelineRunInput, PipelineRunWorkflow};
 #[derive(Parser)]
 #[command(name = "platform", version, about = "ETL platform CLI")]
 struct Cli {
+    /// Override tenant for this call (admin only).
+    #[arg(long, global = true)]
+    tenant: Option<String>,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -182,26 +186,39 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let cli = Cli::parse();
+    let tenant_override = cli.tenant.clone();
     match cli.cmd {
-        Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => pipeline_run(id).await,
+        Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => {
+            pipeline_run(id, tenant_override.as_deref()).await
+        }
         Cmd::Pipeline { cmd: PipelineCmd::Status { id } } => status::run(id).await,
         Cmd::Connector {
             cmd: ConnectorCmd::Build { path, name, version, out, kind },
         } => connector_build(path, name, version, out, kind).await,
-        Cmd::Apply { file } => apply_cmd(file).await,
-        Cmd::Get { kind, name } => get_cmd(kind, name).await,
+        Cmd::Apply { file } => apply_cmd(file, tenant_override.as_deref()).await,
+        Cmd::Get { kind, name } => get_cmd(kind, name, tenant_override.as_deref()).await,
         Cmd::Validate { file } => validate_cmd(file).await,
-        Cmd::Diff { file } => diff_cmd(file).await,
+        Cmd::Diff { file } => diff_cmd(file, tenant_override.as_deref()).await,
         Cmd::Workflow { cmd: WorkflowCmd::Terminate { workflow_id, reason } } => {
             terminate::terminate(workflow_id, reason).await
         }
-        Cmd::Tenant { cmd } => match cmd {
-            TenantCmd::Create { name } => tenant::create(name).await,
-            TenantCmd::List => tenant::list().await,
-            TenantCmd::Suspend { name } => tenant::suspend(name).await,
-            TenantCmd::Resume { name } => tenant::resume(name).await,
-            TenantCmd::Terminate { name } => tenant::terminate(name).await,
-        },
+        Cmd::Tenant { cmd } => {
+            // Tenant subcommands need Admin role except `list`.
+            let p = auth::current_principal()?;
+            match &cmd {
+                TenantCmd::List => {
+                    auth::require_role(&p, common_types::auth::Action::Read)?;
+                }
+                _ => auth::require_role(&p, common_types::auth::Action::Admin)?,
+            }
+            match cmd {
+                TenantCmd::Create { name } => tenant::create(name).await,
+                TenantCmd::List => tenant::list().await,
+                TenantCmd::Suspend { name } => tenant::suspend(name).await,
+                TenantCmd::Resume { name } => tenant::resume(name).await,
+                TenantCmd::Terminate { name } => tenant::terminate(name).await,
+            }
+        }
         Cmd::Secret { cmd } => match cmd {
             SecretCmd::Create { name, backend, key } => {
                 let key = key.unwrap_or_else(|| name.clone());
@@ -223,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn apply_cmd(file: String) -> anyhow::Result<()> {
+async fn apply_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
     let path = std::path::PathBuf::from(&file);
     let files = dsl::load_path(&path)?;
 
@@ -231,8 +248,11 @@ async fn apply_cmd(file: String) -> anyhow::Result<()> {
     let catalog = Catalog::connect(&db_url).await?;
     catalog.migrate().await?;
 
-    let tenant_id = ensure_dev_tenant(&catalog).await?;
-    let report = dsl::apply(&catalog, tenant_id, &files).await?;
+    auth::ensure_bypass_tenant(&catalog).await?;
+    let p = auth::current_principal()?;
+    auth::require_role(&p, common_types::auth::Action::Write)?;
+    let ctx = auth::resolve_context(&catalog, tenant_override).await?;
+    let report = dsl::apply(&catalog, ctx.tenant_id, &files).await?;
 
     println!(
         "applied:\n  connections: {} created, {} updated, {} unchanged\n  pipelines:   {} created, {} updated, {} unchanged",
@@ -282,10 +302,15 @@ async fn validate_cmd(file: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn get_cmd(kind: String, name: String) -> anyhow::Result<()> {
+async fn get_cmd(kind: String, name: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
-    let tenant_id = ensure_dev_tenant(&catalog).await?;
+    catalog.migrate().await?;
+    auth::ensure_bypass_tenant(&catalog).await?;
+    let p = auth::current_principal()?;
+    auth::require_role(&p, common_types::auth::Action::Read)?;
+    let ctx = auth::resolve_context(&catalog, tenant_override).await?;
+    let tenant_id = ctx.tenant_id;
 
     match kind.as_str() {
         "connection" => {
@@ -353,14 +378,17 @@ async fn get_cmd(kind: String, name: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn diff_cmd(file: String) -> anyhow::Result<()> {
+async fn diff_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
     let path = std::path::PathBuf::from(&file);
     let files = dsl::load_path(&path)?;
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
     catalog.migrate().await?;
-    let tenant_id = ensure_dev_tenant(&catalog).await?;
-    let rows = dsl::diff(&catalog, tenant_id, &files).await?;
+    auth::ensure_bypass_tenant(&catalog).await?;
+    let p = auth::current_principal()?;
+    auth::require_role(&p, common_types::auth::Action::Read)?;
+    let ctx = auth::resolve_context(&catalog, tenant_override).await?;
+    let rows = dsl::diff(&catalog, ctx.tenant_id, &files).await?;
     for row in rows {
         match row {
             dsl::DiffRow::Create { kind, name } => println!("+ {kind:?}/{name}"),
@@ -373,20 +401,8 @@ async fn diff_cmd(file: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn ensure_dev_tenant(catalog: &Catalog) -> anyhow::Result<common_types::ids::TenantId> {
-    const DEV_TENANT_UUID: &str = "11111111-1111-1111-1111-111111111111";
-    let uuid = uuid::Uuid::parse_str(DEV_TENANT_UUID)?;
-    let tid = common_types::ids::TenantId::from_uuid_unchecked(uuid);
-    if catalog.get_tenant(tid).await?.is_none() {
-        sqlx::query(
-            "INSERT INTO tenants (tenant_id, name) VALUES ($1, 'dev') ON CONFLICT DO NOTHING",
-        )
-        .bind(uuid)
-        .execute(catalog.pool())
-        .await?;
-    }
-    Ok(tid)
-}
+// ensure_dev_tenant deleted in Phase II.2.b — replaced by
+// auth::resolve_context + auth::ensure_bypass_tenant.
 
 async fn connector_build(
     path: String,
@@ -476,13 +492,18 @@ fn read_toml_value(text: &str, key: &str) -> Option<String> {
     None
 }
 
-async fn pipeline_run(id_str: String) -> anyhow::Result<()> {
+async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
     let pipeline_id = parse_pipeline_id(&id_str)
         .with_context(|| format!("parsing pipeline id '{}'", id_str))?;
 
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
     catalog.migrate().await?;
+
+    auth::ensure_bypass_tenant(&catalog).await?;
+    let p = auth::current_principal()?;
+    auth::require_role(&p, common_types::auth::Action::Run)?;
+    let _auth_ctx = auth::resolve_context(&catalog, tenant_override).await?;
 
     let pipeline = catalog
         .get_pipeline_admin(pipeline_id)

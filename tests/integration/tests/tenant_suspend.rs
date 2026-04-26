@@ -35,6 +35,7 @@ async fn suspended_tenant_cannot_run_pipeline() -> anyhow::Result<()> {
     let apply = Command::new(cargo_bin("platform"))
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
@@ -47,6 +48,7 @@ async fn suspended_tenant_cannot_run_pipeline() -> anyhow::Result<()> {
     let suspend = Command::new(cargo_bin("platform"))
         .args(["tenant", "suspend", "dev"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
@@ -65,6 +67,7 @@ async fn suspended_tenant_cannot_run_pipeline() -> anyhow::Result<()> {
     let run = Command::new(cargo_bin("platform"))
         .args(["pipeline", "run", &pid])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
@@ -78,6 +81,7 @@ async fn suspended_tenant_cannot_run_pipeline() -> anyhow::Result<()> {
     let resume = Command::new(cargo_bin("platform"))
         .args(["tenant", "resume", "dev"])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
