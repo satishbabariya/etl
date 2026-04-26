@@ -72,6 +72,26 @@ impl Catalog {
         sqlx::query(&format!("SET LOCAL app.tenant_id = {lit}"))
             .execute(&mut *tx)
             .await?;
+        if let Some(c) = ctx {
+            if let Some(pid) = c.principal_id {
+                sqlx::query(&format!(
+                    "SET LOCAL app.principal_id = '{}'",
+                    pid.as_uuid()
+                ))
+                .execute(&mut *tx)
+                .await?;
+            }
+            if let Some(role) = c.role {
+                let token = match role {
+                    common_types::auth::Role::Admin => "admin",
+                    common_types::auth::Role::Operator => "operator",
+                    common_types::auth::Role::Viewer => "viewer",
+                };
+                sqlx::query(&format!("SET LOCAL app.role = '{token}'"))
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         Ok(tx)
     }
 
