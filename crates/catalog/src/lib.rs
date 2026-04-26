@@ -441,6 +441,16 @@ impl Catalog {
         principal::get_by_name(&mut conn, name).await
     }
 
+    /// Used by the issuer's refresh endpoint: re-load a principal by id
+    /// to recover the role for a new access token.
+    pub async fn principal_get_by_id(
+        &self,
+        id: common_types::ids::PrincipalId,
+    ) -> sqlx::Result<Option<(principal::Principal, String)>> {
+        let mut conn = self.pool.acquire().await?;
+        principal::get_by_id(&mut conn, id).await
+    }
+
     // Refresh tokens
     pub async fn refresh_create(
         &self,

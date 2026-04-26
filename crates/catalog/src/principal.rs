@@ -85,6 +85,32 @@ pub async fn get_by_name(
     }))
 }
 
+pub async fn get_by_id(
+    conn: &mut sqlx::PgConnection,
+    id: PrincipalId,
+) -> sqlx::Result<Option<(Principal, String)>> {
+    let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, DateTime<Utc>)> =
+        sqlx::query_as(
+            "SELECT principal_id, tenant_id, name, password_hash, role, created_at \
+             FROM principals WHERE principal_id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&mut *conn)
+        .await?;
+    Ok(row.map(|(pid, tid, n, hash, role, ts)| {
+        (
+            Principal {
+                principal_id: PrincipalId::from_uuid_unchecked(pid),
+                tenant_id: TenantId::from_uuid_unchecked(tid),
+                name: n,
+                role,
+                created_at: ts,
+            },
+            hash,
+        )
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
