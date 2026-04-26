@@ -150,6 +150,7 @@ fn parse_action(s: &str) -> Option<AuditEvent> {
         "AUTH_LOGOUT" => AuditEvent::AuthLogout,
         "TOKEN_REVOKE" => AuditEvent::TokenRevoke,
         "TENANT_OVERRIDE" => AuditEvent::TenantOverride,
+        "AUDIT_CHAIN_BREAK" => AuditEvent::AuditChainBreak,
         _ => return None,
     })
 }
