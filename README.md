@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.4 — productionization (complete)** on top of Phase II.2.d. Next: **Phase II.5 — external chain anchor + KMS-backed master key**.
+Currently: **Phase II.2.e — production hardening (complete)** on top of Phase II.2.d. Real **Phase II.3 — More connectors & destinations via SDK** (Stripe, MySQL CDC, Snowflake/BigQuery/Postgres loaders) is the next milestone. **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI) come after.
 
 ## Auth (Phase II.2.b + II.2.c)
 
@@ -171,7 +171,9 @@ cargo run --bin platform -- tenant resume acme
 | Operator | yes  | yes | yes   | no    |
 | Viewer   | yes  | no  | no    | no    |
 
-## Productionization (Phase II.4)
+## Production hardening (Phase II.2.e)
+
+> Originally labeled "Phase II.4" — corrected because per the roadmap II.4 is Helm/Terraform/`platform install` packaging. What's below is prerequisite hardening that fits between II.2.d (audit) and the real II.3 (connector SDK).
 
 **Sealed issuer keys.** Set `ETL_MASTER_KEY` (32-byte hex) and `etl-auth init-issuer` writes `private.enc` (XChaCha20-Poly1305 envelope) instead of `private.pem`. Upgrade an existing keystore with `etl-auth seal-keys --confirm`.
 

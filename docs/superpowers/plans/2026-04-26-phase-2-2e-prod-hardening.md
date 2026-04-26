@@ -1,4 +1,4 @@
-# Phase II.4 — Productionization Implementation Plan
+# Phase II.2.e — Production Hardening Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1929,9 +1929,9 @@ etl-auth serve              # decrypts to memory on boot
 ```markdown
 ---
 
-## Phase II.4 Completion Log
+## Phase II.2.e Completion Log
 
-Completed 2026-04-26 on branch `phase-2-4-prod`.
+Completed 2026-04-26 on branch `phase-2-4-prod` (renamed retroactively to II.2.e).
 
 - [x] T1  — Workspace deps + sealed.rs (XChaCha20-Poly1305 envelope)
 - [x] T2  — Keystore writes private.enc when master key is set
