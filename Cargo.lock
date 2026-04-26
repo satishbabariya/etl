@@ -2526,10 +2526,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "auth",
+ "base64 0.22.1",
  "catalog",
  "common-types",
  "dirs 5.0.1",
  "parquet",
+ "reqwest",
  "serde_json",
  "sqlx",
  "tempfile",
