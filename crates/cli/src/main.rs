@@ -261,7 +261,7 @@ async fn apply_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Resul
     auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Write)?;
     let ctx = auth::resolve_context(&catalog, tenant_override).await?;
-    let report = dsl::apply(&catalog, ctx.tenant_id, &files).await?;
+    let report = dsl::apply(&catalog, ctx.tenant_id, &files, &p).await?;
 
     println!(
         "applied:\n  connections: {} created, {} updated, {} unchanged\n  pipelines:   {} created, {} updated, {} unchanged",

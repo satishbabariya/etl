@@ -53,6 +53,18 @@ pub async fn create(name: String, backend: String, key: String) -> Result<()> {
         )
         .await
         .context("inserting secret row")?;
+    let p = crate::auth::current_principal()?;
+    let (pid, jti) = crate::auditlog::principal_into(&p);
+    crate::auditlog::record(
+        &cat,
+        Some(ctx.tenant_id),
+        pid,
+        jti,
+        audit::AuditEvent::SecretCreate,
+        Some(name.clone()),
+        serde_json::json!({"backend": backend, "secret_id": id.to_string()}),
+    )
+    .await;
     println!("created secret {} ({}) backend={}", name, id, backend);
     Ok(())
 }
@@ -77,6 +89,18 @@ pub async fn put(name: String, value: String, register: bool) -> Result<()> {
             )
             .await
             .context("inserting secret row")?;
+            let p = crate::auth::current_principal()?;
+            let (pid, jti) = crate::auditlog::principal_into(&p);
+            crate::auditlog::record(
+                &cat,
+                Some(ctx.tenant_id),
+                pid,
+                jti,
+                audit::AuditEvent::SecretCreate,
+                Some(name.clone()),
+                serde_json::json!({"backend": "file", "via": "put --register"}),
+            )
+            .await;
             println!("registered catalog row for '{}' (backend=file, key={})", name, name);
         } else {
             println!("catalog row for '{}' already exists — skipped", name);
@@ -111,7 +135,20 @@ pub async fn delete(name: String) -> Result<()> {
         .secret_get_by_name(ctx.clone(), &name)
         .await?
         .ok_or_else(|| anyhow::anyhow!("secret '{}' not found", name))?;
-    cat.secret_delete(ctx, row.secret_id).await?;
-    println!("deleted secret '{}' ({})", name, row.secret_id);
+    let secret_id = row.secret_id;
+    cat.secret_delete(ctx.clone(), secret_id).await?;
+    let p = crate::auth::current_principal()?;
+    let (pid, jti) = crate::auditlog::principal_into(&p);
+    crate::auditlog::record(
+        &cat,
+        Some(ctx.tenant_id),
+        pid,
+        jti,
+        audit::AuditEvent::SecretDelete,
+        Some(name.clone()),
+        serde_json::json!({"secret_id": secret_id.to_string()}),
+    )
+    .await;
+    println!("deleted secret '{}' ({})", name, secret_id);
     Ok(())
 }

@@ -16,6 +16,18 @@ pub async fn create(name: String) -> anyhow::Result<()> {
     let admin = Catalog::connect(&url).await?;
     let id = admin.create_tenant(&name).await?;
     println!("created tenant {} ({})", name, id);
+    let p = crate::auth::current_principal()?;
+    let (pid, jti) = crate::auditlog::principal_into(&p);
+    crate::auditlog::record(
+        &admin,
+        Some(id),
+        pid,
+        jti,
+        audit::AuditEvent::TenantCreate,
+        Some(name.clone()),
+        serde_json::json!({"created_by_admin": true}),
+    )
+    .await;
     register_temporal_namespace(&id).await?;
     Ok(())
 }
@@ -42,6 +54,18 @@ pub async fn suspend(name: String) -> anyhow::Result<()> {
         println!("tenant {} unchanged", name);
     } else {
         println!("suspended tenant {} ({})", name, t.tenant_id);
+        let p = crate::auth::current_principal()?;
+        let (pid, jti) = crate::auditlog::principal_into(&p);
+        crate::auditlog::record(
+            &admin,
+            Some(t.tenant_id),
+            pid,
+            jti,
+            audit::AuditEvent::TenantSuspend,
+            Some(name.clone()),
+            serde_json::json!({}),
+        )
+        .await;
     }
     Ok(())
 }
@@ -55,6 +79,18 @@ pub async fn resume(name: String) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("tenant {} not found", name))?;
     admin.tenant_set_status(t.tenant_id, "active").await?;
     println!("resumed tenant {} ({})", name, t.tenant_id);
+    let p = crate::auth::current_principal()?;
+    let (pid, jti) = crate::auditlog::principal_into(&p);
+    crate::auditlog::record(
+        &admin,
+        Some(t.tenant_id),
+        pid,
+        jti,
+        audit::AuditEvent::TenantResume,
+        Some(name.clone()),
+        serde_json::json!({}),
+    )
+    .await;
     Ok(())
 }
 
