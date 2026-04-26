@@ -208,12 +208,12 @@ async fn main() -> anyhow::Result<()> {
             terminate::terminate(workflow_id, reason).await
         }
         Cmd::Tenant { cmd } => {
-            // Tenant subcommands need Admin role except `list`.
+            // Tenant subcommands need Admin role except `list`. Revocation
+            // check happens inside each tenant::* function via the catalog
+            // it already opens.
             let p = auth::current_principal()?;
             match &cmd {
-                TenantCmd::List => {
-                    auth::require_role(&p, common_types::auth::Action::Read)?;
-                }
+                TenantCmd::List => auth::require_role(&p, common_types::auth::Action::Read)?,
                 _ => auth::require_role(&p, common_types::auth::Action::Admin)?,
             }
             match cmd {
@@ -257,6 +257,7 @@ async fn apply_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Resul
 
     auth::ensure_bypass_tenant(&catalog).await?;
     let p = auth::current_principal()?;
+    auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Write)?;
     let ctx = auth::resolve_context(&catalog, tenant_override).await?;
     let report = dsl::apply(&catalog, ctx.tenant_id, &files).await?;
@@ -315,6 +316,7 @@ async fn get_cmd(kind: String, name: String, tenant_override: Option<&str>) -> a
     catalog.migrate().await?;
     auth::ensure_bypass_tenant(&catalog).await?;
     let p = auth::current_principal()?;
+    auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Read)?;
     let ctx = auth::resolve_context(&catalog, tenant_override).await?;
     let tenant_id = ctx.tenant_id;
@@ -393,6 +395,7 @@ async fn diff_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Result
     catalog.migrate().await?;
     auth::ensure_bypass_tenant(&catalog).await?;
     let p = auth::current_principal()?;
+    auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Read)?;
     let ctx = auth::resolve_context(&catalog, tenant_override).await?;
     let rows = dsl::diff(&catalog, ctx.tenant_id, &files).await?;
@@ -509,6 +512,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
 
     auth::ensure_bypass_tenant(&catalog).await?;
     let p = auth::current_principal()?;
+    auth::assert_not_revoked(&catalog, &p).await?;
     auth::require_role(&p, common_types::auth::Action::Run)?;
     let _auth_ctx = auth::resolve_context(&catalog, tenant_override).await?;
 

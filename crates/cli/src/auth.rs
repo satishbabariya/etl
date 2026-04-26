@@ -254,3 +254,19 @@ pub async fn ensure_bypass_tenant(cat: &Catalog) -> anyhow::Result<()> {
     .await?;
     Ok(())
 }
+
+/// When ETL_AUTH_REVOCATION_CHECK=1 is set, check the principal's jti
+/// against the revoked_tokens table and refuse if revoked. The bypass
+/// principal carries jti = nil and is exempt.
+pub async fn assert_not_revoked(catalog: &Catalog, p: &Principal) -> Result<()> {
+    if std::env::var("ETL_AUTH_REVOCATION_CHECK").ok().as_deref() != Some("1") {
+        return Ok(());
+    }
+    if p.jti.is_nil() {
+        return Ok(());
+    }
+    if catalog.revoke_is_revoked(p.jti).await? {
+        anyhow::bail!("access token revoked (jti {})", p.jti);
+    }
+    Ok(())
+}
