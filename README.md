@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.2.e — production hardening (complete)** on top of Phase II.2.d. Real **Phase II.3 — More connectors & destinations via SDK** (Stripe, MySQL CDC, Snowflake/BigQuery/Postgres loaders) is the next milestone. **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI) come after.
+Currently: **Phase II.3.a — Connector SDK + authoring CLI (complete)** on top of Phase II.2.e. Phase II.3.b (TypeScript SDK via jco) and II.3.c+ (Stripe, MySQL CDC, Snowflake/BigQuery/Postgres loaders) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 
@@ -170,6 +170,22 @@ cargo run --bin platform -- tenant resume acme
 | Admin    | yes  | yes | yes   | yes   |
 | Operator | yes  | yes | yes   | no    |
 | Viewer   | yes  | no  | no    | no    |
+
+## Connector SDK (Phase II.3.a)
+
+Build a custom source connector in 5 steps:
+
+```bash
+platform connector create my-source
+cd my-source
+# edit src/lib.rs to implement discover() and read_batch()
+platform connector test .
+platform connector publish . --registry ./connectors
+```
+
+`platform connector test` runs `cargo build --release --target wasm32-wasip2` plus `cargo test`. `publish` writes the precompiled `.cwasm` artifact and a `manifest.yaml` (sha256, version, kind) to the registry directory. The worker reads from `ETL_CONNECTORS_DIR` (default `./connectors`).
+
+See `docs/connector-sdk-guide.md` for the full authoring walkthrough. II.3.b adds the TypeScript SDK (jco). II.3.c+ ship the Stripe / MySQL CDC / Snowflake / BigQuery / Postgres connectors using this same SDK.
 
 ## Production hardening (Phase II.2.e)
 

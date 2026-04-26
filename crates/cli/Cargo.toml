@@ -30,6 +30,9 @@ tonic = "0.14"
 chrono = { workspace = true }
 auth = { workspace = true }
 audit = { workspace = true }
+connector-sdk = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 dirs = "5"
 base64 = "0.22"
 reqwest = { workspace = true }

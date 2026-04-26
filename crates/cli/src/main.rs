@@ -2,6 +2,7 @@ mod audit_cmd;
 mod auditlog;
 mod auth;
 mod auth_client;
+mod connector_cmd;
 mod dsl;
 mod secret;
 mod status;
@@ -190,6 +191,29 @@ enum PipelineCmd {
 
 #[derive(Subcommand)]
 enum ConnectorCmd {
+    /// Scaffold a new connector crate from the SDK template.
+    Create {
+        /// Connector name (cargo crate name + registry id).
+        name: String,
+        /// Connector kind: 'source' (II.3.a). 'scalar'/'destination' deferred.
+        #[arg(long, default_value = "source")]
+        kind: String,
+        /// Parent directory; default = current working directory.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Build (wasm32-wasip2) and run host-side unit tests for a connector crate.
+    Test {
+        path: String,
+    },
+    /// Build the connector and write to a local registry directory.
+    Publish {
+        path: String,
+        #[arg(long, default_value = "./connectors")]
+        registry: String,
+        #[arg(long)]
+        version: Option<String>,
+    },
     /// Compile a guest Rust crate to a precompiled .cwasm artifact.
     Build {
         path: String,
@@ -220,9 +244,18 @@ async fn main() -> anyhow::Result<()> {
             pipeline_run(id, tenant_override.as_deref()).await
         }
         Cmd::Pipeline { cmd: PipelineCmd::Status { id } } => status::run(id).await,
-        Cmd::Connector {
-            cmd: ConnectorCmd::Build { path, name, version, out, kind },
-        } => connector_build(path, name, version, out, kind).await,
+        Cmd::Connector { cmd } => match cmd {
+            ConnectorCmd::Create { name, kind, out } => {
+                connector_cmd::create(name, kind, out).await
+            }
+            ConnectorCmd::Test { path } => connector_cmd::test(path).await,
+            ConnectorCmd::Publish { path, registry, version } => {
+                connector_cmd::publish(path, registry, version).await
+            }
+            ConnectorCmd::Build { path, name, version, out, kind } => {
+                connector_cmd::build(path, name, version, out, kind).await
+            }
+        },
         Cmd::Apply { file } => apply_cmd(file, tenant_override.as_deref()).await,
         Cmd::Get { kind, name } => get_cmd(kind, name, tenant_override.as_deref()).await,
         Cmd::Validate { file } => validate_cmd(file).await,
@@ -444,93 +477,7 @@ async fn diff_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Result
 // ensure_dev_tenant deleted in Phase II.2.b — replaced by
 // auth::resolve_context + auth::ensure_bypass_tenant.
 
-async fn connector_build(
-    path: String,
-    name: Option<String>,
-    version: Option<String>,
-    out: String,
-    kind: String,
-) -> anyhow::Result<()> {
-    use std::path::PathBuf;
-    use std::process::Command as StdCommand;
-
-    let crate_dir = PathBuf::from(&path);
-    let cargo_toml = crate_dir.join("Cargo.toml");
-    if !cargo_toml.exists() {
-        anyhow::bail!("no Cargo.toml at {}", cargo_toml.display());
-    }
-
-    let toml_text = std::fs::read_to_string(&cargo_toml)?;
-    let pkg_name = name.unwrap_or_else(|| {
-        read_toml_value(&toml_text, "name").unwrap_or_else(|| "connector".into())
-    });
-    let pkg_version = version.unwrap_or_else(|| {
-        read_toml_value(&toml_text, "version").unwrap_or_else(|| "0.1.0".into())
-    });
-
-    let status = StdCommand::new("cargo")
-        .current_dir(&crate_dir)
-        .args(["build", "--release"])
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("guest build failed");
-    }
-
-    let wasm_name = format!("{}.wasm", pkg_name.replace('-', "_"));
-    let wasm_path = crate_dir
-        .join("target")
-        .join("wasm32-wasip2")
-        .join("release")
-        .join(&wasm_name);
-    if !wasm_path.exists() {
-        anyhow::bail!(
-            "expected artifact not found at {} — check the crate's [lib] crate-type and package name",
-            wasm_path.display()
-        );
-    }
-
-    let out_dir = PathBuf::from(&out);
-    let target_name = format!("{}@{}", pkg_name, pkg_version);
-
-    let out_path = match kind.as_str() {
-        "source" => {
-            let rt = worker::wasm_runtime::WasmSourceRuntime::new(&out_dir)?;
-            let p = rt.artifact_path(&target_name);
-            rt.precompile_to(&wasm_path, &p)?;
-            p
-        }
-        "scalar" => {
-            let rt = worker::wasm_runtime::WasmScalarRuntime::new(&out_dir)?;
-            let p = rt.artifact_path(&target_name);
-            rt.precompile_to(&wasm_path, &p)?;
-            p
-        }
-        other => anyhow::bail!("unknown --kind: '{other}' (expected 'source' or 'scalar')"),
-    };
-
-    println!("built {} ({})", out_path.display(), kind);
-    Ok(())
-}
-
-fn read_toml_value(text: &str, key: &str) -> Option<String> {
-    let mut in_package = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_package = trimmed == "[package]";
-            continue;
-        }
-        if !in_package {
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix(&format!("{} = \"", key)) {
-            if let Some(end) = rest.find('"') {
-                return Some(rest[..end].to_string());
-            }
-        }
-    }
-    None
-}
+// connector_build + read_toml_value moved to crates/cli/src/connector_cmd.rs
 
 async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
     let pipeline_id = parse_pipeline_id(&id_str)

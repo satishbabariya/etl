@@ -11,3 +11,7 @@ arrow = { workspace = true }
 async-trait = { workspace = true }
 common-types = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
