@@ -31,6 +31,14 @@ enum Cmd {
     ShowJwks,
     /// Generate a new keypair, mark it active; old keys remain in JWKS for verification.
     RotateKey,
+    /// Encrypt every key in the keystore in place using ETL_MASTER_KEY.
+    /// Removes the plaintext files. Idempotent for already-sealed keys.
+    SealKeys {
+        /// Required confirmation flag — sealing is irreversible without
+        /// the master key.
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Run the issuer HTTP server (login + refresh + JWKS).
     Serve {
         #[arg(long, default_value = "0.0.0.0:8400")]
@@ -86,6 +94,16 @@ async fn main() -> Result<()> {
         Cmd::RotateKey => {
             let kid = ks.init()?;
             println!("rotated to new active kid {kid} (old keys retained for verification)");
+            Ok(())
+        }
+        Cmd::SealKeys { confirm } => {
+            if !confirm {
+                anyhow::bail!(
+                    "seal-keys is destructive (removes plaintext). Re-run with --confirm."
+                );
+            }
+            let n = ks.seal_in_place()?;
+            println!("sealed {n} keypair(s) under {}", ks.root().display());
             Ok(())
         }
         Cmd::Serve {
