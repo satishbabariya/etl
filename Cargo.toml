@@ -76,6 +76,11 @@ axum = "0.7"
 # Secrets (Phase II.2.a — RFC-11)
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
+# Auth (Phase II.2.b — RFC-12)
+jsonwebtoken = "9"
+argon2 = "0.5"
+vaultrs = "0.7"
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }

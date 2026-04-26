@@ -21,6 +21,8 @@ pub use connection::{Connection, NewConnection};
 pub use pipeline::{NewPipeline, Pipeline};
 pub use run::{NewRun, Run, RunStatus};
 pub use secret::NewSecret;
+pub mod principal;
+pub use principal::NewPrincipal;
 pub use tenant::Tenant;
 
 use common_types::ids::{
@@ -393,12 +395,35 @@ impl Catalog {
         Ok(())
     }
 
+    // Principals
+    pub async fn principal_create(
+        &self,
+        ctx: TenantContext,
+        new: NewPrincipal,
+    ) -> sqlx::Result<common_types::ids::PrincipalId> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let id = principal::create(&mut tx, new).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    /// Lookup is intentionally unscoped — a JWT login looks up by name
+    /// across all tenants and the principal's tenant_id is read from the
+    /// returned row. RLS isn't engaged here (admin path).
+    pub async fn principal_get_by_name(
+        &self,
+        name: &str,
+    ) -> sqlx::Result<Option<(principal::Principal, String)>> {
+        let mut conn = self.pool.acquire().await?;
+        principal::get_by_name(&mut conn, name).await
+    }
+
     /// Truncates every table. Intended for test cleanup only — admin only.
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;
