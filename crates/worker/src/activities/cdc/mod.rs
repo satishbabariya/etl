@@ -35,10 +35,14 @@ impl CdcActivities {
         let slot_name = format!("etl_{}", input.pipeline_id.as_simple());
         let pub_name = format!("etl_{}_pub", input.pipeline_id.as_simple());
         let qualified = format!("{}.{}", input.schema, input.table);
-        slot::ensure_publication(&input.source_url, &pub_name, &qualified)
+        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
             .await
             .map_err(retryable)?;
-        let r = slot::ensure_slot(&input.source_url, &slot_name)
+        let url = resolved.expect_url();
+        slot::ensure_publication(url, &pub_name, &qualified)
+            .await
+            .map_err(retryable)?;
+        let r = slot::ensure_slot(url, &slot_name)
             .await
             .map_err(retryable)?;
         let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
@@ -82,8 +86,11 @@ impl CdcActivities {
         // the pk_col and rely on the Parquet loader preserving _cdc.*.
         let cdc_schema =
             snapshot::cdc_schema_for(&[(input.pk_col.as_str(), DataType::Utf8)]);
+        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
+            .await
+            .map_err(retryable)?;
         let chunk = snapshot::read_chunk(
-            &input.source_url,
+            resolved.expect_url(),
             &input.schema,
             &input.table,
             &input.pk_col,
@@ -127,8 +134,11 @@ impl CdcActivities {
         input: ReadWindowInput,
     ) -> Result<ReadWindowOutput, ActivityError> {
         tracing::info!(slot = %input.slot_name, batch_seq = input.batch_seq, "cdc: read_window entering");
+        let resolved = crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn)
+            .await
+            .map_err(retryable)?;
         let out = stream::read_window(
-            &input.source_url,
+            resolved.expect_url(),
             &input.slot_name,
             &input.publication_name,
             input.start_lsn.as_deref(),
@@ -205,7 +215,11 @@ impl CdcActivities {
         _ctx: ActivityContext,
         input: ReleaseSlotInput,
     ) -> Result<(), ActivityError> {
-        let _ = slot::release_slot(&input.source_url, &input.slot_name).await;
+        if let Ok(resolved) =
+            crate::secrets::resolve_connection(self.secrets.as_ref(), &input.source_conn).await
+        {
+            let _ = slot::release_slot(resolved.expect_url(), &input.slot_name).await;
+        }
         Ok(())
     }
 }

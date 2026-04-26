@@ -618,7 +618,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
             pipeline_id: pipeline_id.as_uuid(),
             tenant_id: pipeline.tenant_id.as_uuid(),
             spec: spec.clone(),
-            source_url: source_connection.expect_url().to_owned(),
+            source_conn: source_connection.clone(),
             max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
                 .ok()
                 .and_then(|s| s.parse().ok())

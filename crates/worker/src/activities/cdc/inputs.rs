@@ -1,3 +1,4 @@
+use common_types::connection_config::ConnectionConfig;
 use common_types::pipeline_spec::DestinationSpec;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -6,7 +7,7 @@ use uuid::Uuid;
 pub struct EnsureSlotInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub schema: String,
     pub table: String,
 }
@@ -25,7 +26,7 @@ pub struct SnapshotChunkInput {
     pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub schema: String,
     pub table: String,
     pub pk_col: String,
@@ -48,7 +49,7 @@ pub struct ReadWindowInput {
     pub tenant_id: Uuid,
     pub run_id: Uuid,
     pub batch_seq: u32,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub slot_name: String,
     pub publication_name: String,
     pub start_lsn: Option<String>,
@@ -66,6 +67,6 @@ pub struct ReadWindowOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReleaseSlotInput {
     pub pipeline_id: Uuid,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub slot_name: String,
 }

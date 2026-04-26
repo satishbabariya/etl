@@ -80,8 +80,10 @@ async fn main() -> anyhow::Result<()> {
     // Slot-lag poller: resolves each active slot's source URL via the
     // catalog and publishes etl_cdc_slot_lag_bytes every 15s.
     let cat_for_resolver = catalog.clone();
+    let secrets_for_resolver = secrets.clone();
     let source_url_resolver = move |pid: uuid::Uuid| -> Option<String> {
         let cat = cat_for_resolver.clone();
+        let secrets = secrets_for_resolver.clone();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let row: Option<(serde_json::Value,)> = sqlx::query_as(
@@ -94,9 +96,12 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .ok()
                 .flatten();
-                row.and_then(|(cfg,)| {
-                    cfg.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
-                })
+                let cfg = row?.0;
+                let conn: common_types::connection_config::ConnectionConfig =
+                    serde_json::from_value(cfg).ok()?;
+                let resolved =
+                    worker::secrets::resolve_connection(secrets.as_ref(), &conn).await.ok()?;
+                Some(resolved.expect_url().to_string())
             })
         })
     };
