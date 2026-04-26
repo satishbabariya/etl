@@ -1,0 +1,27 @@
+apiVersion: platform.etl/v0
+kind: Connection
+metadata:
+  name: source-vault
+spec:
+  connector_ref: postgres@0.1.0
+  config:
+    url_secret: pg-url-vault
+---
+apiVersion: platform.etl/v0
+kind: Pipeline
+metadata:
+  name: customers-sync-vault
+spec:
+  source_connection: source-vault
+  source:
+    type: postgres
+    schema: public
+    table: customers
+    cursor_column: updated_at
+    cursor_kind: timestamp_tz
+    pk_columns: [id]
+  destination:
+    type: local_parquet
+    base_path: ./data/vault-demo
+  batch_size: 4
+  evolution_policy: propagate_additive
