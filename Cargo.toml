@@ -8,6 +8,7 @@ members = [
     "crates/connector-sdk",
     "crates/loader-sdk",
     "crates/cli",
+    "crates/auth",
     "tests/integration",
 ]
 exclude = ["examples/csv-source", "examples/upper-case-scalar", "examples/hello-world-source"]
@@ -87,6 +88,7 @@ catalog = { path = "crates/catalog" }
 worker = { path = "crates/worker" }
 connector-sdk = { path = "crates/connector-sdk" }
 loader-sdk = { path = "crates/loader-sdk" }
+auth = { path = "crates/auth" }
 
 [profile.dev]
 opt-level = 1

@@ -1,4 +1,5 @@
 //! Shared newtype identifiers and primitive types for the platform.
+pub mod auth;
 pub mod cdc;
 pub mod connection_config;
 pub mod secrets;
