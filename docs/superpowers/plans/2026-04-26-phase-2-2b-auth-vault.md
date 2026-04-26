@@ -2453,7 +2453,14 @@ Completed 2026-04-26 on branch `phase-2-2b-auth-vault`.
 
 ### Deviations from the plan
 
-_(Fill in after execution.)_
+- **Migration sqlx::migrate! is compile-time embedded.** Each new SQL file requires a recompile of the catalog crate (or any crate that calls `Catalog::migrate`) before the migration runs. Touched `crates/catalog/src/lib.rs` between adding 0009 and 0010 to force the rebuild; production deploys handle this naturally because the binary is rebuilt with each release.
+- **`Role` lives in `common-types::auth`, not the `auth` crate.** Plan called for `Role` in `crates/auth/src/rbac.rs`; moved to `common-types::auth` to break the cycle (TenantContext carries Role and lives in common-types). The `auth` crate re-exports for ergonomic imports — same surface, no breakage downstream.
+- **`Tenant` row struct exposes `status: String`, not a typed enum.** Plan didn't specify; `String` is the lowest-friction shape and the column has a SQL CHECK constraint. CLI compares against the literal `"suspended"`. A typed enum can land in II.2.c if/when status grows beyond two values.
+- **JWT expiration test had to use `-3600` ttl** instead of `-10` because `jsonwebtoken`'s default `Validation` includes a 60-second leeway. Adjusted the test rather than configuring a stricter Validation — leeway is the right default for prod and the test is checking expiry semantics, not configuration.
+- **CLI dispatch order: login is a public path.** All other subcommands flow through `current_principal()` (or `ETL_AUTH_BYPASS`); `auth login`/`whoami`/`create-principal` are NOT gated on a Principal — login can't require a Principal that the call is producing. `create-principal` IS admin-only by convention but currently exposed without a JWT check; II.2.c should add an admin-token requirement.
+- **`Tenant` subcommand RBAC inline at dispatch**, not inside each `tenant::*` function. Cleaner to centralize; downside is a new tenant subcommand needs to remember the gating. Acceptable.
+- **`--tenant` is admin-only override; non-admin tokens are rejected if `--tenant` mismatches their JWT claim** by `resolve_context`. The flag itself is `global = true`; non-admin invocations that don't supply the flag are unaffected.
+- **No `slot::release_slot` failure-fail behavior change** — kept fire-and-forget semantics; if `resolve_connection` fails at release time we silently skip rather than fail the activity.
 
 ### Handoff to Phase II.2.c
 

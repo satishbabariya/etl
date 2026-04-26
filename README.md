@@ -106,7 +106,39 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.2.a — secrets backend (complete)** on top of Phase II.1. Next: **Phase II.2.b — auth, JWT, RBAC, Vault backend**.
+Currently: **Phase II.2.b — auth + JWT + RBAC + Vault (complete)** on top of Phase II.2.a. Next: **Phase II.2.c — OIDC + refresh tokens + audit log**.
+
+## Auth (Phase II.2.b)
+
+Every CLI call carries a JWT (HS256, signed by `ETL_JWT_SECRET`). Three roles: `admin`, `operator`, `viewer`. Tenants gain a `status` column (`active` / `suspended`); suspended tenants cannot run pipelines.
+
+```bash
+# Bootstrap an admin in tenant 'acme'.
+cargo run --bin platform -- tenant create acme
+cargo run --bin platform -- auth create-principal --tenant acme alice \
+  --password hunter2 --role admin
+
+# Log in (caches at ~/.etl/credentials.json).
+cargo run --bin platform -- auth login alice --password hunter2
+cargo run --bin platform -- auth whoami
+
+# Admin can override tenant per-call.
+cargo run --bin platform -- --tenant other-tenant pipeline run <pid>
+
+# Suspend / resume.
+cargo run --bin platform -- tenant suspend acme
+cargo run --bin platform -- tenant resume acme
+```
+
+`ETL_AUTH_BYPASS=1` is the integration-test escape hatch — forges a fake admin JWT so existing tests run without a login dance. Production builds should disable it.
+
+### RBAC matrix
+
+| Role     | Read | Run | Write | Admin |
+|----------|------|-----|-------|-------|
+| Admin    | yes  | yes | yes   | yes   |
+| Operator | yes  | yes | yes   | no    |
+| Viewer   | yes  | no  | no    | no    |
 
 ## Secrets (Phase II.2.a)
 
@@ -129,7 +161,9 @@ cargo run --bin platform -- apply -f examples/dsl/customers-sync-secret.yaml
 cargo run --bin platform -- secret list
 ```
 
-Existing pipelines that use `config: { url: "postgres://..." }` keep working unchanged — `ConnectionConfig` accepts either `url` or `url_secret`. The CLI resolves the SecretRef before kicking off the workflow; the worker's `SyncActivities`/`CdcActivities` carry an `Arc<dyn Secrets>` ready for activity-side resolution in II.2.b.
+Existing pipelines that use `config: { url: "postgres://..." }` keep working unchanged — `ConnectionConfig` accepts either `url` or `url_secret`. As of II.2.b the worker activities (sync + CDC) resolve the SecretRef at activity start; the CLI no longer touches plaintexts. Plaintext lifetime is the activity body only.
+
+**Vault backend (II.2.b):** set `VAULT_ADDR` + `VAULT_TOKEN` (and optionally `VAULT_KV_MOUNT`); register a SecretRef with `--backend vault --key etl/pg-url`. The worker resolves at activity start through `vaultrs` against KV v2.
 
 `PlaintextSecret` zeros on drop and refuses to serialize. `secrets` table is RLS-scoped per tenant.
 
