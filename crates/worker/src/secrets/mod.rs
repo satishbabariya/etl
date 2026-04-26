@@ -4,6 +4,7 @@
 
 pub mod env;
 pub mod file;
+pub mod vault;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -20,6 +21,7 @@ pub trait Secrets: Send + Sync {
 pub struct DispatchSecrets {
     pub env: env::EnvSecrets,
     pub file: file::FileSecrets,
+    pub vault: Option<vault::VaultSecrets>,
 }
 
 #[async_trait]
@@ -28,6 +30,12 @@ impl Secrets for DispatchSecrets {
         match r.backend {
             SecretBackendKind::Env => self.env.resolve(r).await,
             SecretBackendKind::File => self.file.resolve(r).await,
+            SecretBackendKind::Vault => match &self.vault {
+                Some(v) => v.resolve(r).await,
+                None => Err(anyhow!(
+                    "SecretRef has backend=vault but VAULT_ADDR/VAULT_TOKEN are not configured"
+                )),
+            },
         }
     }
 }

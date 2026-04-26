@@ -62,16 +62,34 @@ pub enum IdParseError {
 
 define_id!(TenantId, "ten");
 
-/// Identity carried through every cross-component call. For Phase II.1
-/// it just wraps a TenantId; Phase II.2 adds principal/role/etc.
+/// Identity carried through every cross-component call. Phase II.2.b
+/// extends from a bare TenantId to also carry the authenticated
+/// principal + role; admin paths and tests construct via `new` which
+/// leaves them None.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TenantContext {
     pub tenant_id: TenantId,
+    pub principal_id: Option<PrincipalId>,
+    pub role: Option<crate::auth::Role>,
 }
 
 impl TenantContext {
+    /// Authenticated context — built from a verified JWT.
+    pub fn authed(
+        tenant_id: TenantId,
+        principal_id: PrincipalId,
+        role: crate::auth::Role,
+    ) -> Self {
+        Self {
+            tenant_id,
+            principal_id: Some(principal_id),
+            role: Some(role),
+        }
+    }
+
+    /// Tenant-only context for admin paths and tests.
     pub fn new(tenant_id: TenantId) -> Self {
-        Self { tenant_id }
+        Self { tenant_id, principal_id: None, role: None }
     }
 }
 
@@ -82,6 +100,7 @@ define_id!(WorkspaceId, "ws");
 define_id!(StreamId, "stream");
 define_id!(SchemaId, "sch");
 define_id!(SecretId, "sec");
+define_id!(PrincipalId, "prn");
 
 #[cfg(test)]
 mod tests {

@@ -1,4 +1,5 @@
-use anyhow::Context;
+//! Phase II.2.b: tenants.status='suspended' blocks pipeline runs.
+
 use catalog::Catalog;
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -19,7 +20,7 @@ fn workspace_root() -> PathBuf {
 
 #[tokio::test]
 #[ignore = "requires docker postgres"]
-async fn apply_is_idempotent() -> anyhow::Result<()> {
+async fn suspended_tenant_cannot_run_pipeline() -> anyhow::Result<()> {
     let status = Command::new("cargo")
         .current_dir(workspace_root())
         .args(["build", "--workspace"])
@@ -31,7 +32,7 @@ async fn apply_is_idempotent() -> anyhow::Result<()> {
     cat.migrate().await?;
     cat.truncate_all_for_tests().await?;
 
-    let out1 = Command::new(cargo_bin("platform"))
+    let apply = Command::new(cargo_bin("platform"))
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
@@ -39,48 +40,55 @@ async fn apply_is_idempotent() -> anyhow::Result<()> {
         .output()
         .await?;
     assert!(
-        out1.status.success(),
-        "apply 1 failed: {}",
-        String::from_utf8_lossy(&out1.stderr)
-    );
-    let s1 = String::from_utf8_lossy(&out1.stdout);
-    assert!(
-        s1.contains("1 created"),
-        "expected 1 created on first apply:\n{s1}"
+        apply.status.success(),
+        "apply failed: {}",
+        String::from_utf8_lossy(&apply.stderr)
     );
 
-    let out2 = Command::new(cargo_bin("platform"))
-        .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
+    let suspend = Command::new(cargo_bin("platform"))
+        .args(["tenant", "suspend", "dev"])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
-    assert!(out2.status.success());
-    let s2 = String::from_utf8_lossy(&out2.stdout);
     assert!(
-        s2.contains("0 created") && s2.contains("1 unchanged"),
-        "expected all-unchanged on second apply:\n{s2}"
+        suspend.status.success(),
+        "suspend failed: {}",
+        String::from_utf8_lossy(&suspend.stderr)
     );
 
-    let out3 = Command::new(cargo_bin("platform"))
-        .args(["diff", "-f", "examples/dsl/customers-sync.yaml"])
+    let row: (uuid::Uuid,) =
+        sqlx::query_as("SELECT pipeline_id FROM pipelines WHERE name='customers-sync'")
+            .fetch_one(cat.pool())
+            .await?;
+    let pid = row.0.to_string();
+
+    let run = Command::new(cargo_bin("platform"))
+        .args(["pipeline", "run", &pid])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
         .current_dir(workspace_root())
         .output()
         .await?;
-    assert!(out3.status.success());
-    let s3 = String::from_utf8_lossy(&out3.stdout);
-    // Filter to diff-output lines (start with +/~/=); ignore any stray
-    // tracing lines that leak onto stdout.
-    let diff_lines: Vec<&str> = s3
-        .lines()
-        .filter(|l| l.starts_with('+') || l.starts_with('~') || l.starts_with('='))
-        .collect();
+    assert!(!run.status.success(), "expected pipeline run to fail");
+    let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
-        !diff_lines.is_empty() && diff_lines.iter().all(|l| l.starts_with('=')),
-        "expected all =Unchanged lines:\n{s3}"
+        stderr.contains("suspended"),
+        "expected 'suspended' in error, got: {stderr}"
+    );
+
+    let resume = Command::new(cargo_bin("platform"))
+        .args(["tenant", "resume", "dev"])
+        .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
+        .current_dir(workspace_root())
+        .output()
+        .await?;
+    assert!(
+        resume.status.success(),
+        "resume failed: {}",
+        String::from_utf8_lossy(&resume.stderr)
     );
 
     Ok(())

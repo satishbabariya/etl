@@ -6,6 +6,7 @@ use sqlx::Postgres;
 pub struct Tenant {
     pub tenant_id: TenantId,
     pub name: String,
+    pub status: String,
     pub created_at: DateTime<Utc>,
 }
 
@@ -26,15 +27,16 @@ pub async fn get(
     conn: &mut sqlx::PgConnection,
     id: TenantId,
 ) -> sqlx::Result<Option<Tenant>> {
-    let row: Option<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT tenant_id, name, created_at FROM tenants WHERE tenant_id = $1",
+    let row: Option<(uuid::Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT tenant_id, name, status, created_at FROM tenants WHERE tenant_id = $1",
     )
     .bind(id.as_uuid())
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(u, name, created_at)| Tenant {
+    Ok(row.map(|(u, name, status, created_at)| Tenant {
         tenant_id: TenantId::from_uuid_unchecked(u),
         name,
+        status,
         created_at,
     }))
 }
@@ -43,30 +45,32 @@ pub async fn get_by_name(
     conn: &mut sqlx::PgConnection,
     name: &str,
 ) -> sqlx::Result<Option<Tenant>> {
-    let row: Option<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT tenant_id, name, created_at FROM tenants WHERE name = $1",
+    let row: Option<(uuid::Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT tenant_id, name, status, created_at FROM tenants WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(u, name, created_at)| Tenant {
+    Ok(row.map(|(u, name, status, created_at)| Tenant {
         tenant_id: TenantId::from_uuid_unchecked(u),
         name,
+        status,
         created_at,
     }))
 }
 
 pub async fn list(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<Tenant>> {
-    let rows: Vec<(uuid::Uuid, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT tenant_id, name, created_at FROM tenants ORDER BY created_at",
+    let rows: Vec<(uuid::Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT tenant_id, name, status, created_at FROM tenants ORDER BY created_at",
     )
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(u, name, created_at)| Tenant {
+        .map(|(u, name, status, created_at)| Tenant {
             tenant_id: TenantId::from_uuid_unchecked(u),
             name,
+            status,
             created_at,
         })
         .collect())
@@ -83,7 +87,5 @@ pub async fn delete(
     Ok(())
 }
 
-// Workaround: keep the old Postgres trait import live to avoid an unused-import
-// warning in dependent files; sqlx's PgConnection comes from sqlx::Postgres
 #[allow(dead_code)]
 type _PostgresMarker = Postgres;

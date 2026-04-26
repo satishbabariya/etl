@@ -54,6 +54,7 @@ metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 axum = { workspace = true }
 zeroize = { workspace = true }
+vaultrs = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

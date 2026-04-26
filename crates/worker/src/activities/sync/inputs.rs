@@ -1,3 +1,4 @@
+use common_types::connection_config::ConnectionConfig;
 use common_types::cursor::CursorValue;
 use common_types::pipeline_spec::{DestinationSpec, SourceSpec};
 use common_types::transform::TransformSpec;
@@ -7,7 +8,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiscoverInput {
     pub source: SourceSpec,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub connector_ref: String,
     pub tenant_id: Uuid,
     pub stream_name: String,
@@ -30,7 +31,7 @@ pub struct DiscoverOutput {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadBatchInput {
     pub source: SourceSpec,
-    pub source_url: String,
+    pub source_conn: ConnectionConfig,
     pub cursor: Option<CursorValue>,
     pub batch_size: usize,
     pub connector_ref: String,

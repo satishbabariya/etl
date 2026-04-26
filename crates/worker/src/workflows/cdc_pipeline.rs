@@ -29,7 +29,7 @@ pub struct CdcPipelineInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
     pub spec: PipelineSpec,
-    pub source_url: String,
+    pub source_conn: common_types::connection_config::ConnectionConfig,
     /// Max number of streaming windows to process before returning (useful
     /// for tests; 0 means forever).
     #[serde(default)]
@@ -126,7 +126,7 @@ impl CdcPipelineWorkflow {
                 EnsureSlotInput {
                     pipeline_id: input.pipeline_id,
                     tenant_id: input.tenant_id,
-                    source_url: input.source_url.clone(),
+                    source_conn: input.source_conn.clone(),
                     schema: pg.schema.clone(),
                     table: pg.table.clone(),
                 },
@@ -151,7 +151,7 @@ impl CdcPipelineWorkflow {
                         tenant_id: input.tenant_id,
                         run_id: input.run_id,
                         batch_seq,
-                        source_url: input.source_url.clone(),
+                        source_conn: input.source_conn.clone(),
                         schema: pg.schema.clone(),
                         table: pg.table.clone(),
                         pk_col: pk_col.clone(),
@@ -185,7 +185,7 @@ impl CdcPipelineWorkflow {
                         tenant_id: input.tenant_id,
                         run_id: input.run_id,
                         batch_seq,
-                        source_url: input.source_url.clone(),
+                        source_conn: input.source_conn.clone(),
                         slot_name: slot.slot_name.clone(),
                         publication_name: slot.publication_name.clone(),
                         start_lsn: current_lsn.clone(),

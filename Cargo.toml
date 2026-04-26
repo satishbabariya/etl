@@ -8,6 +8,7 @@ members = [
     "crates/connector-sdk",
     "crates/loader-sdk",
     "crates/cli",
+    "crates/auth",
     "tests/integration",
 ]
 exclude = ["examples/csv-source", "examples/upper-case-scalar", "examples/hello-world-source"]
@@ -76,12 +77,18 @@ axum = "0.7"
 # Secrets (Phase II.2.a — RFC-11)
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
+# Auth (Phase II.2.b — RFC-12)
+jsonwebtoken = "9"
+argon2 = "0.5"
+vaultrs = "0.7"
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }
 worker = { path = "crates/worker" }
 connector-sdk = { path = "crates/connector-sdk" }
 loader-sdk = { path = "crates/loader-sdk" }
+auth = { path = "crates/auth" }
 
 [profile.dev]
 opt-level = 1

@@ -48,6 +48,7 @@ async fn build_csv_connector() -> anyhow::Result<()> {
 async fn spawn_worker(connectors_dir: &Path) -> anyhow::Result<Child> {
     let child = Command::new(cargo_bin("worker"))
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .env("TEMPORAL_ADDRESS", "127.0.0.1:7233")
         .env("TEMPORAL_NAMESPACE", "default")
         .env("TEMPORAL_TASK_QUEUE", "pipeline-default")
@@ -130,6 +131,7 @@ async fn csv_wasm_connector_end_to_end() -> anyhow::Result<()> {
     let out = Command::new(cargo_bin("platform"))
         .args(["pipeline", "run", &pipe.to_string()])
         .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
         .env("TEMPORAL_ADDRESS", "127.0.0.1:7233")
         .env("TEMPORAL_NAMESPACE", "default")
         .env("TEMPORAL_TASK_QUEUE", "pipeline-default")

@@ -27,3 +27,5 @@ temporalio-client = "0.2"
 temporalio-common = "0.2"
 prost-wkt-types = "0.7"
 tonic = "0.14"
+auth = { workspace = true }
+dirs = "5"

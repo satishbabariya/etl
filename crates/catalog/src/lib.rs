@@ -21,6 +21,8 @@ pub use connection::{Connection, NewConnection};
 pub use pipeline::{NewPipeline, Pipeline};
 pub use run::{NewRun, Run, RunStatus};
 pub use secret::NewSecret;
+pub mod principal;
+pub use principal::NewPrincipal;
 pub use tenant::Tenant;
 
 use common_types::ids::{
@@ -70,6 +72,26 @@ impl Catalog {
         sqlx::query(&format!("SET LOCAL app.tenant_id = {lit}"))
             .execute(&mut *tx)
             .await?;
+        if let Some(c) = ctx {
+            if let Some(pid) = c.principal_id {
+                sqlx::query(&format!(
+                    "SET LOCAL app.principal_id = '{}'",
+                    pid.as_uuid()
+                ))
+                .execute(&mut *tx)
+                .await?;
+            }
+            if let Some(role) = c.role {
+                let token = match role {
+                    common_types::auth::Role::Admin => "admin",
+                    common_types::auth::Role::Operator => "operator",
+                    common_types::auth::Role::Viewer => "viewer",
+                };
+                sqlx::query(&format!("SET LOCAL app.role = '{token}'"))
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         Ok(tx)
     }
 
@@ -103,6 +125,23 @@ impl Catalog {
         tenant::delete(&mut tx, id).await?;
         tx.commit().await?;
         Ok(())
+    }
+    pub async fn tenant_set_status(
+        &self,
+        tenant_id: TenantId,
+        status: &str,
+    ) -> sqlx::Result<u64> {
+        if status != "active" && status != "suspended" {
+            return Err(sqlx::Error::Protocol(format!(
+                "invalid status '{status}' (expected active|suspended)"
+            )));
+        }
+        let r = sqlx::query("UPDATE tenants SET status = $1 WHERE tenant_id = $2")
+            .bind(status)
+            .bind(tenant_id.as_uuid())
+            .execute(self.pool())
+            .await?;
+        Ok(r.rows_affected())
     }
 
     // Connections
@@ -376,12 +415,35 @@ impl Catalog {
         Ok(())
     }
 
+    // Principals
+    pub async fn principal_create(
+        &self,
+        ctx: TenantContext,
+        new: NewPrincipal,
+    ) -> sqlx::Result<common_types::ids::PrincipalId> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let id = principal::create(&mut tx, new).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    /// Lookup is intentionally unscoped — a JWT login looks up by name
+    /// across all tenants and the principal's tenant_id is read from the
+    /// returned row. RLS isn't engaged here (admin path).
+    pub async fn principal_get_by_name(
+        &self,
+        name: &str,
+    ) -> sqlx::Result<Option<(principal::Principal, String)>> {
+        let mut conn = self.pool.acquire().await?;
+        principal::get_by_name(&mut conn, name).await
+    }
+
     /// Truncates every table. Intended for test cleanup only — admin only.
     #[doc(hidden)]
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;

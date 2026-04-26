@@ -14,5 +14,6 @@ uuid = { workspace = true }
 sqlx = { workspace = true }
 tempfile = "3"
 walkdir = "2"
+dirs = "5"
 parquet = { workspace = true }
 arrow = { workspace = true }

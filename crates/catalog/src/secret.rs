@@ -26,6 +26,7 @@ fn backend_to_str(b: SecretBackendKind) -> &'static str {
     match b {
         SecretBackendKind::Env => "env",
         SecretBackendKind::File => "file",
+        SecretBackendKind::Vault => "vault",
     }
 }
 
@@ -33,6 +34,7 @@ fn parse_backend(s: &str) -> SecretBackendKind {
     match s {
         "env" => SecretBackendKind::Env,
         "file" => SecretBackendKind::File,
+        "vault" => SecretBackendKind::Vault,
         other => panic!("unknown secret backend in DB: {other}"),
     }
 }
