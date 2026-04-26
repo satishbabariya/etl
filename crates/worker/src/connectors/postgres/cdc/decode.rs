@@ -26,6 +26,16 @@ pub enum CdcEvent {
     Insert { rel_id: u32, row: Vec<Option<String>> },
     Update { rel_id: u32, row: Vec<Option<String>> },
     Delete { rel_id: u32, key: Vec<Option<String>> },
+    /// TRUNCATE on one or more relations. Phase I.6 emits no Arrow rows
+    /// for truncates — the LSN advances past the message and downstream
+    /// pipelines see the absence of rows. A future phase can fold this
+    /// into the Parquet stream as a `_cdc.op = 't'` marker.
+    Truncate { rel_ids: Vec<u32> },
+    /// Logical-replication housekeeping messages we don't act on:
+    /// pgoutput tags `M` (logical message), `Y` (type info), `O`
+    /// (origin). Decoded as a no-op so the slot's LSN can advance past
+    /// them — failing to decode would loop the workflow forever.
+    Skip,
 }
 
 /// Decodes a single pgoutput message body (the bytes after the
@@ -40,8 +50,20 @@ pub fn decode_message(body: &[u8]) -> anyhow::Result<CdcEvent> {
         b'I' => decode_insert(rdr),
         b'U' => decode_update(rdr),
         b'D' => decode_delete(rdr),
+        b'T' => decode_truncate(rdr),
+        b'M' | b'Y' | b'O' => Ok(CdcEvent::Skip),
         other => Err(anyhow!("unsupported pgoutput tag {other}")),
     }
+}
+
+fn decode_truncate(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
+    let n_rels = rdr.read_u32::<BigEndian>()? as usize;
+    let _flags = rdr.read_u8()?;
+    let mut rel_ids = Vec::with_capacity(n_rels);
+    for _ in 0..n_rels {
+        rel_ids.push(rdr.read_u32::<BigEndian>()?);
+    }
+    Ok(CdcEvent::Truncate { rel_ids })
 }
 
 fn decode_begin(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
@@ -197,6 +219,29 @@ mod tests {
                 assert_eq!(key, vec![Some("9".to_string())]);
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn decodes_truncate() {
+        let body = [
+            b'T',
+            0, 0, 0, 2, // n_rels = 2
+            0,          // flags
+            0, 0, 0, 7, // rel_id 7
+            0, 0, 0, 9, // rel_id 9
+        ];
+        match decode_message(&body).unwrap() {
+            CdcEvent::Truncate { rel_ids } => assert_eq!(rel_ids, vec![7, 9]),
+            other => panic!("expected Truncate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_message_type_origin() {
+        for tag in [b'M', b'Y', b'O'] {
+            let body = [tag];
+            assert_eq!(decode_message(&body).unwrap(), CdcEvent::Skip);
         }
     }
 
