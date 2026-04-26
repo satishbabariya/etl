@@ -9,6 +9,7 @@ members = [
     "crates/loader-sdk",
     "crates/cli",
     "crates/auth",
+    "crates/audit",
     "tests/integration",
 ]
 exclude = ["examples/csv-source", "examples/upper-case-scalar", "examples/hello-world-source"]
@@ -87,6 +88,9 @@ rsa = "0.9"
 pem = "3"
 tower-http = { version = "0.6", features = ["trace"] }
 
+# Audit Phase II.2.d — RFC-15
+sha2 = "0.10"
+
 # Internal crates
 common-types = { path = "crates/common-types" }
 catalog = { path = "crates/catalog" }
@@ -94,6 +98,7 @@ worker = { path = "crates/worker" }
 connector-sdk = { path = "crates/connector-sdk" }
 loader-sdk = { path = "crates/loader-sdk" }
 auth = { path = "crates/auth" }
+audit = { path = "crates/audit" }
 
 [profile.dev]
 opt-level = 1
