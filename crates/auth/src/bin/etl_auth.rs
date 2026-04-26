@@ -52,6 +52,18 @@ enum Cmd {
         #[arg(long, env = "ETL_AUDIT_RETENTION_DAYS", default_value_t = 365)]
         audit_retention_days: i64,
     },
+    /// Run the audit chain verification job once and exit.
+    VerifyOnce {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+    },
+    /// Run the audit retention prune once and exit.
+    PruneAudit {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value_t = 365)]
+        retention_days: i64,
+    },
     /// Revoke an access token by its jti.
     Revoke {
         jti: String,
@@ -115,6 +127,23 @@ async fn main() -> Result<()> {
             database_url,
             audit_retention_days,
         } => serve(ks, bind, issuer_url, audience, database_url, audit_retention_days).await,
+        Cmd::VerifyOnce { database_url } => {
+            let cat = Catalog::connect(&database_url).await?;
+            cat.migrate().await?;
+            auth::jobs::audit_verify_once(&cat).await?;
+            println!("verify-once: complete");
+            Ok(())
+        }
+        Cmd::PruneAudit {
+            database_url,
+            retention_days,
+        } => {
+            let cat = Catalog::connect(&database_url).await?;
+            cat.migrate().await?;
+            auth::jobs::audit_retention_once_pub(&cat, retention_days).await?;
+            println!("prune-audit: complete (retention {} days)", retention_days);
+            Ok(())
+        }
         Cmd::Revoke {
             jti,
             tenant,
