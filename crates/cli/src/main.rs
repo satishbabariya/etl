@@ -96,6 +96,11 @@ enum AuditCmd {
     },
     /// Walk the chain and report the first integrity break.
     VerifyChain,
+    /// Delete audit rows older than N days, only within the verified prefix.
+    Prune {
+        #[arg(long, default_value_t = 365)]
+        older_than_days: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -265,6 +270,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Audit { cmd } => match cmd {
             AuditCmd::Tail { limit } => audit_cmd::tail(tenant_override.clone(), limit).await,
             AuditCmd::VerifyChain => audit_cmd::verify_chain(tenant_override.clone()).await,
+            AuditCmd::Prune { older_than_days } => {
+                audit_cmd::prune(tenant_override.clone(), older_than_days).await
+            }
         },
     }
 }
