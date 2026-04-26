@@ -451,6 +451,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "audit",
  "axum 0.7.9",
  "base64 0.22.1",
  "catalog",
