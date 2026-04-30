@@ -16,6 +16,7 @@ pub struct PipelineSpec {
 pub enum SourceSpec {
     Postgres(PostgresSourceSpec),
     Wasm(WasmSourceSpec),
+    MysqlCdc(MysqlCdcSourceSpec),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -41,6 +42,20 @@ pub struct PostgresSourceSpec {
 pub struct WasmSourceSpec {
     /// Free-form JSON passed as-is to the guest via `source-config.json`.
     pub config: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlCdcSourceSpec {
+    /// MySQL "database" (== schema) name.
+    pub schema: String,
+    /// Single table this pipeline streams. Multi-table is a future phase.
+    pub table: String,
+    /// Unique server_id for this consumer; MySQL uses it as the binlog
+    /// client identity. Pick a value not used by any other replica.
+    pub server_id: u32,
+    /// Server-side heartbeat interval. 0 leaves MySQL's default in place.
+    #[serde(default)]
+    pub heartbeat_secs: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +147,46 @@ mod tests {
             assert_eq!(p.sync_mode, SyncMode::Cdc);
         } else {
             panic!();
+        }
+    }
+
+    #[test]
+    fn mysql_cdc_variant_roundtrips() {
+        let s = SourceSpec::MysqlCdc(MysqlCdcSourceSpec {
+            schema: "shop".into(),
+            table: "orders".into(),
+            server_id: 4242,
+            heartbeat_secs: 30,
+        });
+        let j = serde_json::to_string(&s).unwrap();
+        let back: SourceSpec = serde_json::from_str(&j).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), j);
+    }
+
+    #[test]
+    fn mysql_cdc_serialized_form_is_tagged() {
+        let s = SourceSpec::MysqlCdc(MysqlCdcSourceSpec {
+            schema: "shop".into(),
+            table: "orders".into(),
+            server_id: 4242,
+            heartbeat_secs: 0,
+        });
+        let j: serde_json::Value = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["type"], "mysql_cdc");
+        assert_eq!(j["heartbeat_secs"], 0);
+    }
+
+    #[test]
+    fn mysql_cdc_heartbeat_defaults_to_zero() {
+        let j = r#"{
+            "type": "mysql_cdc", "schema": "shop", "table": "orders", "server_id": 4242
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::MysqlCdc(m) = s {
+            assert_eq!(m.heartbeat_secs, 0);
+            assert_eq!(m.server_id, 4242);
+        } else {
+            panic!("expected MysqlCdc variant");
         }
     }
 }

@@ -36,6 +36,9 @@ impl WasmSourceConnector {
             SourceSpec::Postgres(_) => bail!(
                 "WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::Postgres"
             ),
+            SourceSpec::MysqlCdc(_) => bail!(
+                "WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::MysqlCdc"
+            ),
         }
     }
 

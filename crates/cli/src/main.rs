@@ -540,6 +540,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
             let name = bare.split('@').next().unwrap_or(bare);
             name.to_string()
         }
+        SourceSpec::MysqlCdc(m) => m.table.clone(),
     };
 
     let (cursor_column, cursor_kind, pk_columns) = match &spec.source {
@@ -550,6 +551,14 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         ),
         SourceSpec::Wasm(_) => (
             "_row_index".to_string(),
+            common_types::cursor::CursorKind::Int64,
+            vec![],
+        ),
+        // MysqlCdc takes its own dispatch path in Task 7; these fields
+        // are unused there. Provide harmless defaults so the surrounding
+        // PipelineRunInput builder still type-checks.
+        SourceSpec::MysqlCdc(_) => (
+            String::new(),
             common_types::cursor::CursorKind::Int64,
             vec![],
         ),

@@ -22,6 +22,9 @@ impl SourceConnector for PostgresConnector {
             common_types::pipeline_spec::SourceSpec::Wasm(_) => {
                 anyhow::bail!("PostgresConnector received a SourceSpec::Wasm — dispatcher bug")
             }
+            common_types::pipeline_spec::SourceSpec::MysqlCdc(_) => {
+                anyhow::bail!("PostgresConnector received a SourceSpec::MysqlCdc — dispatcher bug")
+            }
         }
     }
 
@@ -38,6 +41,9 @@ impl SourceConnector for PostgresConnector {
             }
             common_types::pipeline_spec::SourceSpec::Wasm(_) => {
                 anyhow::bail!("PostgresConnector received a SourceSpec::Wasm — dispatcher bug")
+            }
+            common_types::pipeline_spec::SourceSpec::MysqlCdc(_) => {
+                anyhow::bail!("PostgresConnector received a SourceSpec::MysqlCdc — dispatcher bug")
             }
         }
     }
