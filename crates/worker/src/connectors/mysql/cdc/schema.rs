@@ -34,13 +34,23 @@ pub fn map_mysql_type(mysql_type: &str) -> Result<DataType> {
     Ok(dt)
 }
 
+/// Build the Arrow schema for the streaming RecordBatch. Per RFC-0008
+/// and matching the Postgres CDC convention in `connectors/postgres/cdc`,
+/// data columns are rendered as `Utf8` in v1 — destinations interpret
+/// the textual values. We still validate every MySQL type via
+/// `map_mysql_type` so unsupported types fail at discovery, but we
+/// don't carry the typed datatype into the batch (the type-aware
+/// columns become a follow-up phase).
 pub fn schema_from_columns(cols: &[InfoSchemaColumn]) -> Result<Schema> {
     let mut sorted: Vec<_> = cols.iter().collect();
     sorted.sort_by_key(|c| c.ordinal_position);
     let mut fields: Vec<Field> = Vec::with_capacity(sorted.len() + 3);
     for c in sorted {
-        let dt = map_mysql_type(&c.data_type)?;
-        fields.push(Field::new(&c.column_name, dt, c.is_nullable));
+        // Validate the type is one we support; the resulting DataType is
+        // discarded (we always emit Utf8 in v1 to match the
+        // StringBuilder-everywhere RecordBatch shape).
+        let _ = map_mysql_type(&c.data_type)?;
+        fields.push(Field::new(&c.column_name, DataType::Utf8, c.is_nullable));
     }
     fields.push(Field::new("_cdc.op", DataType::Utf8, false));
     fields.push(Field::new("_cdc.lsn", DataType::Utf8, false));
@@ -152,9 +162,15 @@ mod tests {
             names,
             vec!["id", "email", "_cdc.op", "_cdc.lsn", "_cdc.commit_ts"]
         );
-        assert_eq!(s.field(0).data_type(), &DataType::Int64);
+        // v1: data columns rendered as Utf8 in the streaming batch.
+        assert_eq!(s.field(0).data_type(), &DataType::Utf8);
         assert_eq!(s.field(1).data_type(), &DataType::Utf8);
         assert!(s.field(1).is_nullable());
         assert!(!s.field(2).is_nullable());
+        // _cdc.commit_ts is the timestamp metadata column.
+        assert!(matches!(
+            s.field(4).data_type(),
+            DataType::Timestamp(TimeUnit::Microsecond, _)
+        ));
     }
 }
