@@ -125,29 +125,72 @@ pub async fn build(
 }
 
 pub async fn test(path: String) -> Result<()> {
+    use crate::connector_build::{detect_lang, ts_wasm_artifact, Lang};
     use std::process::Command as StdCommand;
 
     let path = PathBuf::from(&path);
-    if !path.join("Cargo.toml").exists() {
-        anyhow::bail!("{} is not a cargo crate (no Cargo.toml)", path.display());
-    }
-    println!("[1/2] cargo build --release --target wasm32-wasip2");
-    let status = StdCommand::new("cargo")
-        .args(["build", "--release", "--target", "wasm32-wasip2"])
-        .current_dir(&path)
-        .status()
-        .context("running cargo build")?;
-    if !status.success() {
-        anyhow::bail!("cargo build failed");
-    }
-    println!("[2/2] cargo test (host-side unit tests)");
-    let status = StdCommand::new("cargo")
-        .args(["test"])
-        .current_dir(&path)
-        .status()
-        .context("running cargo test")?;
-    if !status.success() {
-        anyhow::bail!("cargo test failed");
+    let lang = detect_lang(&path)?;
+    match lang {
+        Lang::Rust => {
+            println!("[1/2] cargo build --release --target wasm32-wasip2");
+            let status = StdCommand::new("cargo")
+                .args(["build", "--release", "--target", "wasm32-wasip2"])
+                .current_dir(&path)
+                .status()
+                .context("running cargo build")?;
+            if !status.success() {
+                anyhow::bail!("cargo build failed");
+            }
+            println!("[2/2] cargo test (host-side unit tests)");
+            let status = StdCommand::new("cargo")
+                .args(["test"])
+                .current_dir(&path)
+                .status()
+                .context("running cargo test")?;
+            if !status.success() {
+                anyhow::bail!("cargo test failed");
+            }
+        }
+        Lang::TypeScript => {
+            if !path.join("node_modules").exists() {
+                println!("[1/3] npm install");
+                let status = StdCommand::new("npm")
+                    .args(["install", "--no-audit", "--no-fund"])
+                    .current_dir(&path)
+                    .status()
+                    .context("running npm install (is node/npm on PATH?)")?;
+                if !status.success() {
+                    anyhow::bail!("npm install failed");
+                }
+            } else {
+                println!("[1/3] node_modules present (skipping npm install)");
+            }
+            println!("[2/3] npm test (vitest)");
+            let status = StdCommand::new("npm")
+                .args(["test", "--silent"])
+                .current_dir(&path)
+                .status()
+                .context("running npm test")?;
+            if !status.success() {
+                anyhow::bail!("npm test failed");
+            }
+            println!("[3/3] npm run build (jco componentize)");
+            let status = StdCommand::new("npm")
+                .args(["run", "build", "--silent"])
+                .current_dir(&path)
+                .status()
+                .context("running npm run build (jco componentize)")?;
+            if !status.success() {
+                anyhow::bail!("jco componentize failed");
+            }
+            let wasm = ts_wasm_artifact(&path);
+            if !wasm.exists() {
+                anyhow::bail!(
+                    "expected {} after build but it's missing",
+                    wasm.display()
+                );
+            }
+        }
     }
     println!("connector test: ok");
     Ok(())

@@ -8,12 +8,14 @@ pub const SOURCE_TEMPLATE_TS: &str = r#"===FILE: package.json===
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "jco componentize src/connector.ts --wit wit/source-connector.wit --world-name source-connector -o dist/connector.wasm",
+    "bundle": "esbuild src/connector.ts --bundle --format=esm --platform=node --outfile=dist/connector.js --external:platform:connector/host",
+    "build": "npm run bundle && jco componentize dist/connector.js --wit wit/source-connector.wit --world-name source-connector -o dist/connector.wasm --disable http",
     "test": "vitest run"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
     "@bytecodealliance/componentize-js": "^0.18.0",
+    "esbuild": "^0.21.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
   },
