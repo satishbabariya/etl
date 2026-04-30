@@ -37,3 +37,6 @@ dirs = "5"
 base64 = "0.22"
 reqwest = { workspace = true }
 jsonwebtoken = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

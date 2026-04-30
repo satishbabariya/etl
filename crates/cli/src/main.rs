@@ -2,6 +2,7 @@ mod audit_cmd;
 mod auditlog;
 mod auth;
 mod auth_client;
+mod connector_build;
 mod connector_cmd;
 mod dsl;
 mod secret;
@@ -198,6 +199,9 @@ enum ConnectorCmd {
         /// Connector kind: 'source' (II.3.a). 'scalar'/'destination' deferred.
         #[arg(long, default_value = "source")]
         kind: String,
+        /// Authoring language: 'rust' (default) or 'typescript'.
+        #[arg(long, default_value = "rust")]
+        lang: String,
         /// Parent directory; default = current working directory.
         #[arg(long)]
         out: Option<String>,
@@ -245,8 +249,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Pipeline { cmd: PipelineCmd::Status { id } } => status::run(id).await,
         Cmd::Connector { cmd } => match cmd {
-            ConnectorCmd::Create { name, kind, out } => {
-                connector_cmd::create(name, kind, out).await
+            ConnectorCmd::Create { name, kind, lang, out } => {
+                connector_cmd::create(name, kind, lang, out).await
             }
             ConnectorCmd::Test { path } => connector_cmd::test(path).await,
             ConnectorCmd::Publish { path, registry, version } => {

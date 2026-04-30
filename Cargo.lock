@@ -996,6 +996,7 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "temporalio-client",
  "temporalio-common",
  "tokio",
