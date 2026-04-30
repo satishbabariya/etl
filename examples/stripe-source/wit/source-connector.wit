@@ -1,0 +1,62 @@
+package platform:connector@0.1.0;
+
+interface types {
+    enum cursor-kind { int64, timestamp-tz }
+
+    record cursor-value {
+        kind: cursor-kind,
+        value: string,
+    }
+
+    record connection-config {
+        url: string,
+    }
+
+    record source-config {
+        json: string,
+    }
+
+    record read-outcome {
+        batch-ipc: list<u8>,
+        rows: u32,
+        new-cursor: option<cursor-value>,
+        is-final: bool,
+    }
+
+    variant connector-error {
+        invalid-config(string),
+        source-unavailable(string),
+        schema-incompatible(string),
+        other(string),
+    }
+}
+
+interface host {
+    enum log-level { trace, debug, info, warn, error }
+    log: func(level: log-level, message: string);
+
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+    }
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+    http-fetch: func(request: http-request) -> result<http-response, string>;
+}
+
+world source-connector {
+    use types.{connection-config, source-config, cursor-value, read-outcome, connector-error};
+    import host;
+    export discover: func(conn: connection-config, source: source-config) -> result<list<u8>, connector-error>;
+    export read-batch: func(
+        conn: connection-config,
+        source: source-config,
+        cursor: option<cursor-value>,
+        batch-size: u32,
+    ) -> result<read-outcome, connector-error>;
+}
