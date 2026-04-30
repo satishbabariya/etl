@@ -1,4 +1,9 @@
 // stripe-source-ts — Stripe /v1/customers as an ETL source (TS port).
+//
+// jco wraps export return values: returning `bytes` becomes
+// `result.ok = bytes`, throwing becomes `result.err = e`. Do NOT
+// return `{ tag: 'ok', val: ... }` — that double-wraps and the host
+// sees a 0-byte payload.
 
 // @ts-expect-error - resolved by jco at componentize time
 import { log, httpFetch } from 'platform:connector/host@0.1.0';
@@ -64,12 +69,8 @@ function fetchWithRetry(
 export const discover = (
     _conn: { url: string },
     _source: { json: string },
-): { tag: 'ok'; val: Uint8Array } | { tag: 'err'; val: { tag: 'other'; val: string } } => {
-    try {
-        return { tag: 'ok', val: schemaIpcBytes() };
-    } catch (e) {
-        return { tag: 'err', val: { tag: 'other', val: String(e) } };
-    }
+): Uint8Array => {
+    return schemaIpcBytes();
 };
 
 export const readBatch = (
@@ -77,42 +78,24 @@ export const readBatch = (
     source: { json: string },
     cursor: { kind: 'int64' | 'timestamp-tz'; value: string } | undefined,
     _batchSize: number,
-):
-    | {
-          tag: 'ok';
-          val: {
-              batchIpc: Uint8Array;
-              rows: number;
-              newCursor:
-                  | { kind: 'int64' | 'timestamp-tz'; value: string }
-                  | undefined;
-              isFinal: boolean;
-          };
-      }
-    | { tag: 'err'; val: { tag: 'source-unavailable' | 'other'; val: string } } => {
-    try {
-        const cfg = parseSourceCfg(source.json);
-        const startingAfter = cursor?.value;
-        const req = buildListCustomers(conn.url, cfg.limit, startingAfter, cfg.base_url);
-        const body = fetchWithRetry('GET', req.url, req.headers, cfg.max_429_retries);
-        const page = parsePage(body);
-        const newCursor = page.lastId
-            ? { kind: 'int64' as const, value: page.lastId }
-            : undefined;
-        return {
-            tag: 'ok',
-            val: {
-                batchIpc: page.batchIpc,
-                rows: page.rows,
-                newCursor,
-                isFinal: !page.hasMore,
-            },
-        };
-    } catch (e) {
-        const msg = String(e);
-        if (msg.includes('stripe HTTP')) {
-            return { tag: 'err', val: { tag: 'source-unavailable', val: msg } };
-        }
-        return { tag: 'err', val: { tag: 'other', val: msg } };
-    }
+): {
+    batchIpc: Uint8Array;
+    rows: number;
+    newCursor: { kind: 'int64' | 'timestamp-tz'; value: string } | undefined;
+    isFinal: boolean;
+} => {
+    const cfg = parseSourceCfg(source.json);
+    const startingAfter = cursor?.value;
+    const req = buildListCustomers(conn.url, cfg.limit, startingAfter, cfg.base_url);
+    const body = fetchWithRetry('GET', req.url, req.headers, cfg.max_429_retries);
+    const page = parsePage(body);
+    const newCursor = page.lastId
+        ? { kind: 'int64' as const, value: page.lastId }
+        : undefined;
+    return {
+        batchIpc: page.batchIpc,
+        rows: page.rows,
+        newCursor,
+        isFinal: !page.hasMore,
+    };
 };

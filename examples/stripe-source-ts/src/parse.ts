@@ -6,8 +6,9 @@ import {
     Schema,
     Int64,
     Utf8,
-    tableFromArrays,
+    Table,
     tableToIPC,
+    vectorFromArray,
 } from 'apache-arrow';
 
 export interface Customer {
@@ -31,13 +32,34 @@ export function customersSchema(): Schema {
     ]);
 }
 
+// Build a Table whose vectors carry explicit Utf8/Int64 types.
+// `tableFromArrays` infers Dictionary<Int32, Utf8> for strings, which
+// the Rust StreamReader treats as a different DataType than Utf8.
+function tableFromCustomers(customers: Customer[]): Table {
+    const id = vectorFromArray(
+        customers.map((c) => c.id),
+        new Utf8(),
+    );
+    const email = vectorFromArray(
+        customers.map((c) => c.email ?? ''),
+        new Utf8(),
+    );
+    const name = vectorFromArray(
+        customers.map((c) => c.name ?? ''),
+        new Utf8(),
+    );
+    const created = vectorFromArray(
+        BigInt64Array.from(customers.map((c) => BigInt(c.created))),
+    );
+    return new Table({ id, email, name, created });
+}
+
 export function schemaIpcBytes(): Uint8Array {
-    const t = tableFromArrays({
-        id: [] as string[],
-        email: [] as (string | null)[],
-        name: [] as (string | null)[],
-        created: BigInt64Array.from([]),
-    });
+    // One placeholder row so apache-arrow infers concrete types
+    // (`tableFromArrays`/`new Table` collapse empty arrays to Null).
+    // The worker calls `StreamReader::try_new(schema_bytes).schema()`,
+    // discarding any data — the placeholder is invisible downstream.
+    const t = tableFromCustomers([{ id: '', email: '', name: '', created: 0 }]);
     return tableToIPC(t, 'stream');
 }
 
@@ -54,16 +76,7 @@ export function parsePage(jsonBytes: Uint8Array): ParsedPage {
     if (!Array.isArray(resp.data)) {
         throw new Error('stripe response missing `data` array');
     }
-    const ids = resp.data.map((c) => c.id);
-    const emails = resp.data.map((c) => c.email ?? null);
-    const names = resp.data.map((c) => c.name ?? null);
-    const createds = BigInt64Array.from(resp.data.map((c) => BigInt(c.created)));
-    const t = tableFromArrays({
-        id: ids,
-        email: emails,
-        name: names,
-        created: createds,
-    });
+    const t = tableFromCustomers(resp.data);
     return {
         batchIpc: tableToIPC(t, 'stream'),
         rows: resp.data.length,
