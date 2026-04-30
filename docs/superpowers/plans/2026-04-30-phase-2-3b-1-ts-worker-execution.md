@@ -560,3 +560,34 @@ If T2 reveals it doesn't tolerate the dead import, T3 wires `wasmtime-wasi-http`
 **2. Inline Execution** — also fine. The plan's small (5 tasks, ~3 of which may be no-ops). Wall time likely 10-30 min including the test run.
 
 **Which approach?**
+
+---
+
+## Phase II.3.b.1 Completion Log
+
+Completed 2026-04-30 on branch `phase-2-3b-1-ts-worker-execution`.
+
+- [x] T1 — `stripe_ts_e2e` rewritten to spawn worker + run pipeline + verify Parquet rows
+- [x] T2 — Discovery checkpoint: FAIL with `component imports instance 'wasi:http/types@0.2.10', but a matching implementation was not found in the linker`
+- [x] T3 — Wired `wasmtime-wasi-http` into the worker linker; surfaced inner instantiation errors via `tracing::error!`
+- [x] T4 — Two more issues surfaced post-T3 (originally listed as conditional):
+  - jco return-shape: removed manual `{tag:'ok',val:...}` double-wrap
+  - apache-arrow JS: switched to explicit `vectorFromArray(values, new Utf8())` to avoid `Dictionary<Int32,Utf8>` and Null-typed empty arrays
+- [x] T5 — Updated II.3.b plan + this log + sweep
+
+### Exit criterion — MET
+
+- `stripe_ts_e2e` passes: full publish → spawn worker → seed catalog → `platform pipeline run` → wiremock GET fires (1+ requests matched) → 2 rows land in Parquet. Pipeline runs in ~1s once the worker is up.
+- 125 unit tests pass (no regression from II.3.b baseline).
+- Workspace integration sweep: green.
+
+### Deviations from the plan
+
+- **T4 was bigger than planned.** The plan listed two possible IPC failure modes (file-vs-stream format, schema/nullability mismatch) but the actual fix involved two separate-but-related issues: a marshaling bug in the connector return shape (jco double-wraps) and apache-arrow JS's default Dictionary encoding. Both needed fixing for the test to pass. Diagnostic path: added `log()` call in guest's `discover` to print `byteLength`, which proved the guest produced 664 bytes but the host received 0 → marshaling. Fixed with raw return values + throw-for-error.
+- **T3 also added error-surfacing logging** in `crates/worker/src/wasm_runtime/connector.rs` that wasn't strictly required by the plan. Without it, instantiation failures showed up as `Application Failure: ` with no detail. Kept as permanent improvement.
+- **stripe-source-ts cargo-lock not committed previously** — `examples/stripe-source-ts/package-lock.json` was already in the II.3.b commit. The `.gitignore` excludes `dist/` and `node_modules/`, so build artifacts stay out.
+
+### Future hardening (genuine, smaller)
+
+- **Tighten Schema nullability.** apache-arrow JS doesn't preserve `nullable: false` from explicit `Field` definitions when constructing `Table` from named vectors — all columns end up `nullable: true`. The Rust connector emits `id`/`created` as `nullable: false`. The worker's `propagate_additive` policy tolerates this, but for strict-schema use cases it matters. Workaround would require building `RecordBatch` directly with explicit `Field` metadata.
+- **Worker error chain.** `to_retryable` in `crates/worker/src/activities/sync/mod.rs` discards anyhow's source chain when converting to `ActivityError`. Future improvement: use `format!("{:#}", e)` to preserve the chain through Temporal serialization.
