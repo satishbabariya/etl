@@ -540,6 +540,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
             let name = bare.split('@').next().unwrap_or(bare);
             name.to_string()
         }
+        SourceSpec::MysqlCdc(m) => m.table.clone(),
     };
 
     let (cursor_column, cursor_kind, pk_columns) = match &spec.source {
@@ -550,6 +551,14 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         ),
         SourceSpec::Wasm(_) => (
             "_row_index".to_string(),
+            common_types::cursor::CursorKind::Int64,
+            vec![],
+        ),
+        // MysqlCdc takes its own dispatch path in Task 7; these fields
+        // are unused there. Provide harmless defaults so the surrounding
+        // PipelineRunInput builder still type-checks.
+        SourceSpec::MysqlCdc(_) => (
+            String::new(),
             common_types::cursor::CursorKind::Int64,
             vec![],
         ),
@@ -597,6 +606,37 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         .run_timeout(Duration::from_secs(3600))
         .task_timeout(Duration::from_secs(60))
         .build();
+
+    // Phase II.3.d: route to MysqlCdcPipelineWorkflow for MysqlCdc source.
+    if matches!(
+        &spec.source,
+        common_types::pipeline_spec::SourceSpec::MysqlCdc(_)
+    ) {
+        let mysql_input = worker::workflows::MysqlCdcPipelineInput {
+            run_id: run_id.as_uuid(),
+            pipeline_id: pipeline_id.as_uuid(),
+            tenant_id: pipeline.tenant_id.as_uuid(),
+            principal_id: p.principal_id.as_uuid(),
+            jti: p.jti,
+            spec: spec.clone(),
+            source_conn: source_connection.clone(),
+            max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+        };
+        client
+            .start_workflow(
+                worker::workflows::MysqlCdcPipelineWorkflow::run,
+                mysql_input,
+                opts,
+            )
+            .await
+            .context("starting MysqlCdcPipelineWorkflow")?;
+        println!("started MySQL CDC workflow {}", workflow_id);
+        println!("run id: {}", run_id);
+        return Ok(());
+    }
 
     // Phase I.6: route to CdcPipelineWorkflow if sync_mode is Cdc.
     let is_cdc = matches!(

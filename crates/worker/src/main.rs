@@ -7,11 +7,12 @@ use temporalio_common::worker::{
 use temporalio_sdk::{Worker, WorkerOptions};
 use worker::{
     activities::cdc::CdcActivities,
+    activities::mysql_cdc::MysqlCdcActivities,
     activities::run_lifecycle::RunLifecycleActivities,
     activities::sync::SyncActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
     wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime},
-    workflows::{CdcPipelineWorkflow, PipelineRunWorkflow},
+    workflows::{CdcPipelineWorkflow, MysqlCdcPipelineWorkflow, PipelineRunWorkflow},
 };
 
 #[tokio::main]
@@ -81,6 +82,10 @@ async fn main() -> anyhow::Result<()> {
         catalog: catalog.clone(),
         secrets: secrets.clone(),
     };
+    let mysql_cdc = MysqlCdcActivities {
+        catalog: catalog.clone(),
+        secrets: secrets.clone(),
+    };
 
     // Slot-lag poller: resolves each active slot's source URL via the
     // catalog and publishes etl_cdc_slot_lag_bytes every 15s.
@@ -135,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
     let lifecycle_clone = lifecycle.clone();
     let sync_clone = sync.clone();
     let cdc_clone = cdc.clone();
+    let mysql_cdc_clone = mysql_cdc.clone();
     let task_queue_clone = task_queue.clone();
 
     let spawn_one = move |tenant_id: common_types::ids::TenantId| -> tokio::task::JoinHandle<()> {
@@ -150,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         let lifecycle = lifecycle_clone.clone();
         let sync = sync_clone.clone();
         let cdc = cdc_clone.clone();
+        let mysql_cdc = mysql_cdc_clone.clone();
         tokio::task::spawn_local(async move {
             let ns_client = match make_client(&ns_cfg).await {
                 Ok(c) => c,
@@ -171,8 +178,10 @@ async fn main() -> anyhow::Result<()> {
                 .register_activities(lifecycle)
                 .register_activities(sync)
                 .register_activities(cdc)
+                .register_activities(mysql_cdc)
                 .register_workflow::<PipelineRunWorkflow>()
                 .register_workflow::<CdcPipelineWorkflow>()
+                .register_workflow::<MysqlCdcPipelineWorkflow>()
                 .build();
             let mut w = match Worker::new(&runtime, ns_client, opts) {
                 Ok(w) => w,
