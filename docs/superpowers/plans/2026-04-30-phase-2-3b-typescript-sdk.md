@@ -1921,3 +1921,51 @@ Then use the **finishing-a-development-branch** skill.
 **2. Inline Execution** — feasible. T5 + T8 are the long poles (npm install + jco compile times). Total wall time likely ~30-45 min including test runs.
 
 **Which approach?**
+
+---
+
+## Phase II.3.b Completion Log
+
+Completed 2026-04-30 on branch `phase-2-3b-ts-sdk`.
+
+- [x] T1 — Templates module split (Rust → templates/rust.rs)
+- [x] T2 — TS template embedded
+- [x] T3 — `connector create --lang typescript`
+- [x] T4 — Language detection helper
+- [x] T5 — `connector test` dispatches Rust|TS (npm + esbuild + jco)
+- [x] T6 — `connector publish` dispatches Rust|TS (precompile to .cwasm)
+- [x] T7 — typescript_connector_lifecycle integration test (passes in ~95s)
+- [x] T8 — examples/stripe-source-ts (TS port; 9 vitest tests pass)
+- [x] T9 — stripe_ts_e2e wiremock test (publish + apply path)
+- [x] T10 — README + this log + sweep
+
+### Exit criterion — MET
+
+- `platform connector create --lang typescript` materializes a TS skeleton.
+- `platform connector test <ts-conn>` runs npm install + vitest + esbuild bundle + jco componentize and produces `dist/connector.wasm` (~16 MB).
+- `platform connector publish <ts-conn>` produces `<registry>/<name>@<version>/component.cwasm` + `manifest.yaml` with the same shape as Rust.
+- `examples/stripe-source-ts/` builds and produces a wasm component that imports `platform:connector/host@0.1.0` and exports `discover` + `read-batch` (verified via `jco wit dist/connector.wasm`).
+- `stripe_ts_e2e` passes: publishes and applies the TS connector against a wiremock Stripe.
+- 121 unit tests + 36 integration tests green.
+
+### Deviations from the plan
+
+- **Plan called for `jco componentize <src.ts>` directly.** Reality: jco only accepts JavaScript, not TypeScript. Added an esbuild bundling step (`npm run bundle`) that produces `dist/connector.js` first, then `jco componentize dist/connector.js`. esbuild also handles npm-module resolution (apache-arrow, etc.) which jco can't do.
+- **Tempfile dev-dep added to crates/cli.** T4's tests use `tempfile::tempdir()` for isolated detection tests; the cli crate didn't have it as a dev-dep. Added via `[dev-dependencies]` block.
+- **Versioned WIT import.** componentize-js expects host imports as `platform:connector/host@0.1.0` (with version), not bare `platform:connector/host`. Discovered via `--debug-bindings` dump. Both the embedded template and the Stripe TS port use the versioned form.
+- **esbuild external pattern.** `--external:platform:connector/host` doesn't match the versioned form. Switched to wildcard `--external:platform:*`.
+- **esbuild `--platform=node`, not neutral.** apache-arrow has CommonJS dependencies (flatbuffers) that don't resolve under `--platform=neutral`; node platform fixes it.
+- **Bundle size: ~16 MB, not ~10 MB.** componentize-js embeds StarlingMonkey + WASI imports for fs/clocks/io/random/http/cli. Acceptable for II.3.b.
+- **T9 covers publish + apply only, NOT worker execution.** The wiremock has `expect(0..=1)` to permit zero calls because `apply` doesn't run the pipeline; the test verifies the .cwasm is consumable by the catalog and the YAML applies cleanly. Whether the worker can actually run the TS .cwasm with all its WASI imports remains unverified — likely needs `wasmtime-wasi` linkage in the worker host. Flagged as a future hardening task.
+
+### Handoff to Phase II.3.d / II.4
+
+II.3.d — MySQL binlog CDC connector (Rust):
+- First non-HTTP connector, validates SDK generality.
+
+II.4 — Helm + Terraform packaging:
+- Connector portfolio scales horizontally on this SDK foundation; packaging makes the platform installable.
+
+### Future hardening — TS connector worker execution
+
+The worker host currently links only `platform:connector/host`. TS connectors (via componentize-js / StarlingMonkey) also import `wasi:io/*`, `wasi:cli/*`, `wasi:clocks/*`, `wasi:filesystem/*`, `wasi:random/*`, `wasi:http/*` (all 0.2.10). Wire `wasmtime_wasi` into the worker's Linker so TS .cwasm components can actually execute. Add a worker-execution assertion to `stripe_ts_e2e` (tighten wiremock to `expect(1..)`).

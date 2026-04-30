@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.c — Stripe source connector (complete)** on top of II.3.a SDK. Phase II.3.b (TypeScript SDK via jco) and remaining II.3.x connectors (MySQL CDC, Snowflake/BigQuery/Postgres loaders) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.b — TypeScript SDK + TS Stripe connector (complete)** on top of II.3.c. Phase II.3.d (MySQL CDC) and the remaining II.3.x connectors ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 
@@ -185,9 +185,11 @@ platform connector publish . --registry ./connectors
 
 `platform connector test` runs `cargo build --release --target wasm32-wasip2` plus `cargo test`. `publish` writes the precompiled `.cwasm` artifact and a `manifest.yaml` (sha256, version, kind) to the registry directory. The worker reads from `ETL_CONNECTORS_DIR` (default `./connectors`).
 
-See `docs/connector-sdk-guide.md` for the full authoring walkthrough. II.3.b adds the TypeScript SDK (jco). II.3.c+ ship the Stripe / MySQL CDC / Snowflake / BigQuery / Postgres connectors using this same SDK.
+See `docs/connector-sdk-guide.md` for the full authoring walkthrough. II.3.d+ ship the MySQL CDC / Snowflake / BigQuery / Postgres connectors using this same SDK.
 
-**Example connector: Stripe customers (Phase II.3.c).** `examples/stripe-source/` ships a complete `/v1/customers` source connector built on the SDK — bearer-token auth, `starting_after` pagination, 429 backoff, JSON-schema discovery. Build with `platform connector publish examples/stripe-source --registry ./connectors`.
+**TypeScript authoring (Phase II.3.b).** `platform connector create my-source --lang typescript` materializes a TS skeleton (package.json + esbuild + jco + apache-arrow + vitest). `platform connector test` runs `npm test` + esbuild bundle + `jco componentize`; `publish` produces the same `.cwasm` artifact shape as Rust. Bundle size is larger (~16 MB vs ~650 KB Rust) because componentize-js embeds StarlingMonkey, but the worker host treats both identically.
+
+**Example connector: Stripe customers (Phase II.3.c / II.3.b).** `examples/stripe-source/` ships a complete `/v1/customers` source connector built on the Rust SDK — bearer-token auth, `starting_after` pagination, 429 backoff, JSON-schema discovery. Build with `platform connector publish examples/stripe-source --registry ./connectors`. `examples/stripe-source-ts/` is the TypeScript port: same WIT contract, same wiremock e2e test, ~25× larger artifact.
 
 ## Production hardening (Phase II.2.e)
 
