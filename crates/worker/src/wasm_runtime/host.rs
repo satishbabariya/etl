@@ -1,5 +1,5 @@
 use wasmtime::component::ResourceTable;
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use super::bindings::platform::connector::host;
@@ -36,11 +36,11 @@ impl HostState {
 }
 
 impl WasiView for HostState {
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
@@ -53,13 +53,12 @@ impl WasiHttpView for HostState {
     }
 }
 
-#[wasmtime::component::__internal::async_trait]
 impl super::scalar_bindings::platform::udf::host::Host for HostState {
     async fn log(
         &mut self,
         level: super::scalar_bindings::platform::udf::host::LogLevel,
         message: String,
-    ) {
+    ) -> wasmtime::Result<()> {
         use super::scalar_bindings::platform::udf::host::LogLevel as L;
         match level {
             L::Trace => tracing::trace!(guest = true, udf = true, "{}", message),
@@ -68,12 +67,12 @@ impl super::scalar_bindings::platform::udf::host::Host for HostState {
             L::Warn => tracing::warn!(guest = true, udf = true, "{}", message),
             L::Error => tracing::error!(guest = true, udf = true, "{}", message),
         }
+        Ok(())
     }
 }
 
-#[wasmtime::component::__internal::async_trait]
 impl host::Host for HostState {
-    async fn log(&mut self, level: LogLevel, message: String) {
+    async fn log(&mut self, level: LogLevel, message: String) -> wasmtime::Result<()> {
         match level {
             LogLevel::Trace => tracing::trace!(guest = true, "{}", message),
             LogLevel::Debug => tracing::debug!(guest = true, "{}", message),
@@ -81,13 +80,17 @@ impl host::Host for HostState {
             LogLevel::Warn => tracing::warn!(guest = true, "{}", message),
             LogLevel::Error => tracing::error!(guest = true, "{}", message),
         }
+        Ok(())
     }
 
-    async fn http_fetch(&mut self, request: HttpRequest) -> Result<HttpResponse, String> {
-        let method = request
-            .method
-            .parse::<reqwest::Method>()
-            .map_err(|e| format!("bad method {}: {e}", request.method))?;
+    async fn http_fetch(
+        &mut self,
+        request: HttpRequest,
+    ) -> wasmtime::Result<Result<HttpResponse, String>> {
+        let method = match request.method.parse::<reqwest::Method>() {
+            Ok(m) => m,
+            Err(e) => return Ok(Err(format!("bad method {}: {e}", request.method))),
+        };
         let mut req = self.http.request(method, &request.url);
         for (k, v) in &request.headers {
             req = req.header(k, v);
@@ -95,22 +98,24 @@ impl host::Host for HostState {
         if let Some(body) = request.body {
             req = req.body(body);
         }
-        let resp = req.send().await.map_err(|e| format!("send: {e}"))?;
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(format!("send: {e}"))),
+        };
         let status = resp.status().as_u16();
         let headers = resp
             .headers()
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("read body: {e}"))?
-            .to_vec();
-        Ok(HttpResponse {
+        let body = match resp.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => return Ok(Err(format!("read body: {e}"))),
+        };
+        Ok(Ok(HttpResponse {
             status,
             headers,
             body,
-        })
+        }))
     }
 }
