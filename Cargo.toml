@@ -79,7 +79,7 @@ axum = "0.7"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # Auth (Phase II.2.b — RFC-12)
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 argon2 = "0.5"
 vaultrs = "0.7"
 
