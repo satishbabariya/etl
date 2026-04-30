@@ -2,6 +2,7 @@ mod audit_cmd;
 mod auditlog;
 mod auth;
 mod auth_client;
+mod connector_build;
 mod connector_cmd;
 mod dsl;
 mod secret;
