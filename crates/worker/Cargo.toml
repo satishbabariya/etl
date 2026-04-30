@@ -43,6 +43,7 @@ base64 = "0.22"
 blake3 = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = "26"
 wit-bindgen = { workspace = true }
 dashmap = { workspace = true }
 reqwest = { workspace = true }

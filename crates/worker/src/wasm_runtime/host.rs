@@ -1,5 +1,6 @@
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 use super::bindings::platform::connector::host;
 use super::bindings::platform::connector::host::{HttpRequest, HttpResponse, LogLevel};
@@ -7,6 +8,7 @@ use super::bindings::platform::connector::host::{HttpRequest, HttpResponse, LogL
 /// Per-invocation host state.
 pub struct HostState {
     pub wasi: WasiCtx,
+    pub wasi_http: WasiHttpCtx,
     pub table: ResourceTable,
     pub http: reqwest::Client,
     pub limits: super::limits::Limits,
@@ -21,6 +23,7 @@ impl HostState {
         };
         Self {
             wasi,
+            wasi_http: WasiHttpCtx::new(),
             table: ResourceTable::new(),
             http: reqwest::Client::builder()
                 .user_agent("etl-platform/0.1")
@@ -38,6 +41,15 @@ impl WasiView for HostState {
     }
     fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.wasi
+    }
+}
+
+impl WasiHttpView for HostState {
+    fn ctx(&mut self) -> &mut WasiHttpCtx {
+        &mut self.wasi_http
+    }
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
     }
 }
 

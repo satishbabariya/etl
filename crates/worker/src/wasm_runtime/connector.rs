@@ -59,13 +59,19 @@ impl SourceConnector for WasmSourceConnector {
     ) -> anyhow::Result<arrow::datatypes::SchemaRef> {
         let component = self.runtime.load(&self.name_at_version)?;
         let mut store = self.new_store().await;
-        let bindings = SourceConnectorBindings::instantiate_async(
+        let bindings = match SourceConnectorBindings::instantiate_async(
             &mut store,
             &component,
             self.runtime.linker(),
         )
         .await
-        .context("instantiating component")?;
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(name=%self.name_at_version, error=?e, "instantiate failed");
+                return Err(e.context("instantiating component"));
+            }
+        };
 
         let wit_conn = wit_types::ConnectionConfig {
             url: conn.expect_url().to_owned(),
