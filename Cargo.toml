@@ -55,7 +55,7 @@ parquet = "53"
 async-trait = "0.1"
 
 # WASM
-wasmtime = { version = "26", features = ["component-model", "async", "parallel-compilation"] }
+wasmtime = { version = "36", features = ["component-model", "async", "parallel-compilation"] }
 wasmtime-wasi = "26"
 wit-bindgen = "0.37"
 dashmap = "6"
