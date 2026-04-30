@@ -11,9 +11,9 @@
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
     "@bytecodealliance/componentize-js": "^0.18.0",
-    "esbuild": "^0.21.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "apache-arrow": "^15.0.0"
