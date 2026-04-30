@@ -1,0 +1,24 @@
+apiVersion: platform.etl/v0
+kind: Connection
+metadata:
+  name: stripe-source-conn
+spec:
+  connector_ref: wasm:stripe-source@0.1.0
+  config:
+    url: sk_test_replace_me_with_real_test_mode_key
+---
+apiVersion: platform.etl/v0
+kind: Pipeline
+metadata:
+  name: stripe-customers-sync
+spec:
+  source_connection: stripe-source-conn
+  source:
+    type: wasm
+    json: |
+      {"limit": 100}
+  destination:
+    type: local_parquet
+    base_path: ./data/stripe-demo
+  batch_size: 100
+  evolution_policy: propagate_additive
