@@ -49,6 +49,7 @@ dashmap = { workspace = true }
 reqwest = { workspace = true }
 tokio-postgres = { workspace = true }
 postgres-protocol = { workspace = true }
+mysql_async = { workspace = true }
 byteorder = { workspace = true }
 bytes = { workspace = true }
 metrics = { workspace = true }
