@@ -13,25 +13,47 @@ struct Manifest {
     sha256: String,
 }
 
-pub async fn create(name: String, kind: String, out_dir: Option<String>) -> Result<()> {
+pub async fn create(
+    name: String,
+    kind: String,
+    lang: String,
+    out_dir: Option<String>,
+) -> Result<()> {
     if kind != "source" {
         anyhow::bail!(
-            "kind '{kind}' not supported (II.3.a only supports 'source'; \
-             scalar/destination land in II.3.b/c)"
+            "kind '{kind}' not supported (II.3.a/b only support 'source')"
         );
     }
     let target = match out_dir {
         Some(d) => PathBuf::from(d).join(&name),
         None => PathBuf::from(&name),
     };
-    connector_sdk::templates::materialize_source_template(&target, &name)
-        .with_context(|| format!("creating {}", target.display()))?;
-    println!("created connector skeleton at {}", target.display());
-    println!("next:");
-    println!("  cd {}", target.display());
-    println!("  # edit src/lib.rs to implement discover() and read_batch()");
-    println!("  platform connector test .");
-    println!("  platform connector publish . --registry ./connectors");
+    match lang.as_str() {
+        "rust" => {
+            connector_sdk::templates::materialize_source_template(&target, &name)
+                .with_context(|| format!("creating {}", target.display()))?;
+            println!("created Rust connector skeleton at {}", target.display());
+            println!("next:");
+            println!("  cd {}", target.display());
+            println!("  # edit src/lib.rs to implement discover() and read_batch()");
+            println!("  platform connector test .");
+            println!("  platform connector publish . --registry ./connectors");
+        }
+        "typescript" | "ts" => {
+            connector_sdk::templates::materialize_source_template_typescript(&target, &name)
+                .with_context(|| format!("creating {}", target.display()))?;
+            println!("created TypeScript connector skeleton at {}", target.display());
+            println!("next:");
+            println!("  cd {}", target.display());
+            println!("  npm install");
+            println!("  # edit src/connector.ts to implement discover() and readBatch()");
+            println!("  platform connector test .");
+            println!("  platform connector publish . --registry ./connectors");
+        }
+        other => anyhow::bail!(
+            "unknown --lang: '{other}' (expected 'rust' or 'typescript')"
+        ),
+    }
     Ok(())
 }
 
