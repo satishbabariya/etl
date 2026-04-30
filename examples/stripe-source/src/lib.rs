@@ -1,6 +1,7 @@
 //! stripe-source — Stripe /v1/customers source connector.
 
 pub mod parse;
+pub mod request;
 
 wit_bindgen::generate!({
     path: "wit",
