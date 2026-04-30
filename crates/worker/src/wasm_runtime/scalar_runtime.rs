@@ -24,7 +24,10 @@ impl WasmScalarRuntime {
         let engine = Arc::new(super::engine::build_engine()?);
         let ticker = EpochTicker::start(engine.clone());
         let mut linker: Linker<HostState> = Linker::new(&engine);
-        super::scalar_bindings::platform::udf::host::add_to_linker(&mut linker, |s| s)
+        super::scalar_bindings::platform::udf::host::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<HostState>,
+        >(&mut linker, |s| s)
             .context("adding scalar UDF host.log to linker")?;
         Ok(Arc::new(Self {
             engine,

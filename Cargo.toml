@@ -55,8 +55,9 @@ parquet = "53"
 async-trait = "0.1"
 
 # WASM
-wasmtime = { version = "26", features = ["component-model", "async", "parallel-compilation"] }
-wasmtime-wasi = "26"
+wasmtime = { version = "36", features = ["component-model", "async", "parallel-compilation"] }
+wasmtime-wasi = "36"
+wasmtime-wasi-http = "36"
 wit-bindgen = "0.37"
 dashmap = "6"
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "gzip"], default-features = false }

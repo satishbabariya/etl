@@ -3,5 +3,6 @@
 wasmtime::component::bindgen!({
     path: "../connector-sdk/wit-scalar",
     world: "scalar-udf",
-    async: true,
+    imports: { default: async | trappable },
+    exports: { default: async },
 });
