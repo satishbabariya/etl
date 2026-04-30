@@ -97,8 +97,10 @@ spec:
   source_connection: stripe-mock
   source:
     type: wasm
-    json: |
-      {{"base_url":"{}","limit":100,"max_429_retries":1}}
+    config:
+      base_url: "{}"
+      limit: 100
+      max_429_retries: 1
   destination:
     type: local_parquet
     base_path: /tmp/stripe-mock-data

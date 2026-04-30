@@ -36,8 +36,8 @@ spec:
   source_connection: stripe-prod
   source:
     type: wasm
-    json: |
-      {"limit": 100}
+    config:
+      limit: 100
   destination:
     type: local_parquet
     base_path: ./data/stripe
