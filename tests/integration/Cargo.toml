@@ -22,3 +22,4 @@ base64 = "0.22"
 chrono = { workspace = true }
 parquet = { workspace = true }
 arrow = { workspace = true }
+wiremock = "0.6"
