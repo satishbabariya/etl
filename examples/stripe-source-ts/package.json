@@ -13,7 +13,7 @@
     "@bytecodealliance/componentize-js": "^0.18.0",
     "esbuild": "^0.21.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "vitest": "^4.1.5"
   },
   "dependencies": {
     "apache-arrow": "^15.0.0"
