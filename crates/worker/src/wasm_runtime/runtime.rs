@@ -28,6 +28,8 @@ impl WasmSourceRuntime {
         let mut linker: Linker<HostState> = Linker::new(&engine);
         wasmtime_wasi::add_to_linker_async(&mut linker)
             .context("adding WASI 0.2 imports to linker")?;
+        wasmtime_wasi_http::add_only_http_to_linker_async(&mut linker)
+            .context("adding WASI 0.2 http imports to linker")?;
         super::bindings::platform::connector::host::add_to_linker(&mut linker, |s| s)
             .context("adding host.log / host.http-fetch to linker")?;
 
