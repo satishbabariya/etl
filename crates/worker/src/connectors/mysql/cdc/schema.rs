@@ -6,8 +6,9 @@
 
 use anyhow::{bail, Result};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InfoSchemaColumn {
     pub column_name: String,
     /// `DATA_TYPE` from `information_schema.columns` (e.g. "int", "varchar").
@@ -51,13 +52,14 @@ pub fn schema_from_columns(cols: &[InfoSchemaColumn]) -> Result<Schema> {
     Ok(Schema::new(fields))
 }
 
-/// Live `information_schema.columns` query. Tested via the e2e test in
-/// Task 8; pure logic above is unit-tested below.
-pub async fn discover_schema(
+/// Live `information_schema.columns` query. Returns the raw column
+/// records so callers can serialize them for replay through Temporal.
+/// Use `schema_from_columns` to derive the Arrow `Schema`.
+pub async fn discover_columns(
     pool: &mysql_async::Pool,
     schema: &str,
     table: &str,
-) -> Result<Schema> {
+) -> Result<Vec<InfoSchemaColumn>> {
     use mysql_async::prelude::*;
     let mut conn = pool.get_conn().await?;
     let rows: Vec<(String, String, String, u32)> = conn
@@ -72,7 +74,7 @@ pub async fn discover_schema(
     if rows.is_empty() {
         bail!("table {schema}.{table} not found in information_schema");
     }
-    let cols: Vec<InfoSchemaColumn> = rows
+    Ok(rows
         .into_iter()
         .map(|(column_name, data_type, is_nullable, ordinal_position)| InfoSchemaColumn {
             column_name,
@@ -80,7 +82,16 @@ pub async fn discover_schema(
             is_nullable: is_nullable.eq_ignore_ascii_case("YES"),
             ordinal_position,
         })
-        .collect();
+        .collect())
+}
+
+/// Convenience: discover and convert in one call.
+pub async fn discover_schema(
+    pool: &mysql_async::Pool,
+    schema: &str,
+    table: &str,
+) -> Result<Schema> {
+    let cols = discover_columns(pool, schema, table).await?;
     schema_from_columns(&cols)
 }
 
