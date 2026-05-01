@@ -199,7 +199,83 @@ async fn snapshot_then_streaming_handoff() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
+    // Verify the snapshot Parquet batch carries typed columns and
+    // includes every data column (not just the PK).
+    let snapshot_schema =
+        read_snapshot_parquet_schema(tmp.path()).expect("at least one snapshot parquet file");
+    let names: Vec<String> = snapshot_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect();
+    assert!(names.contains(&"id".to_string()), "id missing: {names:?}");
+    assert!(
+        names.contains(&"customer".to_string()),
+        "customer missing: {names:?}"
+    );
+    assert!(
+        names.contains(&"amount".to_string()),
+        "amount missing: {names:?}"
+    );
+    let id_field = snapshot_schema.field_with_name("id").unwrap();
+    assert_eq!(
+        id_field.data_type(),
+        &arrow::datatypes::DataType::Int64,
+        "snapshot id should be Int64, got {:?}",
+        id_field.data_type()
+    );
+    let customer_field = snapshot_schema.field_with_name("customer").unwrap();
+    assert_eq!(
+        customer_field.data_type(),
+        &arrow::datatypes::DataType::Utf8,
+        "snapshot customer should be Utf8, got {:?}",
+        customer_field.data_type()
+    );
+
     w.kill().await?;
     w.wait().await?;
     Ok(())
+}
+
+fn read_snapshot_parquet_schema(dir: &std::path::Path) -> Option<arrow::datatypes::Schema> {
+    use arrow::array::Array;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let mut files: Vec<std::path::PathBuf> = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("parquet"))
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    for path in files {
+        let f = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let builder = match ParquetRecordBatchReaderBuilder::try_new(f) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let schema = builder.schema().as_ref().clone();
+        let reader = match builder.build() {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for batch in reader.flatten() {
+            if let Ok(idx) = batch.schema().index_of("_cdc.op") {
+                if let Some(arr) = batch
+                    .column(idx)
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                {
+                    for i in 0..arr.len() {
+                        if arr.value(i) == "s" {
+                            return Some(schema);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
