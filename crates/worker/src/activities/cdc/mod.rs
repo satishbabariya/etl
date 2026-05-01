@@ -192,8 +192,16 @@ impl CdcActivities {
             None => return Ok(ReadWindowOutput { rows: 0, new_lsn: None }),
         };
         let rel = out.relations.get(&rel_id).unwrap();
-        let cols: Vec<(&str, DataType)> =
-            rel.columns.iter().map(|c| (c.name.as_str(), DataType::Utf8)).collect();
+        let cols: Vec<(&str, DataType)> = rel
+            .columns
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    crate::connectors::postgres::cdc::types::pg_oid_to_arrow_type(c.type_oid),
+                )
+            })
+            .collect();
         let schema = snapshot::cdc_schema_for(&cols);
         let batch =
             stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
