@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use arrow::datatypes::{DataType, TimeUnit};
-use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, Timelike, TimeZone, Utc};
 
 /// Internal scalar mapping to the Arrow types we support in v2 CDC
 /// streaming columns. Producers (`parse_pg_text`) emit these; consumers
@@ -23,6 +23,8 @@ pub enum PgScalarValue {
     Date32(i32),
     /// Raw bytes (BYTEA).
     Binary(Vec<u8>),
+    /// Microseconds since midnight (no date, no timezone).
+    Time64Micros(i64),
 }
 
 /// Map a Postgres type OID to the Arrow `DataType` we use in v2 CDC
@@ -40,6 +42,7 @@ pub fn pg_oid_to_arrow_type(oid: u32) -> DataType {
         700 => DataType::Float32,                                             // float4
         701 | 1700 => DataType::Float64,                                      // float8 / numeric
         1082 => DataType::Date32,                                             // date
+        1083 => DataType::Time64(TimeUnit::Microsecond),                      // time
         1114 => DataType::Timestamp(TimeUnit::Microsecond, None),             // timestamp
         1184 => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())), // timestamptz
         114 | 3802 => DataType::Utf8,                                         // json / jsonb
@@ -85,6 +88,15 @@ pub fn parse_pg_text(s: &str, target: &DataType) -> Result<Option<PgScalarValue>
                 .try_into()
                 .map_err(|_| anyhow!("date out of i32 range: {days} days"))?;
             PgScalarValue::Date32(days_i32)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            let nt = chrono::NaiveTime::parse_from_str(s, "%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveTime::parse_from_str(s, "%H:%M:%S"))
+                .with_context(|| format!("parse time '{s}'"))?;
+            let secs = nt.num_seconds_from_midnight() as i64;
+            // chrono's NaiveTime stores fractional component in nanoseconds.
+            let micros = secs * 1_000_000 + (nt.nanosecond() as i64) / 1_000;
+            PgScalarValue::Time64Micros(micros)
         }
         DataType::Binary => {
             // Postgres BYTEA hex format: '\xDEADBEEF'. Reject the
@@ -210,7 +222,8 @@ pub fn make_pg_builder(
 ) -> Result<Box<dyn arrow::array::ArrayBuilder>> {
     use arrow::array::{
         BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+        Int32Builder, Int64Builder, StringBuilder, Time64MicrosecondBuilder,
+        TimestampMicrosecondBuilder,
     };
     use std::sync::Arc;
     Ok(match dt {
@@ -222,6 +235,7 @@ pub fn make_pg_builder(
         DataType::Boolean => Box::new(BooleanBuilder::new()),
         DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::Date32 => Box::new(Date32Builder::new()),
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(Time64MicrosecondBuilder::new()),
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             let mut b = TimestampMicrosecondBuilder::new();
             if let Some(tz) = tz.as_ref() {
@@ -242,7 +256,8 @@ pub fn append_pg_scalar(
 ) -> Result<()> {
     use arrow::array::{
         BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+        Int32Builder, Int64Builder, StringBuilder, Time64MicrosecondBuilder,
+        TimestampMicrosecondBuilder,
     };
     match (scalar, dt) {
         (None, DataType::Int32) => builder
@@ -325,6 +340,16 @@ pub fn append_pg_scalar(
             .downcast_mut::<Date32Builder>()
             .ok_or_else(|| anyhow!("type mismatch: Date32Builder"))?
             .append_value(*d),
+        (None, DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: Time64MicrosecondBuilder"))?
+            .append_null(),
+        (Some(PgScalarValue::Time64Micros(t)), DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: Time64MicrosecondBuilder"))?
+            .append_value(*t),
         (None, DataType::Timestamp(TimeUnit::Microsecond, _)) => builder
             .as_any_mut()
             .downcast_mut::<TimestampMicrosecondBuilder>()
@@ -495,5 +520,39 @@ mod tests {
     fn parse_bytea_rejects_odd_length() {
         let err = parse_pg_text("\\xABC", &DataType::Binary).unwrap_err();
         assert!(err.to_string().contains("odd length"), "got: {err}");
+    }
+
+    #[test]
+    fn maps_time_to_time64_micros() {
+        assert_eq!(
+            pg_oid_to_arrow_type(1083),
+            DataType::Time64(TimeUnit::Microsecond)
+        );
+    }
+
+    #[test]
+    fn parse_time_with_micros() {
+        // 12:30:45.123456 = (12*3600 + 30*60 + 45) * 1_000_000 + 123_456
+        //                 = 45045 * 1_000_000 + 123_456
+        //                 = 45_045_123_456
+        let v = parse_pg_text(
+            "12:30:45.123456",
+            &DataType::Time64(TimeUnit::Microsecond),
+        )
+        .unwrap();
+        assert_eq!(v, Some(PgScalarValue::Time64Micros(45_045_123_456)));
+    }
+
+    #[test]
+    fn parse_time_without_fraction() {
+        // 00:00:01 = 1_000_000 micros.
+        let v = parse_pg_text("00:00:01", &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        assert_eq!(v, Some(PgScalarValue::Time64Micros(1_000_000)));
+    }
+
+    #[test]
+    fn parse_time_midnight() {
+        let v = parse_pg_text("00:00:00", &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        assert_eq!(v, Some(PgScalarValue::Time64Micros(0)));
     }
 }
