@@ -115,6 +115,200 @@ fn parse_pg_timestamp_to_micros(s: &str, has_tz: bool) -> Result<i64> {
     Err(anyhow!("unrecognised pg timestamp text '{s}'"))
 }
 
+/// One column's identity from a Postgres table's catalog row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PgColumnInfo {
+    pub name: String,
+    pub type_oid: u32,
+    pub is_nullable: bool,
+    pub ordinal_position: u32,
+}
+
+/// Live `information_schema.columns` query keyed by the column's
+/// Postgres OID via `pg_attribute`. Returns columns in
+/// `ordinal_position` order. Fails if the table has zero columns
+/// visible to the connecting role.
+pub async fn discover_pg_table_oids(
+    conn: &mut sqlx::PgConnection,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<PgColumnInfo>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT a.attname AS name, \
+                a.atttypid::int8 AS type_oid, \
+                NOT a.attnotnull AS is_nullable, \
+                a.attnum::int4 AS ordinal_position \
+         FROM pg_attribute a \
+         JOIN pg_class c ON c.oid = a.attrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND c.relname = $2 \
+           AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(conn)
+    .await
+    .context("query pg_attribute")?;
+
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "table {schema}.{table} not found (or no visible columns)"
+        ));
+    }
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let name: String = r.try_get("name").context("name")?;
+        let type_oid: i64 = r.try_get("type_oid").context("type_oid")?;
+        let is_nullable: bool = r.try_get("is_nullable").context("is_nullable")?;
+        let ordinal_position: i32 =
+            r.try_get("ordinal_position").context("ordinal_position")?;
+        out.push(PgColumnInfo {
+            name,
+            type_oid: type_oid as u32,
+            is_nullable,
+            ordinal_position: ordinal_position as u32,
+        });
+    }
+    Ok(out)
+}
+
+/// Build an Arrow `ArrayBuilder` for a v2 CDC data column type.
+/// Snapshot and stream both call this when constructing per-column
+/// builders for a typed `RecordBatch`.
+pub fn make_pg_builder(
+    dt: &DataType,
+) -> Result<Box<dyn arrow::array::ArrayBuilder>> {
+    use arrow::array::{
+        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+    };
+    use std::sync::Arc;
+    Ok(match dt {
+        DataType::Int32 => Box::new(Int32Builder::new()),
+        DataType::Int64 => Box::new(Int64Builder::new()),
+        DataType::Float32 => Box::new(Float32Builder::new()),
+        DataType::Float64 => Box::new(Float64Builder::new()),
+        DataType::Utf8 => Box::new(StringBuilder::new()),
+        DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::Date32 => Box::new(Date32Builder::new()),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let mut b = TimestampMicrosecondBuilder::new();
+            if let Some(tz) = tz.as_ref() {
+                b = b.with_timezone(Arc::clone(tz));
+            }
+            Box::new(b)
+        }
+        other => anyhow::bail!("no pg builder for DataType {:?}", other),
+    })
+}
+
+/// Append one `PgScalarValue` (or null) to the matching Arrow
+/// builder, dispatching on the column's `DataType`.
+pub fn append_pg_scalar(
+    builder: &mut dyn arrow::array::ArrayBuilder,
+    scalar: Option<&PgScalarValue>,
+    dt: &DataType,
+) -> Result<()> {
+    use arrow::array::{
+        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+    };
+    match (scalar, dt) {
+        (None, DataType::Int32) => builder
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Int32Builder"))?
+            .append_null(),
+        (Some(PgScalarValue::Int32(v)), DataType::Int32) => builder
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Int32Builder"))?
+            .append_value(*v),
+        (None, DataType::Int64) => builder
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Int64Builder"))?
+            .append_null(),
+        (Some(PgScalarValue::Int64(v)), DataType::Int64) => builder
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Int64Builder"))?
+            .append_value(*v),
+        (None, DataType::Float32) => builder
+            .as_any_mut()
+            .downcast_mut::<Float32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Float32Builder"))?
+            .append_null(),
+        (Some(PgScalarValue::Float32(v)), DataType::Float32) => builder
+            .as_any_mut()
+            .downcast_mut::<Float32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Float32Builder"))?
+            .append_value(*v),
+        (None, DataType::Float64) => builder
+            .as_any_mut()
+            .downcast_mut::<Float64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Float64Builder"))?
+            .append_null(),
+        (Some(PgScalarValue::Float64(v)), DataType::Float64) => builder
+            .as_any_mut()
+            .downcast_mut::<Float64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Float64Builder"))?
+            .append_value(*v),
+        (None, DataType::Utf8) => builder
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: StringBuilder"))?
+            .append_null(),
+        (Some(PgScalarValue::Utf8(s)), DataType::Utf8) => builder
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: StringBuilder"))?
+            .append_value(s),
+        (None, DataType::Boolean) => builder
+            .as_any_mut()
+            .downcast_mut::<BooleanBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BooleanBuilder"))?
+            .append_null(),
+        (Some(PgScalarValue::Boolean(b)), DataType::Boolean) => builder
+            .as_any_mut()
+            .downcast_mut::<BooleanBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BooleanBuilder"))?
+            .append_value(*b),
+        (None, DataType::Date32) => builder
+            .as_any_mut()
+            .downcast_mut::<Date32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Date32Builder"))?
+            .append_null(),
+        (Some(PgScalarValue::Date32(d)), DataType::Date32) => builder
+            .as_any_mut()
+            .downcast_mut::<Date32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: Date32Builder"))?
+            .append_value(*d),
+        (None, DataType::Timestamp(TimeUnit::Microsecond, _)) => builder
+            .as_any_mut()
+            .downcast_mut::<TimestampMicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
+            .append_null(),
+        (Some(PgScalarValue::TimestampMicros(t)), DataType::Timestamp(TimeUnit::Microsecond, _)) => {
+            builder
+                .as_any_mut()
+                .downcast_mut::<TimestampMicrosecondBuilder>()
+                .ok_or_else(|| anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
+                .append_value(*t)
+        }
+        (Some(other_v), other_dt) => {
+            anyhow::bail!("scalar/builder mismatch: {:?} into {:?}", other_v, other_dt)
+        }
+        (None, other_dt) => {
+            anyhow::bail!("no null-append path for builder type {:?}", other_dt)
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

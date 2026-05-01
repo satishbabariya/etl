@@ -80,7 +80,7 @@ pub fn events_to_batch(
         .ok_or_else(|| anyhow::anyhow!("no Relation seen for rel_id {rel_id_filter}"))?;
     let n_data_cols = rel.columns.len();
     let mut col_builders: Vec<Box<dyn ArrayBuilder>> = (0..n_data_cols)
-        .map(|i| make_pg_builder(schema.field(i).data_type()))
+        .map(|i| super::types::make_pg_builder(schema.field(i).data_type()))
         .collect::<anyhow::Result<Vec<_>>>()?;
     let mut op_b = StringBuilder::new();
     let mut lsn_b = StringBuilder::new();
@@ -131,34 +131,6 @@ pub fn events_to_batch(
     Ok(arrow::record_batch::RecordBatch::try_new(schema, cols)?)
 }
 
-fn make_pg_builder(
-    dt: &arrow::datatypes::DataType,
-) -> anyhow::Result<Box<dyn arrow::array::ArrayBuilder>> {
-    use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
-    };
-    use arrow::datatypes::{DataType, TimeUnit};
-    use std::sync::Arc;
-    Ok(match dt {
-        DataType::Int32 => Box::new(Int32Builder::new()),
-        DataType::Int64 => Box::new(Int64Builder::new()),
-        DataType::Float32 => Box::new(Float32Builder::new()),
-        DataType::Float64 => Box::new(Float64Builder::new()),
-        DataType::Utf8 => Box::new(StringBuilder::new()),
-        DataType::Boolean => Box::new(BooleanBuilder::new()),
-        DataType::Date32 => Box::new(Date32Builder::new()),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            let mut b = TimestampMicrosecondBuilder::new();
-            if let Some(tz) = tz.as_ref() {
-                b = b.with_timezone(Arc::clone(tz));
-            }
-            Box::new(b)
-        }
-        other => anyhow::bail!("no pg builder for DataType {:?}", other),
-    })
-}
-
 fn append_pg_row(
     builders: &mut [Box<dyn arrow::array::ArrayBuilder>],
     schema: &arrow::datatypes::SchemaRef,
@@ -177,7 +149,7 @@ fn append_pg_row(
             Some(s) => super::types::parse_pg_text(s, dt)?,
             None => None,
         };
-        append_pg_scalar(&mut **builders.get_mut(i).unwrap(), parsed.as_ref(), dt)?;
+        super::types::append_pg_scalar(&mut **builders.get_mut(i).unwrap(), parsed.as_ref(), dt)?;
     }
     Ok(())
 }
@@ -198,111 +170,8 @@ fn append_pg_row_partial(
         } else {
             None
         };
-        append_pg_scalar(&mut **builders.get_mut(i).unwrap(), parsed.as_ref(), dt)?;
+        super::types::append_pg_scalar(&mut **builders.get_mut(i).unwrap(), parsed.as_ref(), dt)?;
     }
     Ok(())
 }
 
-fn append_pg_scalar(
-    builder: &mut dyn arrow::array::ArrayBuilder,
-    scalar: Option<&super::types::PgScalarValue>,
-    dt: &arrow::datatypes::DataType,
-) -> anyhow::Result<()> {
-    use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
-    };
-    use arrow::datatypes::{DataType, TimeUnit};
-    use super::types::PgScalarValue;
-    match (scalar, dt) {
-        (None, DataType::Int32) => builder
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Int32Builder"))?
-            .append_null(),
-        (Some(PgScalarValue::Int32(v)), DataType::Int32) => builder
-            .as_any_mut()
-            .downcast_mut::<Int32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Int32Builder"))?
-            .append_value(*v),
-        (None, DataType::Int64) => builder
-            .as_any_mut()
-            .downcast_mut::<Int64Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Int64Builder"))?
-            .append_null(),
-        (Some(PgScalarValue::Int64(v)), DataType::Int64) => builder
-            .as_any_mut()
-            .downcast_mut::<Int64Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Int64Builder"))?
-            .append_value(*v),
-        (None, DataType::Float32) => builder
-            .as_any_mut()
-            .downcast_mut::<Float32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Float32Builder"))?
-            .append_null(),
-        (Some(PgScalarValue::Float32(v)), DataType::Float32) => builder
-            .as_any_mut()
-            .downcast_mut::<Float32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Float32Builder"))?
-            .append_value(*v),
-        (None, DataType::Float64) => builder
-            .as_any_mut()
-            .downcast_mut::<Float64Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Float64Builder"))?
-            .append_null(),
-        (Some(PgScalarValue::Float64(v)), DataType::Float64) => builder
-            .as_any_mut()
-            .downcast_mut::<Float64Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Float64Builder"))?
-            .append_value(*v),
-        (None, DataType::Utf8) => builder
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: StringBuilder"))?
-            .append_null(),
-        (Some(PgScalarValue::Utf8(s)), DataType::Utf8) => builder
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: StringBuilder"))?
-            .append_value(s),
-        (None, DataType::Boolean) => builder
-            .as_any_mut()
-            .downcast_mut::<BooleanBuilder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: BooleanBuilder"))?
-            .append_null(),
-        (Some(PgScalarValue::Boolean(b)), DataType::Boolean) => builder
-            .as_any_mut()
-            .downcast_mut::<BooleanBuilder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: BooleanBuilder"))?
-            .append_value(*b),
-        (None, DataType::Date32) => builder
-            .as_any_mut()
-            .downcast_mut::<Date32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Date32Builder"))?
-            .append_null(),
-        (Some(PgScalarValue::Date32(d)), DataType::Date32) => builder
-            .as_any_mut()
-            .downcast_mut::<Date32Builder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: Date32Builder"))?
-            .append_value(*d),
-        (None, DataType::Timestamp(TimeUnit::Microsecond, _)) => builder
-            .as_any_mut()
-            .downcast_mut::<TimestampMicrosecondBuilder>()
-            .ok_or_else(|| anyhow::anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
-            .append_null(),
-        (Some(PgScalarValue::TimestampMicros(t)), DataType::Timestamp(TimeUnit::Microsecond, _)) => {
-            builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-                .ok_or_else(|| anyhow::anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
-                .append_value(*t)
-        }
-        (Some(other_v), other_dt) => {
-            anyhow::bail!("scalar/builder mismatch: {:?} into {:?}", other_v, other_dt)
-        }
-        (None, other_dt) => {
-            anyhow::bail!("no null-append path for builder type {:?}", other_dt)
-        }
-    }
-    Ok(())
-}
