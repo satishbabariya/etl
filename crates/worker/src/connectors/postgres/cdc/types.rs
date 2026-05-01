@@ -21,6 +21,8 @@ pub enum PgScalarValue {
     TimestampMicros(i64),
     /// Days since 1970-01-01.
     Date32(i32),
+    /// Raw bytes (BYTEA).
+    Binary(Vec<u8>),
 }
 
 /// Map a Postgres type OID to the Arrow `DataType` we use in v2 CDC
@@ -31,6 +33,7 @@ pub enum PgScalarValue {
 pub fn pg_oid_to_arrow_type(oid: u32) -> DataType {
     match oid {
         16 => DataType::Boolean,                                              // bool
+        17 => DataType::Binary,                                               // bytea
         20 => DataType::Int64,                                                // int8
         21 | 23 => DataType::Int32,                                           // int2 / int4
         25 | 1042 | 1043 => DataType::Utf8,                                   // text / bpchar / varchar
@@ -82,6 +85,30 @@ pub fn parse_pg_text(s: &str, target: &DataType) -> Result<Option<PgScalarValue>
                 .try_into()
                 .map_err(|_| anyhow!("date out of i32 range: {days} days"))?;
             PgScalarValue::Date32(days_i32)
+        }
+        DataType::Binary => {
+            // Postgres BYTEA hex format: '\xDEADBEEF'. Reject the
+            // legacy escape format ('\\000\\001'...) since it's
+            // exotic and ambiguous with embedded backslashes.
+            let hex = s
+                .strip_prefix("\\x")
+                .ok_or_else(|| anyhow!(
+                    "BYTEA values must use hex format (got {:?}); set bytea_output=hex on the source",
+                    &s[..s.len().min(8)]
+                ))?;
+            if hex.len() % 2 != 0 {
+                return Err(anyhow!("BYTEA hex string has odd length: {}", hex.len()));
+            }
+            let mut bytes = Vec::with_capacity(hex.len() / 2);
+            for chunk in hex.as_bytes().chunks(2) {
+                let byte = u8::from_str_radix(
+                    std::str::from_utf8(chunk).context("BYTEA hex utf8")?,
+                    16,
+                )
+                .with_context(|| format!("parse BYTEA hex byte '{}'", String::from_utf8_lossy(chunk)))?;
+                bytes.push(byte);
+            }
+            PgScalarValue::Binary(bytes)
         }
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             let micros = parse_pg_timestamp_to_micros(s, tz.is_some())?;
@@ -182,8 +209,8 @@ pub fn make_pg_builder(
     dt: &DataType,
 ) -> Result<Box<dyn arrow::array::ArrayBuilder>> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
     };
     use std::sync::Arc;
     Ok(match dt {
@@ -193,6 +220,7 @@ pub fn make_pg_builder(
         DataType::Float64 => Box::new(Float64Builder::new()),
         DataType::Utf8 => Box::new(StringBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::Date32 => Box::new(Date32Builder::new()),
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             let mut b = TimestampMicrosecondBuilder::new();
@@ -213,8 +241,8 @@ pub fn append_pg_scalar(
     dt: &DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
     };
     match (scalar, dt) {
         (None, DataType::Int32) => builder
@@ -277,6 +305,16 @@ pub fn append_pg_scalar(
             .downcast_mut::<BooleanBuilder>()
             .ok_or_else(|| anyhow!("type mismatch: BooleanBuilder"))?
             .append_value(*b),
+        (None, DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BinaryBuilder"))?
+            .append_null(),
+        (Some(PgScalarValue::Binary(b)), DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BinaryBuilder"))?
+            .append_value(b.as_slice()),
         (None, DataType::Date32) => builder
             .as_any_mut()
             .downcast_mut::<Date32Builder>()
@@ -419,5 +457,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v, Some(PgScalarValue::TimestampMicros(1_767_225_600_000_000)));
+    }
+
+    #[test]
+    fn maps_bytea_to_binary() {
+        assert_eq!(pg_oid_to_arrow_type(17), DataType::Binary);
+    }
+
+    #[test]
+    fn parse_bytea_hex_format() {
+        let v = parse_pg_text("\\xDEADBEEF", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(PgScalarValue::Binary(vec![0xde, 0xad, 0xbe, 0xef])));
+    }
+
+    #[test]
+    fn parse_bytea_empty_hex() {
+        let v = parse_pg_text("\\x", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(PgScalarValue::Binary(vec![])));
+    }
+
+    #[test]
+    fn parse_bytea_lowercase_hex() {
+        let v = parse_pg_text("\\xdeadbeef", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(PgScalarValue::Binary(vec![0xde, 0xad, 0xbe, 0xef])));
+    }
+
+    #[test]
+    fn parse_bytea_rejects_escape_format() {
+        let err = parse_pg_text("\\000\\001", &DataType::Binary).unwrap_err();
+        assert!(
+            err.to_string().contains("hex format"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_bytea_rejects_odd_length() {
+        let err = parse_pg_text("\\xABC", &DataType::Binary).unwrap_err();
+        assert!(err.to_string().contains("odd length"), "got: {err}");
     }
 }
