@@ -88,27 +88,44 @@ impl CdcActivities {
         input: SnapshotChunkInput,
     ) -> Result<SnapshotChunkOutput, ActivityError> {
         tracing::info!(last_pk = ?input.last_pk, batch_seq = input.batch_seq, "cdc: snapshot_chunk entering");
-        // MVP: pk column rendered as text alongside data columns (SELECT *).
-        // We don't know the column list until we query; for first pass we
-        // just use the pk as the only "data" column and let the actual
-        // snapshot query return whatever it returns. rows_to_cdc_batch
-        // iterates the schema we pass in; we pass a schema listing just
-        // the pk_col and rely on the Parquet loader preserving _cdc.*.
-        let cdc_schema =
-            snapshot::cdc_schema_for(&[(input.pk_col.as_str(), DataType::Utf8)]);
-        let resolve_ctx = crate::secrets::auditing::ResolveContext {
-            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
-            principal_id: (!input.principal_id.is_nil())
-                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
-            jti: (!input.jti.is_nil()).then_some(input.jti),
-        };
+        // Discover the table's full column list + Postgres OIDs once
+        // per snapshot chunk (a few hundred microseconds; not a hot
+        // path). The resulting typed Arrow schema is passed to
+        // read_chunk so every data column lands typed in the batch.
         let resolved = crate::secrets::resolve_connection_audited(
             self.secrets.as_ref(),
             &input.source_conn,
-            resolve_ctx,
+            crate::secrets::auditing::ResolveContext {
+                tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+                principal_id: (!input.principal_id.is_nil())
+                    .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+                jti: (!input.jti.is_nil()).then_some(input.jti),
+            },
         )
         .await
         .map_err(retryable)?;
+        let mut conn_for_discovery =
+            <sqlx::PgConnection as sqlx::Connection>::connect(resolved.expect_url())
+                .await
+                .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        let cols_oids = crate::connectors::postgres::cdc::types::discover_pg_table_oids(
+            &mut conn_for_discovery,
+            &input.schema,
+            &input.table,
+        )
+        .await
+        .map_err(retryable)?;
+        drop(conn_for_discovery);
+        let typed_cols: Vec<(&str, DataType)> = cols_oids
+            .iter()
+            .map(|c| {
+                (
+                    c.name.as_str(),
+                    crate::connectors::postgres::cdc::types::pg_oid_to_arrow_type(c.type_oid),
+                )
+            })
+            .collect();
+        let cdc_schema = snapshot::cdc_schema_for(&typed_cols);
         let chunk = snapshot::read_chunk(
             resolved.expect_url(),
             &input.schema,
