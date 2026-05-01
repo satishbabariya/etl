@@ -34,23 +34,17 @@ pub fn map_mysql_type(mysql_type: &str) -> Result<DataType> {
     Ok(dt)
 }
 
-/// Build the Arrow schema for the streaming RecordBatch. Per RFC-0008
-/// and matching the Postgres CDC convention in `connectors/postgres/cdc`,
-/// data columns are rendered as `Utf8` in v1 — destinations interpret
-/// the textual values. We still validate every MySQL type via
-/// `map_mysql_type` so unsupported types fail at discovery, but we
-/// don't carry the typed datatype into the batch (the type-aware
-/// columns become a follow-up phase).
+/// Build the Arrow schema for the streaming RecordBatch. Data columns
+/// carry the typed `DataType` from `map_mysql_type`; the trailing three
+/// `_cdc.*` metadata columns are fixed (Utf8 for op/lsn, Timestamp for
+/// commit_ts) per RFC-0008.
 pub fn schema_from_columns(cols: &[InfoSchemaColumn]) -> Result<Schema> {
     let mut sorted: Vec<_> = cols.iter().collect();
     sorted.sort_by_key(|c| c.ordinal_position);
     let mut fields: Vec<Field> = Vec::with_capacity(sorted.len() + 3);
     for c in sorted {
-        // Validate the type is one we support; the resulting DataType is
-        // discarded (we always emit Utf8 in v1 to match the
-        // StringBuilder-everywhere RecordBatch shape).
-        let _ = map_mysql_type(&c.data_type)?;
-        fields.push(Field::new(&c.column_name, DataType::Utf8, c.is_nullable));
+        let dt = map_mysql_type(&c.data_type)?;
+        fields.push(Field::new(&c.column_name, dt, c.is_nullable));
     }
     fields.push(Field::new("_cdc.op", DataType::Utf8, false));
     fields.push(Field::new("_cdc.lsn", DataType::Utf8, false));
@@ -151,25 +145,34 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_cdc_metadata_columns() {
+    fn schema_emits_typed_data_columns() {
         let cols = vec![
             col("id", "bigint", 1, false),
             col("email", "varchar", 2, true),
+            col("created", "timestamp", 3, false),
         ];
         let s = schema_from_columns(&cols).unwrap();
         let names: Vec<&str> = s.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(
             names,
-            vec!["id", "email", "_cdc.op", "_cdc.lsn", "_cdc.commit_ts"]
+            vec!["id", "email", "created", "_cdc.op", "_cdc.lsn", "_cdc.commit_ts"]
         );
-        // v1: data columns rendered as Utf8 in the streaming batch.
-        assert_eq!(s.field(0).data_type(), &DataType::Utf8);
+        // v2: typed data columns.
+        assert_eq!(s.field(0).data_type(), &DataType::Int64);
         assert_eq!(s.field(1).data_type(), &DataType::Utf8);
         assert!(s.field(1).is_nullable());
-        assert!(!s.field(2).is_nullable());
+        match s.field(2).data_type() {
+            DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
+                assert_eq!(tz.as_ref(), "UTC")
+            }
+            other => panic!("expected Timestamp(Micro, UTC) for created, got {other:?}"),
+        }
+        // _cdc.op stays Utf8.
+        assert_eq!(s.field(3).data_type(), &DataType::Utf8);
+        assert!(!s.field(3).is_nullable());
         // _cdc.commit_ts is the timestamp metadata column.
         assert!(matches!(
-            s.field(4).data_type(),
+            s.field(5).data_type(),
             DataType::Timestamp(TimeUnit::Microsecond, _)
         ));
     }

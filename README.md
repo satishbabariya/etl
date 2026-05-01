@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d — MySQL CDC streaming-only (complete)** on top of II.3.{a,b,b.1,c}. Native binlog → Arrow → Parquet via `mysql_async`, GTID-set cursor, single-table. Runtime on **wasmtime 36**. Remaining II.3.x connectors and CDC follow-ups (snapshot, multi-table, type-aware columns) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.d.1 — Type-aware MySQL CDC columns (complete)** on top of II.3.d. Streaming batches now carry real Arrow types (Int64/Utf8/Timestamp/etc.), not the Utf8-everywhere v1 hack. Runtime on **wasmtime 36**. Remaining II.3.x CDC follow-ups (snapshot, multi-table, Postgres typed columns) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 

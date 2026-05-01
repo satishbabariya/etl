@@ -7,8 +7,8 @@
 //! `connectors/postgres/cdc/stream.rs`).
 
 use anyhow::{anyhow, bail, Context, Result};
-use arrow::array::{ArrayRef, StringBuilder, TimestampMicrosecondBuilder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{ArrayBuilder, ArrayRef, StringBuilder, TimestampMicrosecondBuilder};
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use futures_util::StreamExt;
 use mysql_async::binlog::events::{EventData, RowsEventData, TableMapEvent};
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::decode::{binlog_row_to_strings, RowOp};
+use super::decode::{binlog_row_to_scalars, RowOp, ScalarValue};
 use super::position::GtidSet;
 
 pub struct ReadWindowOutput {
@@ -48,6 +48,21 @@ pub async fn read_window(
     let mut new_gtid = start_gtid.clone();
     let mut current_uuid_gno: Option<(String, u64)> = None;
     let mut current_commit_ts: Option<i64> = None;
+
+    // Pre-compute the per-column DataType slice once. The trailing three
+    // entries of arrow_schema are _cdc.{op,lsn,commit_ts} metadata, so
+    // data_types is the slice up to len()-3.
+    let n_data = arrow_schema
+        .fields()
+        .len()
+        .checked_sub(3)
+        .ok_or_else(|| anyhow!("schema must have at least 3 _cdc.* metadata columns"))?;
+    let data_types: Vec<DataType> = arrow_schema
+        .fields()
+        .iter()
+        .take(n_data)
+        .map(|f| f.data_type().clone())
+        .collect();
 
     // Cache of TableMapEvents we've actually seen for our target table.
     // Keyed by table_id. The MySQL server may use multiple table_ids
@@ -105,7 +120,7 @@ pub async fn read_window(
                     Some(t) => t,
                     None => continue, // not our table
                 };
-                drain_rows(&rd, tme, &mut ops, &new_gtid, current_commit_ts)?;
+                drain_rows(&rd, tme, &mut ops, &new_gtid, current_commit_ts, &data_types)?;
             }
             EventData::HeartbeatEvent => {}
             _ => {}
@@ -189,6 +204,7 @@ fn drain_rows(
     ops: &mut Vec<(RowOp, GtidSet, Option<i64>)>,
     new_gtid: &GtidSet,
     commit_ts: Option<i64>,
+    data_types: &[DataType],
 ) -> Result<()> {
     let tid = rd.table_id();
     match rd {
@@ -196,11 +212,11 @@ fn drain_rows(
             for row_pair in ev.rows(tme) {
                 let (_before, after) = row_pair.context("decode WRITE row")?;
                 let after_row = after.ok_or_else(|| anyhow!("WRITE row missing after-image"))?;
-                let after_strs = binlog_row_to_strings(&after_row)?;
+                let after_scalars = binlog_row_to_scalars(&after_row, data_types)?;
                 ops.push((
                     RowOp::Insert {
                         table_id: tid,
-                        after: after_strs,
+                        after: after_scalars,
                     },
                     new_gtid.clone(),
                     commit_ts,
@@ -210,14 +226,17 @@ fn drain_rows(
         RowsEventData::UpdateRowsEvent(ev) => {
             for row_pair in ev.rows(tme) {
                 let (before, after) = row_pair.context("decode UPDATE row")?;
-                let before_strs = before.as_ref().map(binlog_row_to_strings).transpose()?;
+                let before_scalars = before
+                    .as_ref()
+                    .map(|r| binlog_row_to_scalars(r, data_types))
+                    .transpose()?;
                 let after_row = after.ok_or_else(|| anyhow!("UPDATE row missing after-image"))?;
-                let after_strs = binlog_row_to_strings(&after_row)?;
+                let after_scalars = binlog_row_to_scalars(&after_row, data_types)?;
                 ops.push((
                     RowOp::Update {
                         table_id: tid,
-                        before: before_strs,
-                        after: after_strs,
+                        before: before_scalars,
+                        after: after_scalars,
                     },
                     new_gtid.clone(),
                     commit_ts,
@@ -229,11 +248,11 @@ fn drain_rows(
                 let (before, _after) = row_pair.context("decode DELETE row")?;
                 let before_row =
                     before.ok_or_else(|| anyhow!("DELETE row missing before-image"))?;
-                let before_strs = binlog_row_to_strings(&before_row)?;
+                let before_scalars = binlog_row_to_scalars(&before_row, data_types)?;
                 ops.push((
                     RowOp::Delete {
                         table_id: tid,
-                        before: before_strs,
+                        before: before_scalars,
                     },
                     new_gtid.clone(),
                     commit_ts,
@@ -264,59 +283,194 @@ fn build_record_batch(
     ops: &[(RowOp, GtidSet, Option<i64>)],
     arrow_schema: SchemaRef,
 ) -> Result<RecordBatch> {
-    // arrow_schema is data columns followed by _cdc.op, _cdc.lsn,
-    // _cdc.commit_ts (in that order — see schema.rs).
     let n_data = arrow_schema
         .fields()
         .len()
         .checked_sub(3)
         .ok_or_else(|| anyhow!("schema must have at least 3 _cdc.* metadata columns"))?;
 
-    let mut col_builders: Vec<StringBuilder> =
-        (0..n_data).map(|_| StringBuilder::new()).collect();
+    // One typed builder per data column; metadata columns build their own.
+    let mut col_builders: Vec<Box<dyn ArrayBuilder>> = arrow_schema
+        .fields()
+        .iter()
+        .take(n_data)
+        .map(|f| make_builder(f.data_type()))
+        .collect::<Result<Vec<_>>>()?;
     let mut op_b = StringBuilder::new();
     let mut lsn_b = StringBuilder::new();
     let mut ts_b = TimestampMicrosecondBuilder::new();
 
     for (op, gtid, ts) in ops {
-        match op {
-            RowOp::Insert { after, .. } => {
-                push_row(&mut col_builders, after);
-                op_b.append_value("i");
-            }
-            RowOp::Update { after, .. } => {
-                push_row(&mut col_builders, after);
-                op_b.append_value("u");
-            }
-            RowOp::Delete { before, .. } => {
-                push_row(&mut col_builders, before);
-                op_b.append_value("d");
-            }
+        let row_scalars: &[Option<ScalarValue>] = match op {
+            RowOp::Insert { after, .. } => after,
+            RowOp::Update { after, .. } => after,
+            RowOp::Delete { before, .. } => before,
+        };
+        if row_scalars.len() != n_data {
+            return Err(anyhow!(
+                "row has {} scalars but schema declares {} data columns",
+                row_scalars.len(),
+                n_data
+            ));
         }
+        for (i, scalar) in row_scalars.iter().enumerate() {
+            append_scalar(
+                &mut *col_builders[i],
+                scalar.as_ref(),
+                arrow_schema.field(i).data_type(),
+            )?;
+        }
+        let op_str = match op {
+            RowOp::Insert { .. } => "i",
+            RowOp::Update { .. } => "u",
+            RowOp::Delete { .. } => "d",
+        };
+        op_b.append_value(op_str);
         lsn_b.append_value(gtid.format());
         ts_b.append_option(*ts);
     }
 
-    let mut cols: Vec<ArrayRef> = col_builders
-        .into_iter()
-        .map(|mut b| Arc::new(b.finish()) as ArrayRef)
-        .collect();
+    let mut cols: Vec<ArrayRef> = col_builders.into_iter().map(|mut b| b.finish()).collect();
     cols.push(Arc::new(op_b.finish()));
     cols.push(Arc::new(lsn_b.finish()));
     cols.push(Arc::new(ts_b.finish().with_timezone("UTC")));
     Ok(RecordBatch::try_new(arrow_schema, cols)?)
 }
 
-fn push_row(builders: &mut [StringBuilder], values: &[Option<String>]) {
-    for (b, v) in builders.iter_mut().zip(values.iter()) {
-        b.append_option(v.as_deref());
-    }
-    // If the row has fewer columns than data builders (shouldn't happen
-    // in v1 with FULL row image), append nulls so column counts stay
-    // consistent with the schema.
-    if values.len() < builders.len() {
-        for b in &mut builders[values.len()..] {
-            b.append_null();
+fn make_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
+    use arrow::array::{
+        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder,
+    };
+    use arrow::datatypes::TimeUnit;
+    Ok(match dt {
+        DataType::Int32 => Box::new(Int32Builder::new()),
+        DataType::Int64 => Box::new(Int64Builder::new()),
+        DataType::Float32 => Box::new(Float32Builder::new()),
+        DataType::Float64 => Box::new(Float64Builder::new()),
+        DataType::Utf8 => Box::new(StringBuilder::new()),
+        DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::Date32 => Box::new(Date32Builder::new()),
+        // Preserve the timezone in the produced array — arrow's
+        // RecordBatch::try_new validates that builder-produced types
+        // exactly match the schema-declared types, including the tz.
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let mut b = TimestampMicrosecondBuilder::new();
+            if let Some(tz) = tz.as_ref() {
+                b = b.with_timezone(Arc::clone(tz));
+            }
+            Box::new(b)
+        }
+        other => return Err(anyhow!("no builder for DataType {:?}", other)),
+    })
+}
+
+fn append_scalar(
+    builder: &mut dyn ArrayBuilder,
+    scalar: Option<&ScalarValue>,
+    dt: &DataType,
+) -> Result<()> {
+    use arrow::array::{
+        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder,
+    };
+    use arrow::datatypes::TimeUnit;
+    match (scalar, dt) {
+        (None, DataType::Int32) => builder
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Int32Builder"))?
+            .append_null(),
+        (Some(ScalarValue::Int32(v)), DataType::Int32) => builder
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Int32Builder"))?
+            .append_value(*v),
+        (None, DataType::Int64) => builder
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Int64Builder"))?
+            .append_null(),
+        (Some(ScalarValue::Int64(v)), DataType::Int64) => builder
+            .as_any_mut()
+            .downcast_mut::<Int64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Int64Builder"))?
+            .append_value(*v),
+        (None, DataType::Float32) => builder
+            .as_any_mut()
+            .downcast_mut::<Float32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Float32Builder"))?
+            .append_null(),
+        (Some(ScalarValue::Float32(v)), DataType::Float32) => builder
+            .as_any_mut()
+            .downcast_mut::<Float32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Float32Builder"))?
+            .append_value(*v),
+        (None, DataType::Float64) => builder
+            .as_any_mut()
+            .downcast_mut::<Float64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Float64Builder"))?
+            .append_null(),
+        (Some(ScalarValue::Float64(v)), DataType::Float64) => builder
+            .as_any_mut()
+            .downcast_mut::<Float64Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Float64Builder"))?
+            .append_value(*v),
+        (None, DataType::Utf8) => builder
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected StringBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Utf8(s)), DataType::Utf8) => builder
+            .as_any_mut()
+            .downcast_mut::<StringBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected StringBuilder"))?
+            .append_value(s),
+        (None, DataType::Boolean) => builder
+            .as_any_mut()
+            .downcast_mut::<BooleanBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected BooleanBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Boolean(b)), DataType::Boolean) => builder
+            .as_any_mut()
+            .downcast_mut::<BooleanBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected BooleanBuilder"))?
+            .append_value(*b),
+        (None, DataType::Date32) => builder
+            .as_any_mut()
+            .downcast_mut::<Date32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Date32Builder"))?
+            .append_null(),
+        (Some(ScalarValue::Date32(d)), DataType::Date32) => builder
+            .as_any_mut()
+            .downcast_mut::<Date32Builder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Date32Builder"))?
+            .append_value(*d),
+        (None, DataType::Timestamp(TimeUnit::Microsecond, _)) => builder
+            .as_any_mut()
+            .downcast_mut::<TimestampMicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected TimestampMicrosecondBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::TimestampMicros(t)), DataType::Timestamp(TimeUnit::Microsecond, _)) => {
+            builder
+                .as_any_mut()
+                .downcast_mut::<TimestampMicrosecondBuilder>()
+                .ok_or_else(|| anyhow!("type mismatch: expected TimestampMicrosecondBuilder"))?
+                .append_value(*t)
+        }
+        (Some(other_v), other_dt) => {
+            return Err(anyhow!(
+                "scalar/builder mismatch: {:?} into {:?}",
+                other_v,
+                other_dt
+            ))
+        }
+        (None, other_dt) => {
+            return Err(anyhow!(
+                "no null-append path for builder type {:?}",
+                other_dt
+            ))
         }
     }
+    Ok(())
 }
