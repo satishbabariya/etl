@@ -115,6 +115,66 @@ fn parse_pg_timestamp_to_micros(s: &str, has_tz: bool) -> Result<i64> {
     Err(anyhow!("unrecognised pg timestamp text '{s}'"))
 }
 
+/// One column's identity from a Postgres table's catalog row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PgColumnInfo {
+    pub name: String,
+    pub type_oid: u32,
+    pub is_nullable: bool,
+    pub ordinal_position: u32,
+}
+
+/// Live `information_schema.columns` query keyed by the column's
+/// Postgres OID via `pg_attribute`. Returns columns in
+/// `ordinal_position` order. Fails if the table has zero columns
+/// visible to the connecting role.
+pub async fn discover_pg_table_oids(
+    conn: &mut sqlx::PgConnection,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<PgColumnInfo>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT a.attname AS name, \
+                a.atttypid::int8 AS type_oid, \
+                NOT a.attnotnull AS is_nullable, \
+                a.attnum::int4 AS ordinal_position \
+         FROM pg_attribute a \
+         JOIN pg_class c ON c.oid = a.attrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND c.relname = $2 \
+           AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(conn)
+    .await
+    .context("query pg_attribute")?;
+
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "table {schema}.{table} not found (or no visible columns)"
+        ));
+    }
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let name: String = r.try_get("name").context("name")?;
+        let type_oid: i64 = r.try_get("type_oid").context("type_oid")?;
+        let is_nullable: bool = r.try_get("is_nullable").context("is_nullable")?;
+        let ordinal_position: i32 =
+            r.try_get("ordinal_position").context("ordinal_position")?;
+        out.push(PgColumnInfo {
+            name,
+            type_oid: type_oid as u32,
+            is_nullable,
+            ordinal_position: ordinal_position as u32,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
