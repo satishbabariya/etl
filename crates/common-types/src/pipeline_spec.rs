@@ -44,6 +44,18 @@ pub struct WasmSourceSpec {
     pub config: serde_json::Value,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MysqlInitialSync {
+    /// Snapshot existing rows first (op="s"), then stream from the
+    /// captured GTID. Default — usually what you want.
+    #[default]
+    SnapshotThenStreaming,
+    /// Skip snapshot; only emit changes from the captured GTID forward.
+    /// Niche use case ("I only care about future changes").
+    StreamingOnly,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MysqlCdcSourceSpec {
     /// MySQL "database" (== schema) name.
@@ -56,6 +68,14 @@ pub struct MysqlCdcSourceSpec {
     /// Server-side heartbeat interval. 0 leaves MySQL's default in place.
     #[serde(default)]
     pub heartbeat_secs: u32,
+    /// Whether to snapshot existing rows before streaming. Default:
+    /// SnapshotThenStreaming.
+    #[serde(default)]
+    pub initial_sync: MysqlInitialSync,
+    /// PK column for snapshot chunking. Required when initial_sync ==
+    /// SnapshotThenStreaming. v1 supports integer PKs only.
+    #[serde(default)]
+    pub pk_column: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -157,6 +177,8 @@ mod tests {
             table: "orders".into(),
             server_id: 4242,
             heartbeat_secs: 30,
+            initial_sync: MysqlInitialSync::default(),
+            pk_column: None,
         });
         let j = serde_json::to_string(&s).unwrap();
         let back: SourceSpec = serde_json::from_str(&j).unwrap();
@@ -170,6 +192,8 @@ mod tests {
             table: "orders".into(),
             server_id: 4242,
             heartbeat_secs: 0,
+            initial_sync: MysqlInitialSync::default(),
+            pk_column: None,
         });
         let j: serde_json::Value = serde_json::to_value(&s).unwrap();
         assert_eq!(j["type"], "mysql_cdc");
@@ -188,5 +212,62 @@ mod tests {
         } else {
             panic!("expected MysqlCdc variant");
         }
+    }
+
+    #[test]
+    fn mysql_cdc_initial_sync_defaults_to_snapshot_then_streaming() {
+        let j = r#"{
+            "type": "mysql_cdc", "schema": "shop", "table": "orders", "server_id": 4242
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::MysqlCdc(m) = s {
+            assert_eq!(m.initial_sync, MysqlInitialSync::SnapshotThenStreaming);
+            assert_eq!(m.pk_column, None);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn mysql_cdc_streaming_only_parses() {
+        let j = r#"{
+            "type": "mysql_cdc", "schema": "shop", "table": "orders",
+            "server_id": 4242, "initial_sync": "streaming_only"
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::MysqlCdc(m) = s {
+            assert_eq!(m.initial_sync, MysqlInitialSync::StreamingOnly);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn mysql_cdc_with_pk_column() {
+        let j = r#"{
+            "type": "mysql_cdc", "schema": "shop", "table": "orders",
+            "server_id": 4242, "pk_column": "id"
+        }"#;
+        let s: SourceSpec = serde_json::from_str(j).unwrap();
+        if let SourceSpec::MysqlCdc(m) = s {
+            assert_eq!(m.pk_column.as_deref(), Some("id"));
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn mysql_cdc_full_roundtrips() {
+        let s = SourceSpec::MysqlCdc(MysqlCdcSourceSpec {
+            schema: "shop".into(),
+            table: "orders".into(),
+            server_id: 4242,
+            heartbeat_secs: 30,
+            initial_sync: MysqlInitialSync::SnapshotThenStreaming,
+            pk_column: Some("id".into()),
+        });
+        let j = serde_json::to_string(&s).unwrap();
+        let back: SourceSpec = serde_json::from_str(&j).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), j);
     }
 }
