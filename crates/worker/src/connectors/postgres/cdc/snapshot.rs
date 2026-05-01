@@ -28,12 +28,27 @@ pub async fn read_chunk(
     sqlx::query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut c)
         .await?;
+    // Build a `SELECT col1::text AS col1, col2::text AS col2, ..."
+    // projection so every value lands as a Postgres text-format
+    // string. parse_pg_text in rows_to_cdc_batch then produces
+    // typed Arrow values per the schema's declared DataType.
+    let data_field_names: Vec<&str> = cdc_schema
+        .fields()
+        .iter()
+        .filter(|f| !f.name().starts_with("_cdc"))
+        .map(|f| f.name().as_str())
+        .collect();
+    let projection = data_field_names
+        .iter()
+        .map(|n| format!("\"{n}\"::text AS \"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let where_clause = match last_pk {
         Some(_) => format!(" WHERE \"{pk_col}\" > $1"),
         None => String::new(),
     };
     let stmt = format!(
-        "SELECT * FROM \"{schema}\".\"{table}\"{where_clause} ORDER BY \"{pk_col}\" LIMIT {batch_size}"
+        "SELECT {projection} FROM \"{schema}\".\"{table}\"{where_clause} ORDER BY \"{pk_col}\" LIMIT {batch_size}"
     );
     let mut q = sqlx::query(&stmt);
     if let Some(pk) = last_pk {
@@ -54,58 +69,58 @@ fn rows_to_cdc_batch(
     schema: SchemaRef,
     consistent_point: &str,
 ) -> anyhow::Result<(RecordBatch, Option<i64>)> {
+    use arrow::array::ArrayBuilder;
+    use crate::connectors::postgres::cdc::types::{
+        append_pg_scalar, make_pg_builder, parse_pg_text,
+    };
+
     let mut last_pk: Option<i64> = None;
-    // Data columns (non-_cdc) rendered as String for MVP — CDC lands TEXT;
-    // downstream Phase-II consumers can type-narrow.
-    let data_fields: Vec<Field> = schema
+    let n_data = schema
         .fields()
         .iter()
         .filter(|f| !f.name().starts_with("_cdc"))
-        .map(|f| Field::clone(f))
-        .collect();
-    let mut col_builders: Vec<StringBuilder> =
-        data_fields.iter().map(|_| StringBuilder::new()).collect();
+        .count();
+
+    let mut col_builders: Vec<Box<dyn ArrayBuilder>> = (0..n_data)
+        .map(|i| make_pg_builder(schema.field(i).data_type()))
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let mut op_b = StringBuilder::new();
     let mut lsn_b = StringBuilder::new();
     let mut ts_b = TimestampMicrosecondBuilder::new();
     let mut tx_b = Int64Builder::new();
+
     for r in &rows {
-        for (i, f) in data_fields.iter().enumerate() {
-            // Try string first; fall back to cast-to-text of any kind via ::text cast would
-            // require a second pass. For MVP the snapshot query is `SELECT *` and we cast
-            // values via try_get::<Option<String>>, which works for text/varchar columns
-            // and returns an Err for non-text (we then write NULL).
-            let v: Option<String> = r
+        for i in 0..n_data {
+            let f = schema.field(i);
+            let dt = f.data_type();
+            // Every column was selected as ::text — extract as
+            // Option<String> and let parse_pg_text do the typed conversion.
+            let raw: Option<String> = r
                 .try_get::<Option<String>, _>(f.name().as_str())
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    // Numeric types: try i64/f64 and to_string.
-                    r.try_get::<Option<i64>, _>(f.name().as_str())
-                        .ok()
-                        .flatten()
-                        .map(|v| v.to_string())
-                        .or_else(|| {
-                            r.try_get::<Option<f64>, _>(f.name().as_str())
-                                .ok()
-                                .flatten()
-                                .map(|v| v.to_string())
-                        })
-                });
-            col_builders[i].append_option(v);
+                .with_context(|| format!("try_get text for column {}", f.name()))?;
+            let parsed = match raw.as_deref() {
+                Some(s) => parse_pg_text(s, dt).with_context(|| {
+                    format!("parse_pg_text col={} dt={:?} raw={:?}", f.name(), dt, s)
+                })?,
+                None => None,
+            };
+            append_pg_scalar(&mut *col_builders[i], parsed.as_ref(), dt)?;
         }
         op_b.append_value("s");
         lsn_b.append_value(consistent_point);
         ts_b.append_null();
         tx_b.append_null();
-        if let Ok(pk) = r.try_get::<i64, _>(pk_col) {
-            last_pk = Some(pk);
+        // pk extraction: the column was selected as ::text, so try_get
+        // as String and re-parse to i64. Snapshot only supports i64 PKs
+        // for now (matches the cursor type elsewhere in CDC).
+        if let Ok(Some(s)) = r.try_get::<Option<String>, _>(pk_col) {
+            if let Ok(n) = s.parse::<i64>() {
+                last_pk = Some(n);
+            }
         }
     }
-    let mut cols: Vec<ArrayRef> = col_builders
-        .into_iter()
-        .map(|mut b| Arc::new(b.finish()) as ArrayRef)
-        .collect();
+
+    let mut cols: Vec<ArrayRef> = col_builders.into_iter().map(|mut b| b.finish()).collect();
     cols.push(Arc::new(op_b.finish()));
     cols.push(Arc::new(lsn_b.finish()));
     cols.push(Arc::new(ts_b.finish()));
