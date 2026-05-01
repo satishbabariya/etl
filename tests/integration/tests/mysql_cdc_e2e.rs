@@ -103,6 +103,20 @@ fn read_parquet_ops(dir: &Path) -> Vec<String> {
     ops
 }
 
+fn read_first_parquet_schema(dir: &Path) -> Option<arrow::datatypes::Schema> {
+    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("parquet"))
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    let path = files.first()?.clone();
+    let f = std::fs::File::open(&path).ok()?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(f).ok()?;
+    Some(reader.schema().as_ref().clone())
+}
+
 async fn start_mysql_container() -> anyhow::Result<(ContainerAsync<Mysql>, String)> {
     let container = Mysql::default()
         .with_cmd(vec![
@@ -264,6 +278,39 @@ async fn mysql_cdc_streaming_only_e2e() -> anyhow::Result<()> {
     assert!(
         last_ops.iter().any(|o| o == "d"),
         "missing DELETE in {last_ops:?}"
+    );
+
+    // Verify the Parquet schema carries typed data columns, not Utf8.
+    let parquet_schema =
+        read_first_parquet_schema(tmp_data.path()).expect("at least one parquet file");
+    let names: Vec<&str> = parquet_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    assert!(names.contains(&"id"), "id column missing: {names:?}");
+    let id_field = parquet_schema.field_with_name("id").unwrap();
+    assert_eq!(
+        id_field.data_type(),
+        &arrow::datatypes::DataType::Int64,
+        "id column should be Int64, got {:?}",
+        id_field.data_type()
+    );
+    let email_field = parquet_schema.field_with_name("email").unwrap();
+    assert_eq!(
+        email_field.data_type(),
+        &arrow::datatypes::DataType::Utf8,
+        "email column should be Utf8, got {:?}",
+        email_field.data_type()
+    );
+    let created_field = parquet_schema.field_with_name("created").unwrap();
+    assert!(
+        matches!(
+            created_field.data_type(),
+            arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _)
+        ),
+        "created column should be Timestamp(Micro), got {:?}",
+        created_field.data_type()
     );
 
     Ok(())

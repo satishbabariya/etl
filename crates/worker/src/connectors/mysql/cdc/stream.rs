@@ -351,8 +351,15 @@ fn make_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
         DataType::Utf8 => Box::new(StringBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::new()),
         DataType::Date32 => Box::new(Date32Builder::new()),
-        DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            Box::new(TimestampMicrosecondBuilder::new())
+        // Preserve the timezone in the produced array — arrow's
+        // RecordBatch::try_new validates that builder-produced types
+        // exactly match the schema-declared types, including the tz.
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let mut b = TimestampMicrosecondBuilder::new();
+            if let Some(tz) = tz.as_ref() {
+                b = b.with_timezone(Arc::clone(tz));
+            }
+            Box::new(b)
         }
         other => return Err(anyhow!("no builder for DataType {:?}", other)),
     })

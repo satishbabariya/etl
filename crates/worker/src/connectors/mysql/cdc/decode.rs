@@ -138,6 +138,17 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
             let micros = dt.and_utc().timestamp_micros();
             Ok(Some(ScalarValue::TimestampMicros(micros)))
         }
+        // MySQL TIMESTAMP columns sometimes land as ASCII-encoded unix
+        // seconds in the binlog row image (mysql_async parses them as
+        // Bytes when no fractional precision and no per-column metadata).
+        // Parse the ASCII integer back to seconds and scale to micros.
+        (Value::Bytes(b), DataType::Timestamp(TimeUnit::Microsecond, _)) => {
+            let s = std::str::from_utf8(b).context("timestamp bytes not UTF-8")?;
+            let secs: i64 = s
+                .parse()
+                .with_context(|| format!("parse timestamp seconds '{}'", s))?;
+            Ok(Some(ScalarValue::TimestampMicros(secs * 1_000_000)))
+        }
 
         (other_v, other_dt) => Err(anyhow!(
             "unsupported BinlogValue→ScalarValue conversion: {:?} → {:?}",
