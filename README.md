@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d.1 — Type-aware MySQL CDC columns (complete)** on top of II.3.d. Streaming batches now carry real Arrow types (Int64/Utf8/Timestamp/etc.), not the Utf8-everywhere v1 hack. Runtime on **wasmtime 36**. Remaining II.3.x CDC follow-ups (snapshot, multi-table, Postgres typed columns) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.d.2 — Type-aware Postgres CDC columns (complete)** on top of II.3.d.1. Both MySQL and Postgres CDC streaming paths now emit typed Arrow columns (Int32/Int64/Float64/Utf8/Boolean/Date32/Timestamp). Snapshot path for both connectors is still Utf8 (deferred). Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (typed snapshot, MySQL initial snapshot, multi-table) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 

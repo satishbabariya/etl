@@ -222,5 +222,72 @@ async fn cdc_round_trip_insert_update_delete() -> anyhow::Result<()> {
 
     w.kill().await?;
     w.wait().await?;
+
+    // Verify the streaming Parquet schema carries typed data columns.
+    // The snapshot batch is still all-Utf8 (intentional — deferred), so
+    // we read all parquet files and pick one whose op column contains
+    // 'i'/'u'/'d' (a streaming batch).
+    let streaming_schema = read_streaming_parquet_schema(tmp.path())
+        .expect("at least one streaming parquet file");
+    let id_field = streaming_schema.field_with_name("id").unwrap();
+    assert_eq!(
+        id_field.data_type(),
+        &arrow::datatypes::DataType::Int64,
+        "id should be Int64, got {:?}",
+        id_field.data_type()
+    );
+    let customer_field = streaming_schema.field_with_name("customer").unwrap();
+    assert_eq!(
+        customer_field.data_type(),
+        &arrow::datatypes::DataType::Utf8,
+        "customer should be Utf8, got {:?}",
+        customer_field.data_type()
+    );
+
     Ok(())
+}
+
+fn read_streaming_parquet_schema(dir: &std::path::Path) -> Option<arrow::datatypes::Schema> {
+    use arrow::array::Array;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let mut files: Vec<std::path::PathBuf> = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("parquet"))
+        .map(|e| e.into_path())
+        .collect();
+    files.sort();
+    for path in files {
+        let f = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let builder = match ParquetRecordBatchReaderBuilder::try_new(f) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let schema = builder.schema().as_ref().clone();
+        let reader = match builder.build() {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Identify a streaming batch: contains an 'i', 'u', or 'd' op.
+        for batch in reader.flatten() {
+            if let Ok(idx) = batch.schema().index_of("_cdc.op") {
+                if let Some(arr) = batch
+                    .column(idx)
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                {
+                    for i in 0..arr.len() {
+                        let op = arr.value(i);
+                        if op == "i" || op == "u" || op == "d" {
+                            return Some(schema);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
