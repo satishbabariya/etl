@@ -18,7 +18,7 @@ pub fn next_window(
     batch_size: i64,
 ) -> Result<ReadOutcome, ConnectorError> {
     let h = db::open(url).map_err(db_err_to_connector_err)?;
-    let sub = db::subscribe_changes(h, start_gtid).map_err(db_err_to_connector_err)?;
+    let sub = db::subscribe_changes(h, start_gtid, &[]).map_err(db_err_to_connector_err)?;
     let qualified = format!("{}.{}", cfg.schema, cfg.table);
 
     let mut rows: Vec<Row> = Vec::new();

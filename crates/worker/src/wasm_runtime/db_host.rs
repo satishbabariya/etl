@@ -138,6 +138,7 @@ impl DbHost for super::host::HostState {
         &mut self,
         h: DbHandle,
         position: String,
+        _options: Vec<(String, String)>,
     ) -> wasmtime::Result<Result<ChangeStream, DbError>> {
         let conn = match self.db.conns.remove(&h.id) {
             Some(DbConn::Mysql(c)) => c,

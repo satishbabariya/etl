@@ -49,13 +49,20 @@ interface db {
         params: list<string>,
     ) -> result<list<list<option<string>>>, db-error>;
 
-    /// Subscribe to change events from `position`. For MySQL, position
-    /// is a GTID set; empty string = "from now". Consumes the underlying
-    /// db-handle (mysql_async's get_binlog_stream takes ownership of the
-    /// connection); subsequent db.query calls on this handle will fail.
+    /// Subscribe to change events from `position`. The `options` list
+    /// is a free-form key-value bag passed to the host:
+    ///   - Postgres: requires `slot_name` and `publication_names`;
+    ///     accepts optional `proto_version` (default "1").
+    ///   - MySQL: currently ignores all keys (server_id is host-allocated).
+    ///
+    /// For MySQL, position is a GTID set; empty string = "from now".
+    /// Consumes the underlying db-handle (mysql_async's get_binlog_stream
+    /// takes ownership of the connection); subsequent db.query calls on
+    /// this handle will fail.
     subscribe-changes: func(
         h: db-handle,
         position: string,
+        options: list<tuple<string, string>>,
     ) -> result<change-stream, db-error>;
 
     /// Pull the next event. Returns None when the host-side idle
