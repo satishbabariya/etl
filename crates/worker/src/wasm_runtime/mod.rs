@@ -3,6 +3,7 @@
 pub mod bindings;
 pub mod connector;
 pub mod db_host;
+pub mod db_pg_subscribe;
 pub mod db_subscribe;
 pub mod engine;
 pub mod epoch;
