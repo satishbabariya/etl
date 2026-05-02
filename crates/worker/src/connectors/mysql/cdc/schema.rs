@@ -27,8 +27,12 @@ pub fn map_mysql_type(mysql_type: &str) -> Result<DataType> {
         "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" => DataType::Utf8,
         "datetime" | "timestamp" => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         "date" => DataType::Date32,
+        "time" => DataType::Time64(TimeUnit::Microsecond),
         "boolean" | "bool" | "bit" => DataType::Boolean,
         "json" => DataType::Utf8,
+        "tinyblob" | "blob" | "mediumblob" | "longblob" | "binary" | "varbinary" => {
+            DataType::Binary
+        }
         other => bail!("unsupported MySQL type '{other}'"),
     };
     Ok(dt)
@@ -175,5 +179,23 @@ mod tests {
             s.field(5).data_type(),
             DataType::Timestamp(TimeUnit::Microsecond, _)
         ));
+    }
+
+    #[test]
+    fn maps_blob_family_to_binary() {
+        assert_eq!(map_mysql_type("blob").unwrap(), DataType::Binary);
+        assert_eq!(map_mysql_type("tinyblob").unwrap(), DataType::Binary);
+        assert_eq!(map_mysql_type("mediumblob").unwrap(), DataType::Binary);
+        assert_eq!(map_mysql_type("longblob").unwrap(), DataType::Binary);
+        assert_eq!(map_mysql_type("binary").unwrap(), DataType::Binary);
+        assert_eq!(map_mysql_type("varbinary").unwrap(), DataType::Binary);
+    }
+
+    #[test]
+    fn maps_time_to_time64_micros() {
+        assert_eq!(
+            map_mysql_type("time").unwrap(),
+            DataType::Time64(TimeUnit::Microsecond)
+        );
     }
 }

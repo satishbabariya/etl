@@ -29,6 +29,10 @@ pub enum ScalarValue {
     TimestampMicros(i64),
     /// Days since 1970-01-01.
     Date32(i32),
+    /// Raw bytes (BLOB / BINARY / VARBINARY).
+    Binary(Vec<u8>),
+    /// Microseconds since midnight (no date, no timezone).
+    Time64Micros(i64),
 }
 
 /// One row event in our internal representation.
@@ -116,6 +120,10 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
             Ok(Some(ScalarValue::Boolean(b.iter().any(|&x| x != 0))))
         }
 
+        (Value::Bytes(b), DataType::Binary) => {
+            Ok(Some(ScalarValue::Binary(b.clone())))
+        }
+
         (Value::Date(y, m, d, h, mi, s, us), DataType::Date32) => {
             let _ = (h, mi, s, us);
             let date = NaiveDate::from_ymd_opt(*y as i32, *m as u32, *d as u32)
@@ -148,6 +156,26 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
                 .parse()
                 .with_context(|| format!("parse timestamp seconds '{}'", s))?;
             Ok(Some(ScalarValue::TimestampMicros(secs * 1_000_000)))
+        }
+
+        (Value::Time(neg, days, h, m, s, us), DataType::Time64(TimeUnit::Microsecond)) => {
+            // MySQL TIME range is [-838:59:59, 838:59:59] (multi-day);
+            // Arrow Time64 expects [00:00:00, 24:00:00). For values
+            // outside that range, error rather than silently truncate.
+            if *days != 0 {
+                return Err(anyhow!(
+                    "MySQL TIME with day component {} not representable in Arrow Time64",
+                    days
+                ));
+            }
+            let mut micros = (*h as i64) * 3_600_000_000
+                + (*m as i64) * 60_000_000
+                + (*s as i64) * 1_000_000
+                + (*us as i64);
+            if *neg {
+                micros = -micros;
+            }
+            Ok(Some(ScalarValue::Time64Micros(micros)))
         }
 
         (other_v, other_dt) => Err(anyhow!(
@@ -232,6 +260,36 @@ pub fn parse_mysql_text(s: &str, target: &DataType) -> Result<Option<ScalarValue
                 .with_context(|| format!("parse mysql timestamp '{s}'"))?;
             let micros = Utc.from_utc_datetime(&naive).timestamp_micros();
             ScalarValue::TimestampMicros(micros)
+        }
+        DataType::Binary => {
+            // Snapshot path uses HEX(col) projection for binary columns,
+            // so the text we receive is a hex string with no prefix
+            // (unlike Postgres BYTEA which prefixes with `\x`).
+            if s.len() % 2 != 0 {
+                return Err(anyhow!("BINARY hex string has odd length: {}", s.len()));
+            }
+            let mut bytes = Vec::with_capacity(s.len() / 2);
+            for chunk in s.as_bytes().chunks(2) {
+                let byte = u8::from_str_radix(
+                    std::str::from_utf8(chunk).context("BINARY hex utf8")?,
+                    16,
+                )
+                .with_context(|| {
+                    format!("parse BINARY hex byte '{}'", String::from_utf8_lossy(chunk))
+                })?;
+                bytes.push(byte);
+            }
+            ScalarValue::Binary(bytes)
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            let nt = chrono::NaiveTime::parse_from_str(s, "%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveTime::parse_from_str(s, "%H:%M:%S"))
+                .with_context(|| format!("parse mysql time '{s}'"))?;
+            use chrono::Timelike;
+            let secs = nt.num_seconds_from_midnight() as i64;
+            // chrono's NaiveTime stores fractional component in nanoseconds.
+            let micros = secs * 1_000_000 + (nt.nanosecond() as i64) / 1_000;
+            ScalarValue::Time64Micros(micros)
         }
         other => {
             return Err(anyhow!(
@@ -390,5 +448,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v, Some(ScalarValue::TimestampMicros(1_767_225_600_000_000)));
+    }
+
+    #[test]
+    fn parse_text_binary_hex() {
+        let v = parse_mysql_text("DEADBEEF", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(ScalarValue::Binary(vec![0xde, 0xad, 0xbe, 0xef])));
+    }
+
+    #[test]
+    fn parse_text_binary_empty() {
+        let v = parse_mysql_text("", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(ScalarValue::Binary(vec![])));
+    }
+
+    #[test]
+    fn parse_text_binary_lowercase_hex() {
+        let v = parse_mysql_text("deadbeef", &DataType::Binary).unwrap();
+        assert_eq!(v, Some(ScalarValue::Binary(vec![0xde, 0xad, 0xbe, 0xef])));
+    }
+
+    #[test]
+    fn parse_text_binary_rejects_odd_length() {
+        let err = parse_mysql_text("ABC", &DataType::Binary).unwrap_err();
+        assert!(err.to_string().contains("odd length"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_text_time_with_micros() {
+        // 12:30:45.123456 = (12*3600 + 30*60 + 45) * 1_000_000 + 123_456
+        //                 = 45_045_123_456
+        let v = parse_mysql_text(
+            "12:30:45.123456",
+            &DataType::Time64(TimeUnit::Microsecond),
+        )
+        .unwrap();
+        assert_eq!(v, Some(ScalarValue::Time64Micros(45_045_123_456)));
+    }
+
+    #[test]
+    fn parse_text_time_without_fraction() {
+        let v = parse_mysql_text(
+            "00:00:01",
+            &DataType::Time64(TimeUnit::Microsecond),
+        )
+        .unwrap();
+        assert_eq!(v, Some(ScalarValue::Time64Micros(1_000_000)));
     }
 }
