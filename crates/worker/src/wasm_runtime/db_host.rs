@@ -136,22 +136,60 @@ impl DbHost for super::host::HostState {
 
     async fn subscribe_changes(
         &mut self,
-        _h: DbHandle,
-        _position: String,
+        h: DbHandle,
+        position: String,
     ) -> wasmtime::Result<Result<ChangeStream, DbError>> {
-        // Task 3 wires this up.
-        Ok(Err(DbError::Unsupported(
-            "subscribe-changes not yet implemented (lands in phase-2-3e-3)".into(),
-        )))
+        let conn = match self.db.conns.remove(&h.id) {
+            Some(DbConn::Mysql(c)) => c,
+            Some(DbConn::Consumed) => {
+                return Ok(Err(DbError::QueryFailed(
+                    "handle already consumed by an earlier subscribe-changes".into(),
+                )));
+            }
+            None => {
+                return Ok(Err(DbError::QueryFailed(format!(
+                    "no such db handle: {}",
+                    h.id
+                ))));
+            }
+        };
+        // Mark the slot consumed so guests get a clear error if they
+        // try db.query on the same handle later.
+        self.db.conns.insert(h.id, DbConn::Consumed);
+
+        let server_id = self.db.alloc_server_id();
+        let req = match build_binlog_request(server_id, &position) {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(e)),
+        };
+        let stream = match conn.get_binlog_stream(req).await {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(Err(DbError::ConnectFailed(format!(
+                    "get_binlog_stream: {e}"
+                ))));
+            }
+        };
+
+        let sub_id = self.db.alloc_id();
+        self.db.streams.insert(
+            sub_id,
+            super::db_subscribe::MysqlSubscription::new(stream, position),
+        );
+        Ok(Ok(ChangeStream { id: sub_id }))
     }
 
     async fn next_event(
         &mut self,
-        _s: ChangeStream,
+        s: ChangeStream,
     ) -> wasmtime::Result<Result<Option<ChangeEvent>, DbError>> {
-        Ok(Err(DbError::Unsupported(
-            "next-event not yet implemented (lands in phase-2-3e-3)".into(),
-        )))
+        let Some(sub) = self.db.streams.get_mut(&s.id) else {
+            return Ok(Err(DbError::QueryFailed(format!(
+                "no such change-stream: {}",
+                s.id
+            ))));
+        };
+        Ok(sub.next().await)
     }
 
     async fn close(&mut self, h: DbHandle) -> wasmtime::Result<()> {
@@ -163,10 +201,62 @@ impl DbHost for super::host::HostState {
         Ok(())
     }
 
-    async fn close_stream(&mut self, _s: ChangeStream) -> wasmtime::Result<()> {
-        // Task 3 implements stream cleanup.
+    async fn close_stream(&mut self, s: ChangeStream) -> wasmtime::Result<()> {
+        if let Some(sub) = self.db.streams.remove(&s.id) {
+            // BinlogStream::close is async and consumes self. We
+            // explicitly drop without close to avoid blocking on the
+            // server roundtrip — the server will detect the closed
+            // socket on its end.
+            drop(sub);
+        }
         Ok(())
     }
+}
+
+fn build_binlog_request<'a>(
+    server_id: u32,
+    position: &str,
+) -> Result<mysql_async::BinlogStreamRequest<'a>, DbError> {
+    use mysql_async::{BinlogStreamRequest, GnoInterval, Sid};
+    let req = BinlogStreamRequest::new(server_id);
+    if position.is_empty() {
+        return Ok(req);
+    }
+    let mut sids: Vec<Sid<'a>> = Vec::new();
+    for segment in position.split(',') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let (uuid_str, ranges) = segment.split_once(':').ok_or_else(|| {
+            DbError::InvalidConfig(format!("malformed GTID segment: {segment}"))
+        })?;
+        let uuid = uuid::Uuid::parse_str(uuid_str)
+            .map_err(|e| DbError::InvalidConfig(format!("parse uuid '{uuid_str}': {e}")))?;
+        let mut intervals: Vec<GnoInterval> = Vec::new();
+        for r in ranges.split(':') {
+            let (lo, hi) = match r.split_once('-') {
+                Some((a, b)) => {
+                    let a: u64 = a.parse().map_err(|e| {
+                        DbError::InvalidConfig(format!("parse gno '{a}': {e}"))
+                    })?;
+                    let b: u64 = b.parse().map_err(|e| {
+                        DbError::InvalidConfig(format!("parse gno '{b}': {e}"))
+                    })?;
+                    (a, b)
+                }
+                None => {
+                    let n: u64 = r.parse().map_err(|e| {
+                        DbError::InvalidConfig(format!("parse gno '{r}': {e}"))
+                    })?;
+                    (n, n)
+                }
+            };
+            intervals.push(GnoInterval::new(lo, hi.saturating_add(1)));
+        }
+        sids.push(Sid::new(uuid.into_bytes()).with_intervals(intervals));
+    }
+    Ok(req.with_gtid().with_gtid_set(sids))
 }
 
 fn value_to_string(v: Value) -> Option<String> {
