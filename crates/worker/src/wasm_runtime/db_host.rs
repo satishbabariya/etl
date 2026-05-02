@@ -16,8 +16,12 @@ use std::collections::HashMap;
 pub struct DbHostState {
     next_id: u32,
     conns: HashMap<u32, DbConn>,
-    /// Streams are populated by Task 3.
-    pub(super) streams: HashMap<u32, super::db_subscribe::MysqlSubscription>,
+    pub(super) streams: HashMap<u32, DbStream>,
+}
+
+pub(super) enum DbStream {
+    Mysql(super::db_subscribe::MysqlSubscription),
+    Postgres(super::db_pg_subscribe::PgSubscription),
 }
 
 pub(super) enum DbConn {
@@ -165,22 +169,10 @@ impl DbHost for super::host::HostState {
         &mut self,
         h: DbHandle,
         position: String,
-        _options: Vec<(String, String)>,
+        options: Vec<(String, String)>,
     ) -> wasmtime::Result<Result<ChangeStream, DbError>> {
         let conn = match self.db.conns.remove(&h.id) {
-            Some(DbConn::Mysql(c)) => c,
-            Some(DbConn::Postgres(_)) => {
-                // Phase II.3.f Task 3 lands the real Postgres subscribe arm.
-                return Ok(Err(DbError::Unsupported(
-                    "postgres subscribe-changes not yet implemented (lands in phase-2-3f-3)"
-                        .into(),
-                )));
-            }
-            Some(DbConn::Consumed) => {
-                return Ok(Err(DbError::QueryFailed(
-                    "handle already consumed by an earlier subscribe-changes".into(),
-                )));
-            }
+            Some(c) => c,
             None => {
                 return Ok(Err(DbError::QueryFailed(format!(
                     "no such db handle: {}",
@@ -188,30 +180,80 @@ impl DbHost for super::host::HostState {
                 ))));
             }
         };
-        // Mark the slot consumed so guests get a clear error if they
-        // try db.query on the same handle later.
-        self.db.conns.insert(h.id, DbConn::Consumed);
 
-        let server_id = self.db.alloc_server_id();
-        let req = match build_binlog_request(server_id, &position) {
-            Ok(r) => r,
-            Err(e) => return Ok(Err(e)),
-        };
-        let stream = match conn.get_binlog_stream(req).await {
-            Ok(s) => s,
-            Err(e) => {
-                return Ok(Err(DbError::ConnectFailed(format!(
-                    "get_binlog_stream: {e}"
-                ))));
+        match conn {
+            DbConn::Mysql(my_conn) => {
+                // Mark the slot consumed so guests get a clear error if
+                // they try db.query on the same handle later.
+                self.db.conns.insert(h.id, DbConn::Consumed);
+                let server_id = self.db.alloc_server_id();
+                let req = match build_binlog_request(server_id, &position) {
+                    Ok(r) => r,
+                    Err(e) => return Ok(Err(e)),
+                };
+                let stream = match my_conn.get_binlog_stream(req).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Ok(Err(DbError::ConnectFailed(format!(
+                            "get_binlog_stream: {e}"
+                        ))));
+                    }
+                };
+                let sub_id = self.db.alloc_id();
+                self.db.streams.insert(
+                    sub_id,
+                    DbStream::Mysql(super::db_subscribe::MysqlSubscription::new(
+                        stream, position,
+                    )),
+                );
+                Ok(Ok(ChangeStream { id: sub_id }))
             }
-        };
-
-        let sub_id = self.db.alloc_id();
-        self.db.streams.insert(
-            sub_id,
-            super::db_subscribe::MysqlSubscription::new(stream, position),
-        );
-        Ok(Ok(ChangeStream { id: sub_id }))
+            DbConn::Postgres(pg_conn) => {
+                let mut slot_name: Option<String> = None;
+                let mut publication_names: Option<String> = None;
+                let mut proto_version = "1".to_string();
+                for (k, v) in &options {
+                    match k.as_str() {
+                        "slot_name" => slot_name = Some(v.clone()),
+                        "publication_names" => publication_names = Some(v.clone()),
+                        "proto_version" => proto_version = v.clone(),
+                        _ => {}
+                    }
+                }
+                let slot_name = match slot_name {
+                    Some(s) => s,
+                    None => {
+                        return Ok(Err(DbError::InvalidConfig(
+                            "postgres subscribe-changes requires options[slot_name]".into(),
+                        )));
+                    }
+                };
+                let publication_names = match publication_names {
+                    Some(s) => s,
+                    None => {
+                        return Ok(Err(DbError::InvalidConfig(
+                            "postgres subscribe-changes requires options[publication_names]"
+                                .into(),
+                        )));
+                    }
+                };
+                let sub_id = self.db.alloc_id();
+                self.db.streams.insert(
+                    sub_id,
+                    DbStream::Postgres(super::db_pg_subscribe::PgSubscription::new(
+                        pg_conn,
+                        slot_name,
+                        publication_names,
+                        proto_version,
+                        position,
+                    )),
+                );
+                Ok(Ok(ChangeStream { id: sub_id }))
+            }
+            DbConn::Consumed => Ok(Err(DbError::QueryFailed(
+                "handle already consumed by an earlier subscribe-changes".into(),
+            ))),
+        }
     }
 
     async fn next_event(
@@ -224,7 +266,11 @@ impl DbHost for super::host::HostState {
                 s.id
             ))));
         };
-        Ok(sub.next().await)
+        let res = match sub {
+            DbStream::Mysql(m) => m.next().await,
+            DbStream::Postgres(p) => p.next().await,
+        };
+        Ok(res)
     }
 
     async fn close(&mut self, h: DbHandle) -> wasmtime::Result<()> {
