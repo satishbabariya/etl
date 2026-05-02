@@ -1,7 +1,18 @@
 package platform:connector@0.1.0;
 
 interface types {
-    enum cursor-kind { int64, timestamp-tz }
+    enum cursor-kind {
+        int64,
+        timestamp-tz,
+        /// MySQL GTID set string, e.g. "<uuid>:1-23".
+        gtid,
+        /// Postgres LSN string, e.g. "0/16B3748".
+        lsn,
+        /// Composite "<gtid_or_lsn>|<last_pk_as_int64>" used during the
+        /// snapshot phase; the connector switches to plain gtid/lsn after
+        /// is_final = true.
+        snapshot-pk,
+    }
 
     record cursor-value {
         kind: cursor-kind,
@@ -52,6 +63,7 @@ interface host {
 world source-connector {
     use types.{connection-config, source-config, cursor-value, read-outcome, connector-error};
     import host;
+    import db;
     export discover: func(conn: connection-config, source: source-config) -> result<list<u8>, connector-error>;
     export read-batch: func(
         conn: connection-config,

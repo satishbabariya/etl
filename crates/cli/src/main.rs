@@ -535,7 +535,8 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         SourceSpec::Postgres(p) => p.table.clone(),
         SourceSpec::Wasm(_) => {
             let bare = connector_ref
-                .strip_prefix("wasm:")
+                .strip_prefix("wasm-cdc:")
+                .or_else(|| connector_ref.strip_prefix("wasm:"))
                 .unwrap_or(&connector_ref);
             let name = bare.split('@').next().unwrap_or(bare);
             name.to_string()
@@ -606,6 +607,45 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         .run_timeout(Duration::from_secs(3600))
         .task_timeout(Duration::from_secs(60))
         .build();
+
+    // Phase II.3.e: route to WasmCdcPipelineWorkflow when the connector
+    // ref carries the wasm-cdc: prefix. This is the SDK-authored CDC
+    // path; the connector handles snapshot+streaming entirely guest-side
+    // via cursor-kind transitions (snapshot-pk -> gtid).
+    if connector_ref.starts_with("wasm-cdc:") {
+        let wasm_cdc_input = worker::workflows::WasmCdcPipelineInput {
+            run_id: run_id.as_uuid(),
+            pipeline_id: pipeline_id.as_uuid(),
+            spec: spec.clone(),
+            source_connection: source_connection.clone(),
+            initial_cursor,
+            stream_name,
+            connector_ref: connector_ref.clone(),
+            evolution_policy,
+            cursor_column,
+            cursor_kind,
+            pk_columns,
+            tenant_id: pipeline.tenant_id.as_uuid(),
+            principal_id: p.principal_id.as_uuid(),
+            jti: p.jti,
+            max_windows: std::env::var("ETL_CDC_MAX_WINDOWS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            idle_sleep_secs: 0,
+        };
+        client
+            .start_workflow(
+                worker::workflows::WasmCdcPipelineWorkflow::run,
+                wasm_cdc_input,
+                opts,
+            )
+            .await
+            .context("starting WasmCdcPipelineWorkflow")?;
+        println!("started WASM CDC workflow {}", workflow_id);
+        println!("run id: {}", run_id);
+        return Ok(());
+    }
 
     // Phase II.3.d: route to MysqlCdcPipelineWorkflow for MysqlCdc source.
     if matches!(

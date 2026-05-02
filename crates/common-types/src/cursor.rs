@@ -6,6 +6,8 @@ pub enum CursorKind {
     Int64,
     TimestampTz,
     Lsn,
+    Gtid,
+    SnapshotPk,
 }
 
 pub fn lsn_to_string(lsn: u64) -> String {

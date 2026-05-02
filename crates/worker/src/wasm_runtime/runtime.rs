@@ -35,6 +35,11 @@ impl WasmSourceRuntime {
             wasmtime::component::HasSelf<HostState>,
         >(&mut linker, |s| s)
             .context("adding host.log / host.http-fetch to linker")?;
+        super::bindings::platform::connector::db::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<HostState>,
+        >(&mut linker, |s| s)
+            .context("adding db.* (open/query/close/...) to linker")?;
 
         Ok(Arc::new(Self {
             engine,

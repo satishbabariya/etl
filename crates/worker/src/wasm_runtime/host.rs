@@ -13,6 +13,7 @@ pub struct HostState {
     pub http: reqwest::Client,
     pub limits: super::limits::Limits,
     pub memory_limiter: super::limits::MemoryCap,
+    pub db: super::db_host::DbHostState,
 }
 
 impl HostState {
@@ -31,6 +32,7 @@ impl HostState {
                 .expect("reqwest client"),
             limits,
             memory_limiter,
+            db: super::db_host::DbHostState::new(),
         }
     }
 }

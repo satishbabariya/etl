@@ -1,0 +1,71 @@
+package platform:connector@0.1.0;
+
+interface db {
+    record db-handle { id: u32 }
+    record change-stream { id: u32 }
+
+    /// One change event drained from a binlog/WAL subscription.
+    record change-event {
+        /// 'i' / 'u' / 'd' / 'h' (heartbeat — emit when no events but
+        /// position advanced). The host uses 'h' to advance the cursor
+        /// even on empty windows.
+        op: char,
+        /// Source's commit position (GTID set / LSN). Always advances.
+        position: string,
+        /// Microseconds since unix epoch; 0 if the source did not provide one.
+        commit-ts: s64,
+        /// Source-side transaction id; 0 if unknown.
+        txid: s64,
+        /// Schema-qualified table name (e.g. "shop.orders").
+        table: string,
+        /// Row data as a JSON object. Empty string for heartbeats.
+        /// We use JSON-as-string here rather than Arrow IPC because CDC
+        /// events are typically small and JSON is easier to author against;
+        /// the connector converts to Arrow IPC inside read-batch.
+        row-json: string,
+    }
+
+    variant db-error {
+        invalid-config(string),
+        connect-failed(string),
+        query-failed(string),
+        position-lost(string),
+        unsupported(string),
+    }
+
+    /// Open a connection. URL format is connector-specific
+    /// (mysql://... / postgres://...). Each component instance gets
+    /// its own connection pool via this verb; handles do not survive
+    /// across activity invocations.
+    open: func(url: string) -> result<db-handle, db-error>;
+
+    /// Run a query that returns rows. Each row is a list of
+    /// optional textual values (NULL = none). For typed values, the
+    /// connector decides projection (CAST AS CHAR, HEX(), etc.) — the
+    /// host treats results as text.
+    query: func(
+        h: db-handle,
+        sql: string,
+        params: list<string>,
+    ) -> result<list<list<option<string>>>, db-error>;
+
+    /// Subscribe to change events from `position`. For MySQL, position
+    /// is a GTID set; empty string = "from now". Consumes the underlying
+    /// db-handle (mysql_async's get_binlog_stream takes ownership of the
+    /// connection); subsequent db.query calls on this handle will fail.
+    subscribe-changes: func(
+        h: db-handle,
+        position: string,
+    ) -> result<change-stream, db-error>;
+
+    /// Pull the next event. Returns None when the host-side idle
+    /// timeout (default 5s) elapses without an event — the guest
+    /// should treat this as "drain done" and return from read-batch.
+    next-event: func(s: change-stream) -> result<option<change-event>, db-error>;
+
+    /// Hint the host this handle/stream isn't needed. Idempotent
+    /// silent no-op for unknown ids. Component teardown also cleans
+    /// up everything automatically.
+    close: func(h: db-handle);
+    close-stream: func(s: change-stream);
+}
