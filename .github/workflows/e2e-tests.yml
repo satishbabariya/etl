@@ -27,6 +27,12 @@ jobs:
       - name: Install build + stack dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler postgresql-client netcat-openbsd
 
+      - name: Free disk space (drop large untouched dirs ~30 GB)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Bring up docker-compose stack
@@ -35,11 +41,18 @@ jobs:
       - name: Wait for stack readiness
         run: ./ci/wait-for-stack.sh
 
-      - name: Build workspace + tests + examples
+      - name: Build workspace binaries
+        run: cargo build --workspace --locked
+
+      # --no-run only compiles the test binary (4 of 34 integration
+      # tests). Building --all-targets would also link the other 30
+      # ignored test binaries and overflows ubuntu-latest's ~14 GB disk.
+      - name: Pre-compile curated e2e test binaries
         run: |
-          cargo build --workspace --locked --all-targets
-          cargo build --release --manifest-path examples/mysql-cdc-rs/Cargo.toml
-          cargo build --release --manifest-path examples/postgres-cdc-rs/Cargo.toml
+          cargo test -p integration-tests --test mysql_cdc_wasm_e2e --no-run --locked
+          cargo test -p integration-tests --test postgres_cdc_wasm_e2e --no-run --locked
+          cargo test -p integration-tests --test wasm_connector --no-run --locked
+          cargo test -p integration-tests --test mysql_cdc_e2e --no-run --locked
 
       - name: e2e — mysql_cdc_wasm
         run: cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture
