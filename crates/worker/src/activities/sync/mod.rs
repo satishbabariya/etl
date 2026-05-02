@@ -31,6 +31,10 @@ pub struct SyncActivities {
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {
+    // Surface the inner error to logs before it's wrapped by Temporal's
+    // "Activity task failed" envelope. Without this, CI runs that fail
+    // inside read_batch / discover_stream have no way to learn why.
+    tracing::error!(error = %e, error_chain = ?e, "activity returning retryable error");
     e.into()
 }
 

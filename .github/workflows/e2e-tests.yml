@@ -15,7 +15,7 @@ env:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -35,8 +35,11 @@ jobs:
       - name: Wait for stack readiness
         run: ./ci/wait-for-stack.sh
 
-      - name: Build workspace
-        run: cargo build --workspace --locked
+      - name: Build workspace + tests + examples
+        run: |
+          cargo build --workspace --locked --all-targets
+          cargo build --release --manifest-path examples/mysql-cdc-rs/Cargo.toml
+          cargo build --release --manifest-path examples/postgres-cdc-rs/Cargo.toml
 
       - name: e2e — mysql_cdc_wasm
         run: cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture
