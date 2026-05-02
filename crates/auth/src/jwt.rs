@@ -254,12 +254,14 @@ mod tests {
     use super::*;
     use crate::jwks::jwks_from_keystore;
     use crate::keystore::Keystore;
+    use serial_test::serial;
 
     fn fake() -> (PrincipalId, TenantId) {
         (PrincipalId::new(), TenantId::new())
     }
 
     #[tokio::test]
+    #[serial(env_master_key)]
     async fn rs256_round_trip_via_inline_jwks() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
@@ -286,6 +288,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(env_master_key)]
     async fn wrong_audience_rejects() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
@@ -311,6 +314,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(env_master_key)]
     async fn unknown_kid_rejects() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
