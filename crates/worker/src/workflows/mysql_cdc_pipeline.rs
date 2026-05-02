@@ -131,8 +131,24 @@ impl MysqlCdcPipelineWorkflow {
         )
         .await?;
 
-        let gtid_out = ctx
+        // Snapshot resume check: if a prior run captured a GTID and
+        // partway-completed snapshot, we MUST reuse that GTID. Re-
+        // capturing now would skip past writes during the failure
+        // window and lose data.
+        let snap_state = ctx
             .start_activity(
+                MysqlCdcActivities::mysql_snapshot_state_get,
+                MysqlSnapshotStateGetInput {
+                    pipeline_id: input.pipeline_id,
+                    tenant_id: input.tenant_id,
+                },
+                opts_short(),
+            )
+            .await?;
+        let captured_gtid = if !snap_state.captured_gtid.is_empty() {
+            snap_state.captured_gtid.clone()
+        } else {
+            ctx.start_activity(
                 MysqlCdcActivities::capture_start_gtid,
                 CaptureStartGtidInput {
                     pipeline_id: input.pipeline_id,
@@ -144,7 +160,9 @@ impl MysqlCdcPipelineWorkflow {
                 },
                 opts_short(),
             )
-            .await?;
+            .await?
+            .gtid_set
+        };
 
         let schema_out = ctx
             .start_activity(
@@ -171,14 +189,15 @@ impl MysqlCdcPipelineWorkflow {
         if matches!(
             my.initial_sync,
             common_types::pipeline_spec::MysqlInitialSync::SnapshotThenStreaming
-        ) {
+        ) && !snap_state.completed
+        {
             let pk_col = my.pk_column.clone().ok_or_else(|| {
                 anyhow::anyhow!(
                     "MysqlCdcSourceSpec.pk_column required for snapshot mode"
                 )
             })?;
             let mut snap_seq: u32 = 0;
-            let mut last_pk: Option<i64> = None;
+            let mut last_pk: Option<i64> = snap_state.last_pk;
             loop {
                 let snap_out = ctx
                     .start_activity(
@@ -197,7 +216,7 @@ impl MysqlCdcPipelineWorkflow {
                             last_pk,
                             batch_size: input.spec.batch_size.max(100) as u32,
                             schema_json: schema_out.schema_json.clone(),
-                            captured_gtid: gtid_out.gtid_set.clone(),
+                            captured_gtid: captured_gtid.clone(),
                             destination: dest.clone(),
                         },
                         opts_long(),
@@ -209,9 +228,19 @@ impl MysqlCdcPipelineWorkflow {
                     break;
                 }
             }
+            // Mark snapshot complete so future re-runs skip the loop.
+            ctx.start_activity(
+                MysqlCdcActivities::mysql_snapshot_mark_completed,
+                MysqlSnapshotMarkCompletedInput {
+                    pipeline_id: input.pipeline_id,
+                    tenant_id: input.tenant_id,
+                },
+                opts_short(),
+            )
+            .await?;
         }
 
-        let mut current_gtid = gtid_out.gtid_set;
+        let mut current_gtid = captured_gtid;
         let mut window_seq: u32 = 0;
         let mut batch_seq: u32 = if matches!(
             my.initial_sync,

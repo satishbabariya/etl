@@ -19,7 +19,8 @@ use uuid::Uuid;
 
 use crate::activities::cdc::CdcActivities;
 use crate::activities::cdc::inputs::{
-    EnsureSlotInput, ReadWindowInput, ReadWindowOutput, SnapshotChunkInput, SnapshotChunkOutput,
+    CdcSnapshotMarkCompletedInput, CdcSnapshotStateGetInput, EnsureSlotInput, ReadWindowInput,
+    ReadWindowOutput, SnapshotChunkInput, SnapshotChunkOutput,
 };
 use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
 
@@ -146,36 +147,60 @@ impl CdcPipelineWorkflow {
             .first()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("CDC requires at least one PK column"))?;
+
+        // Resume snapshot from persisted state if a prior run got partway.
+        let snap_state = ctx
+            .start_activity(
+                CdcActivities::cdc_snapshot_state_get,
+                CdcSnapshotStateGetInput {
+                    pipeline_id: input.pipeline_id,
+                    tenant_id: input.tenant_id,
+                },
+                opts_short(),
+            )
+            .await?;
         let mut batch_seq: u32 = 0;
-        let mut last_pk: Option<i64> = None;
-        loop {
-            let out: SnapshotChunkOutput = ctx
-                .start_activity(
-                    CdcActivities::snapshot_chunk,
-                    SnapshotChunkInput {
-                        pipeline_id: input.pipeline_id,
-                        tenant_id: input.tenant_id,
-                        principal_id: input.principal_id,
-                        jti: input.jti,
-                        run_id: input.run_id,
-                        batch_seq,
-                        source_conn: input.source_conn.clone(),
-                        schema: pg.schema.clone(),
-                        table: pg.table.clone(),
-                        pk_col: pk_col.clone(),
-                        last_pk,
-                        batch_size: input.spec.batch_size.max(100),
-                        consistent_point: slot.consistent_point.clone(),
-                        destination: dest.clone(),
-                    },
-                    opts_long(),
-                )
-                .await?;
-            batch_seq += 1;
-            if out.is_final {
-                break;
+        let mut last_pk: Option<i64> = snap_state.last_pk;
+        if !snap_state.completed {
+            loop {
+                let out: SnapshotChunkOutput = ctx
+                    .start_activity(
+                        CdcActivities::snapshot_chunk,
+                        SnapshotChunkInput {
+                            pipeline_id: input.pipeline_id,
+                            tenant_id: input.tenant_id,
+                            principal_id: input.principal_id,
+                            jti: input.jti,
+                            run_id: input.run_id,
+                            batch_seq,
+                            source_conn: input.source_conn.clone(),
+                            schema: pg.schema.clone(),
+                            table: pg.table.clone(),
+                            pk_col: pk_col.clone(),
+                            last_pk,
+                            batch_size: input.spec.batch_size.max(100),
+                            consistent_point: slot.consistent_point.clone(),
+                            destination: dest.clone(),
+                        },
+                        opts_long(),
+                    )
+                    .await?;
+                batch_seq += 1;
+                if out.is_final {
+                    break;
+                }
+                last_pk = out.last_pk;
             }
-            last_pk = out.last_pk;
+            // Mark snapshot complete so future re-runs skip the loop.
+            ctx.start_activity(
+                CdcActivities::cdc_snapshot_mark_completed,
+                CdcSnapshotMarkCompletedInput {
+                    pipeline_id: input.pipeline_id,
+                    tenant_id: input.tenant_id,
+                },
+                opts_short(),
+            )
+            .await?;
         }
 
         // Streaming loop. `max_windows > 0` caps iterations (used by tests).

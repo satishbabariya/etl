@@ -86,3 +86,22 @@ pub struct ReleaseSlotInput {
     pub source_conn: ConnectionConfig,
     pub slot_name: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CdcSnapshotStateGetInput {
+    pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CdcSnapshotStateGetOutput {
+    pub last_pk: Option<i64>,
+    pub completed: bool,
+    pub captured_position: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CdcSnapshotMarkCompletedInput {
+    pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
+}

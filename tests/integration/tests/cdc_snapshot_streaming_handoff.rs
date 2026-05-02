@@ -232,6 +232,21 @@ async fn snapshot_then_streaming_handoff() -> anyhow::Result<()> {
         customer_field.data_type()
     );
 
+    // === Resume verification ===
+    // Re-run the same pipeline. Snapshot completed in run #1 → second run
+    // should skip the snapshot loop entirely (no new 's' rows).
+    let s_after_first_run = read_ops(tmp.path()).iter().filter(|o| *o == "s").count();
+    run_cli(pipe).await?;
+    // Give the second run's streaming loop a moment to settle (snapshot
+    // should be skipped immediately).
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let s_after_second_run = read_ops(tmp.path()).iter().filter(|o| *o == "s").count();
+    assert_eq!(
+        s_after_second_run, s_after_first_run,
+        "second run added {} new 's' rows; expected 0 (snapshot should be skipped)",
+        s_after_second_run as i64 - s_after_first_run as i64
+    );
+
     w.kill().await?;
     w.wait().await?;
     Ok(())

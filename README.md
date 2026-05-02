@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d.5 — MySQL CDC initial snapshot (complete)** on top of II.3.d.4. MySQL CDC now snapshots existing rows (op="s") before streaming, with the GTID captured upfront so concurrent updates flow through streaming and reconcile via destination PK merge. Default mode is `snapshot_then_streaming`; skip-snapshot is opt-in via `initial_sync = streaming_only`. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.d.6 — CDC snapshot resume via catalog persistence (complete)** on top of II.3.d.5. Both Postgres and MySQL CDC snapshots now persist `last_pk` + `captured_position` to a new `cdc_snapshots` catalog table after each chunk. A pipeline whose snapshot was interrupted resumes from the last persisted PK; a pipeline whose snapshot completed skips the loop on subsequent runs. MySQL CDC additionally reuses the persisted GTID on resume so writes during the failure window aren't lost. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 

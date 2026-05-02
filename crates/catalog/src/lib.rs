@@ -6,6 +6,7 @@
 
 mod db;
 pub mod cdc;
+pub mod cdc_snapshot;
 pub mod connection;
 pub mod pipeline;
 pub mod run;
@@ -377,6 +378,40 @@ impl Catalog {
         Ok(())
     }
 
+    // CDC snapshot state (cross-run resume)
+    pub async fn cdc_snapshot_upsert(
+        &self,
+        ctx: TenantContext,
+        state: &cdc_snapshot::CdcSnapshotState,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        cdc_snapshot::upsert(&mut tx, state).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn cdc_snapshot_get(
+        &self,
+        ctx: TenantContext,
+        pipeline_id: PipelineId,
+    ) -> sqlx::Result<Option<cdc_snapshot::CdcSnapshotState>> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        let r = cdc_snapshot::get(&mut tx, pipeline_id).await?;
+        tx.commit().await?;
+        Ok(r)
+    }
+
+    pub async fn cdc_snapshot_mark_completed(
+        &self,
+        ctx: TenantContext,
+        pipeline_id: PipelineId,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.begin_with_tenant(Some(ctx)).await?;
+        cdc_snapshot::mark_completed(&mut tx, pipeline_id).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     // Secrets
     pub async fn secret_create(
         &self,
@@ -573,7 +608,7 @@ impl Catalog {
     pub async fn truncate_all_for_tests(&self) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(None).await?;
         sqlx::query(
-            "TRUNCATE audit_verified_chain, audit_log, revoked_tokens, refresh_tokens, principals, secrets, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
+            "TRUNCATE audit_verified_chain, audit_log, revoked_tokens, refresh_tokens, principals, secrets, cdc_snapshots, cdc_slots, runs, stream_state, schemas, streams, pipelines, connections, workspaces, tenants CASCADE",
         )
         .execute(&mut *tx)
         .await?;

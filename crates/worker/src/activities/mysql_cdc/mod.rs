@@ -328,10 +328,64 @@ impl MysqlCdcActivities {
                 .await
                 .map_err(into_activity_err)?;
         }
+        // Per-chunk: persist snapshot state for crash-resume.
+        let snap_state = catalog::cdc_snapshot::CdcSnapshotState {
+            pipeline_id: common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id),
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            last_pk: chunk.last_pk,
+            completed: false,
+            captured_position: input.captured_gtid.clone(),
+        };
+        let snap_ctx = common_types::ids::TenantContext::new(
+            common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        self.catalog
+            .cdc_snapshot_upsert(snap_ctx, &snap_state)
+            .await
+            .map_err(|e| into_activity_err(anyhow::anyhow!(e)))?;
         Ok(MysqlSnapshotChunkOutput {
             rows: chunk.rows as u32,
             last_pk: chunk.last_pk,
             is_final: chunk.is_final,
         })
+    }
+
+    #[activity]
+    pub async fn mysql_snapshot_state_get(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: MysqlSnapshotStateGetInput,
+    ) -> Result<MysqlSnapshotStateGetOutput, ActivityError> {
+        let ctx = common_types::ids::TenantContext::new(
+            common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        let pid = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let state = self
+            .catalog
+            .cdc_snapshot_get(ctx, pid)
+            .await
+            .map_err(|e| into_activity_err(anyhow::anyhow!(e)))?;
+        Ok(MysqlSnapshotStateGetOutput {
+            last_pk: state.as_ref().and_then(|s| s.last_pk),
+            completed: state.as_ref().map(|s| s.completed).unwrap_or(false),
+            captured_gtid: state.map(|s| s.captured_position).unwrap_or_default(),
+        })
+    }
+
+    #[activity]
+    pub async fn mysql_snapshot_mark_completed(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: MysqlSnapshotMarkCompletedInput,
+    ) -> Result<(), ActivityError> {
+        let ctx = common_types::ids::TenantContext::new(
+            common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        let pid = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
+        self.catalog
+            .cdc_snapshot_mark_completed(ctx, pid)
+            .await
+            .map_err(|e| into_activity_err(anyhow::anyhow!(e)))?;
+        Ok(())
     }
 }

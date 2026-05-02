@@ -108,3 +108,22 @@ pub struct MysqlSnapshotChunkOutput {
     pub last_pk: Option<i64>,
     pub is_final: bool,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlSnapshotStateGetInput {
+    pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlSnapshotStateGetOutput {
+    pub last_pk: Option<i64>,
+    pub completed: bool,
+    pub captured_gtid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlSnapshotMarkCompletedInput {
+    pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
+}
