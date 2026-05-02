@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d.7 — MySQL CDC OID coverage: BLOB + TIME (complete)** on top of II.3.d.6. MySQL CDC now lands BLOB/TINYBLOB/MEDIUMBLOB/LONGBLOB/BINARY/VARBINARY columns as Arrow `Binary` and TIME as `Time64(Microsecond)`. Both connectors are at type-coverage parity for binary and time-of-day. Snapshot uses `HEX()` projection for Binary columns; streaming reads `BinlogValue::Bytes` directly. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.e — Lift CDC to the WASM SDK (complete)** on top of II.3.d.7. CDC connectors are now authorable as WASM Component Model guests using the typed `db.*` host imports (`open` / `query` / `subscribe-changes` / `next-event` / `close` / `close-stream`). Cursor-kind extends with `gtid | lsn | snapshot-pk`; the snapshot phase carries `<gtid>|<last_pk>` and transitions to `<gtid>` once the snapshot is done. New `WasmCdcPipelineWorkflow` is a long-lived sleep-on-empty workflow that the CLI routes to when `connector_ref` starts with `wasm-cdc:`. Reference connector `examples/mysql-cdc-rs` validates the SDK end-to-end against the host (currently MySQL only; Postgres host backing comes in II.3.f). Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, Postgres SDK port) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 
