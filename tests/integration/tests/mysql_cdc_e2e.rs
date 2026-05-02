@@ -196,7 +196,8 @@ async fn mysql_cdc_streaming_only_e2e() -> anyhow::Result<()> {
             "schema": "test",
             "table": "customers",
             "server_id": 4242,
-            "heartbeat_secs": 0
+            "heartbeat_secs": 0,
+            "initial_sync": "streaming_only"
         },
         "destination": {
             "type": "local_parquet",
@@ -311,6 +312,173 @@ async fn mysql_cdc_streaming_only_e2e() -> anyhow::Result<()> {
         ),
         "created column should be Timestamp(Micro), got {:?}",
         created_field.data_type()
+    );
+
+    Ok(())
+}
+
+async fn seed_three_existing_rows(url: &str) -> anyhow::Result<()> {
+    let pool = mysql_async::Pool::new(url);
+    let mut conn = pool.get_conn().await?;
+    conn.query_drop(
+        "INSERT INTO customers (id, email, name, created) VALUES \
+         (1, 'a@x.com', 'Alice',   '2026-01-01 00:00:00'), \
+         (2, 'b@x.com', 'Bob',     '2026-01-01 00:00:01'), \
+         (3, 'c@x.com', 'Carol',   '2026-01-01 00:00:02')",
+    )
+    .await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
+async fn perform_post_snapshot_iud(url: &str) -> anyhow::Result<()> {
+    let pool = mysql_async::Pool::new(url);
+    let mut conn = pool.get_conn().await?;
+    conn.query_drop(
+        "INSERT INTO customers (id, email, name, created) \
+         VALUES (4, 'd@x.com', 'Dave', '2026-01-02 00:00:00')",
+    )
+    .await?;
+    conn.query_drop("UPDATE customers SET email='bob@x.com' WHERE id=2")
+        .await?;
+    conn.query_drop("DELETE FROM customers WHERE id=1").await?;
+    drop(conn);
+    pool.disconnect().await.ok();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker + temporal stack; ~120s"]
+async fn mysql_cdc_snapshot_then_streaming_e2e() -> anyhow::Result<()> {
+    build_workspace().await?;
+
+    let (_container, mysql_url) = start_mysql_container().await?;
+    seed_table(&mysql_url).await?;
+    seed_three_existing_rows(&mysql_url).await?;
+
+    let cat = Catalog::connect(&catalog_url()).await?;
+    cat.migrate().await?;
+    cat.truncate_all_for_tests().await?;
+
+    let tenant = cat.create_tenant("dev").await?;
+    let src = cat
+        .create_connection(NewConnection {
+            tenant_id: tenant,
+            name: "mysql-snapshot".into(),
+            connector_ref: "mysql_cdc@0.1.0".into(),
+            config: json!({ "url": mysql_url }),
+        })
+        .await?;
+
+    let tmp_data = tempfile::tempdir()?;
+    let spec = json!({
+        "source": {
+            "type": "mysql_cdc",
+            "schema": "test",
+            "table": "customers",
+            "server_id": 4243,
+            "heartbeat_secs": 0,
+            "initial_sync": "snapshot_then_streaming",
+            "pk_column": "id"
+        },
+        "destination": {
+            "type": "local_parquet",
+            "base_path": tmp_data.path().to_string_lossy()
+        },
+        "batch_size": 100
+    });
+    let pipe = cat
+        .create_pipeline(NewPipeline {
+            tenant_id: tenant,
+            name: "mysql-customers-snapshot".into(),
+            source_conn_id: src,
+            dest_conn_id: None,
+            spec,
+        })
+        .await?;
+
+    let mut worker = spawn_worker().await?;
+
+    let out = Command::new(cargo_bin("platform"))
+        .args(["pipeline", "run", &pipe.to_string()])
+        .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
+        .env("TEMPORAL_ADDRESS", "127.0.0.1:7233")
+        .env("TEMPORAL_NAMESPACE", "default")
+        .env("TEMPORAL_TASK_QUEUE", "pipeline-default")
+        .env("ETL_CDC_MAX_WINDOWS", "8")
+        .current_dir(workspace_root())
+        .output()
+        .await?;
+    assert!(
+        out.status.success(),
+        "pipeline run kickoff failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Wait for snapshot to land 3 rows in Parquet.
+    let snap_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if Instant::now() > snap_deadline {
+            worker.kill().await.ok();
+            anyhow::bail!("timed out waiting for 3 snapshot rows");
+        }
+        let ops = read_parquet_ops(tmp_data.path());
+        let s_count = ops.iter().filter(|o| *o == "s").count();
+        if s_count >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    // Now perform IUD; streaming picks them up.
+    perform_post_snapshot_iud(&mysql_url).await?;
+
+    let total_deadline = Instant::now() + Duration::from_secs(120);
+    let mut final_ops: Vec<String> = Vec::new();
+    loop {
+        if Instant::now() > total_deadline {
+            worker.kill().await.ok();
+            anyhow::bail!("timed out waiting for streaming ops; saw: {final_ops:?}");
+        }
+        final_ops = read_parquet_ops(tmp_data.path());
+        let s = final_ops.iter().filter(|o| *o == "s").count();
+        let i = final_ops.iter().filter(|o| *o == "i").count();
+        let u = final_ops.iter().filter(|o| *o == "u").count();
+        let d = final_ops.iter().filter(|o| *o == "d").count();
+        if s >= 3 && i >= 1 && u >= 1 && d >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    worker.kill().await?;
+    worker.wait().await?;
+
+    let s_count = final_ops.iter().filter(|o| *o == "s").count();
+    let i_count = final_ops.iter().filter(|o| *o == "i").count();
+    let u_count = final_ops.iter().filter(|o| *o == "u").count();
+    let d_count = final_ops.iter().filter(|o| *o == "d").count();
+    eprintln!(
+        "ops: s={s_count} i={i_count} u={u_count} d={d_count}; total {}",
+        final_ops.len()
+    );
+    assert!(s_count >= 3, "expected ≥3 snapshot rows, got {s_count}");
+    assert!(i_count >= 1, "expected ≥1 INSERT, got {i_count}");
+    assert!(u_count >= 1, "expected ≥1 UPDATE, got {u_count}");
+    assert!(d_count >= 1, "expected ≥1 DELETE, got {d_count}");
+
+    // Verify the typed Parquet schema persists across snapshot+streaming.
+    let parquet_schema =
+        read_first_parquet_schema(tmp_data.path()).expect("at least one parquet file");
+    let id_field = parquet_schema.field_with_name("id").unwrap();
+    assert_eq!(
+        id_field.data_type(),
+        &arrow::datatypes::DataType::Int64,
+        "id should be Int64, got {:?}",
+        id_field.data_type()
     );
 
     Ok(())

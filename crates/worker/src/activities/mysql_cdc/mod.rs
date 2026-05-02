@@ -8,7 +8,7 @@ use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
-use crate::connectors::mysql::cdc::{position::GtidSet, schema, stream};
+use crate::connectors::mysql::cdc::{position::GtidSet, schema, snapshot, stream};
 use crate::connectors::mysql::cdc::schema::InfoSchemaColumn;
 use crate::loaders::cdc_parquet::CdcParquetLoader;
 
@@ -250,6 +250,88 @@ impl MysqlCdcActivities {
         Ok(MysqlReadWindowOutput {
             rows: out.rows as u32,
             new_gtid: out.new_gtid.format(),
+        })
+    }
+
+    #[activity]
+    pub async fn mysql_snapshot_chunk(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: MysqlSnapshotChunkInput,
+    ) -> Result<MysqlSnapshotChunkOutput, ActivityError> {
+        tracing::info!(
+            batch_seq = input.batch_seq,
+            schema = %input.schema, table = %input.table,
+            pk_column = %input.pk_column, last_pk = ?input.last_pk,
+            "mysql_cdc: snapshot_chunk entering"
+        );
+        let url = resolve_url(
+            &self.secrets,
+            &input.source_conn,
+            input.tenant_id,
+            input.principal_id,
+            input.jti,
+        )
+        .await
+        .map_err(into_activity_err)?;
+        let cols: Vec<InfoSchemaColumn> = serde_json::from_str(&input.schema_json)
+            .context("parse schema_json")
+            .map_err(into_activity_err)?;
+        // Validate pk_column existence + integer type before opening tx.
+        let pk_meta = cols
+            .iter()
+            .find(|c| c.column_name == input.pk_column)
+            .ok_or_else(|| {
+                into_activity_err(anyhow!(
+                    "pk_column '{}' not found in table {}.{}",
+                    input.pk_column,
+                    input.schema,
+                    input.table
+                ))
+            })?;
+        let pk_dt = schema::map_mysql_type(&pk_meta.data_type)
+            .map_err(into_activity_err)?;
+        if !matches!(
+            pk_dt,
+            arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::Int64
+        ) {
+            return Err(into_activity_err(anyhow!(
+                "snapshot only supports integer pk columns in v1; '{}' is {:?}",
+                input.pk_column,
+                pk_dt
+            )));
+        }
+        let arrow_schema = schema::schema_from_columns(&cols).map_err(into_activity_err)?;
+        let arrow_schema = std::sync::Arc::new(arrow_schema);
+        let chunk = snapshot::read_chunk(
+            &url,
+            &input.schema,
+            &input.table,
+            &input.pk_column,
+            input.last_pk,
+            input.batch_size as usize,
+            arrow_schema,
+            &input.captured_gtid,
+        )
+        .await
+        .map_err(into_activity_err)?;
+        if let Some(batch) = chunk.batch.as_ref() {
+            CdcParquetLoader
+                .write(
+                    &input.destination,
+                    input.tenant_id,
+                    input.pipeline_id,
+                    input.run_id,
+                    input.batch_seq,
+                    batch,
+                )
+                .await
+                .map_err(into_activity_err)?;
+        }
+        Ok(MysqlSnapshotChunkOutput {
+            rows: chunk.rows as u32,
+            last_pk: chunk.last_pk,
+            is_final: chunk.is_final,
         })
     }
 }

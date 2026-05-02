@@ -8,7 +8,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use arrow::datatypes::{DataType, TimeUnit};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 use mysql_async::binlog::row::BinlogRow;
 use mysql_async::binlog::value::BinlogValue;
 use mysql_async::Value;
@@ -184,6 +184,65 @@ pub fn binlog_row_to_scalars(
     Ok(out)
 }
 
+/// Parse MySQL's textual value (from `SELECT CAST(col AS CHAR) AS col`)
+/// into a typed `ScalarValue` for the given Arrow `DataType`. NULL
+/// signalling is upstream (callers pass `None` for SQL NULL); a
+/// non-empty `s` always parses to `Some(...)`.
+pub fn parse_mysql_text(s: &str, target: &DataType) -> Result<Option<ScalarValue>> {
+    let v = match target {
+        DataType::Int32 => {
+            let n: i32 = s.parse().with_context(|| format!("parse i32 '{s}'"))?;
+            ScalarValue::Int32(n)
+        }
+        DataType::Int64 => {
+            let n: i64 = s.parse().with_context(|| format!("parse i64 '{s}'"))?;
+            ScalarValue::Int64(n)
+        }
+        DataType::Float32 => {
+            let f: f32 = s.parse().with_context(|| format!("parse f32 '{s}'"))?;
+            ScalarValue::Float32(f)
+        }
+        DataType::Float64 => {
+            let f: f64 = s.parse().with_context(|| format!("parse f64 '{s}'"))?;
+            ScalarValue::Float64(f)
+        }
+        DataType::Utf8 => ScalarValue::Utf8(s.to_owned()),
+        DataType::Boolean => match s {
+            "1" | "true" | "TRUE" | "t" | "T" => ScalarValue::Boolean(true),
+            "0" | "false" | "FALSE" | "f" | "F" => ScalarValue::Boolean(false),
+            other => return Err(anyhow!("unrecognised boolean text '{}'", other)),
+        },
+        DataType::Date32 => {
+            let date = NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .with_context(|| format!("parse date '{s}'"))?;
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            let days = date.signed_duration_since(epoch).num_days();
+            let days_i32: i32 = days
+                .try_into()
+                .map_err(|_| anyhow!("date out of i32 range: {days} days"))?;
+            ScalarValue::Date32(days_i32)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            // MySQL's CAST(timestamp AS CHAR) emits "YYYY-MM-DD HH:MM:SS"
+            // (no fractional unless the column has DATETIME(N) precision)
+            // and no timezone offset (MySQL's TIMESTAMP is stored UTC,
+            // session-converted; we treat the text as UTC for our v1).
+            let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S"))
+                .with_context(|| format!("parse mysql timestamp '{s}'"))?;
+            let micros = Utc.from_utc_datetime(&naive).timestamp_micros();
+            ScalarValue::TimestampMicros(micros)
+        }
+        other => {
+            return Err(anyhow!(
+                "unsupported target DataType for mysql text parse: {:?}",
+                other
+            ))
+        }
+    };
+    Ok(Some(v))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +327,68 @@ mod tests {
         let v = BinlogValue::Value(Value::NULL);
         let s = binlog_value_to_scalar(&v, &DataType::Int64).unwrap();
         assert_eq!(s, None);
+    }
+
+    #[test]
+    fn parse_text_int32_decimal() {
+        let v = parse_mysql_text("42", &DataType::Int32).unwrap();
+        assert_eq!(v, Some(ScalarValue::Int32(42)));
+    }
+
+    #[test]
+    fn parse_text_int64_negative() {
+        let v = parse_mysql_text("-1234567890123", &DataType::Int64).unwrap();
+        assert_eq!(v, Some(ScalarValue::Int64(-1234567890123)));
+    }
+
+    #[test]
+    fn parse_text_int32_overflow_errors() {
+        let err = parse_mysql_text("9999999999", &DataType::Int32).unwrap_err();
+        assert!(err.to_string().contains("parse i32"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_text_float64_decimal() {
+        let v = parse_mysql_text("3.14", &DataType::Float64).unwrap();
+        match v.unwrap() {
+            ScalarValue::Float64(f) => assert!((f - 3.14).abs() < 1e-9),
+            other => panic!("expected Float64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_text_utf8() {
+        let v = parse_mysql_text("alice@x.com", &DataType::Utf8).unwrap();
+        assert_eq!(v, Some(ScalarValue::Utf8("alice@x.com".into())));
+    }
+
+    #[test]
+    fn parse_text_boolean_zero_one() {
+        assert_eq!(
+            parse_mysql_text("1", &DataType::Boolean).unwrap(),
+            Some(ScalarValue::Boolean(true))
+        );
+        assert_eq!(
+            parse_mysql_text("0", &DataType::Boolean).unwrap(),
+            Some(ScalarValue::Boolean(false))
+        );
+    }
+
+    #[test]
+    fn parse_text_date_iso() {
+        // 2026-01-01 = 20454 days since 1970-01-01.
+        let v = parse_mysql_text("2026-01-01", &DataType::Date32).unwrap();
+        assert_eq!(v, Some(ScalarValue::Date32(20454)));
+    }
+
+    #[test]
+    fn parse_text_timestamp_with_microseconds() {
+        // 2026-01-01 00:00:00 UTC = 1_767_225_600_000_000 micros.
+        let v = parse_mysql_text(
+            "2026-01-01 00:00:00",
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        )
+        .unwrap();
+        assert_eq!(v, Some(ScalarValue::TimestampMicros(1_767_225_600_000_000)));
     }
 }

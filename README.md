@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d.4 — Postgres CDC OID coverage: BYTEA + TIME (complete)** on top of II.3.d.3. BYTEA columns now land as Arrow `Binary`; TIME as `Time64(Microsecond)`. Postgres CDC is fully type-aware end-to-end including binary blobs and time-of-day. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (MySQL initial snapshot, multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.d.5 — MySQL CDC initial snapshot (complete)** on top of II.3.d.4. MySQL CDC now snapshots existing rows (op="s") before streaming, with the GTID captured upfront so concurrent updates flow through streaming and reconcile via destination PK merge. Default mode is `snapshot_then_streaming`; skip-snapshot is opt-in via `initial_sync = streaming_only`. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 

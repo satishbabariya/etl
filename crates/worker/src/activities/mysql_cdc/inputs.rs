@@ -80,3 +80,31 @@ pub struct MysqlReadWindowOutput {
     pub rows: u32,
     pub new_gtid: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlSnapshotChunkInput {
+    pub pipeline_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
+    pub batch_seq: u32,
+    pub source_conn: ConnectionConfig,
+    pub schema: String,
+    pub table: String,
+    pub pk_column: String,
+    pub last_pk: Option<i64>,
+    pub batch_size: u32,
+    pub schema_json: String,
+    pub captured_gtid: String,
+    pub destination: DestinationSpec,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MysqlSnapshotChunkOutput {
+    pub rows: u32,
+    pub last_pk: Option<i64>,
+    pub is_final: bool,
+}
