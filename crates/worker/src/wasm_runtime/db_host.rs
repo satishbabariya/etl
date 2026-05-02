@@ -1,14 +1,14 @@
 //! Host implementation of the `platform:connector/db` WIT interface.
 //!
-//! Tasks 2 (this commit): open / query / close — synchronous SQL backed
-//! by mysql_async. Postgres URLs are accepted at the WIT level but
-//! rejected with `db-error::unsupported` for now.
-//!
-//! Task 3 will replace the streaming method stubs.
+//! Backs both mysql:// (mysql_async) and postgres:// (sqlx::PgConnection)
+//! URLs. Streaming-side state for either DB family lives in db_subscribe
+//! (MySQL) or db_pg_subscribe (Postgres); this file is the dispatch +
+//! synchronous-SQL layer.
 #![allow(dead_code)]
 
 use mysql_async::prelude::*;
 use mysql_async::{Conn, Value};
+use sqlx::Connection as _;
 use std::collections::HashMap;
 
 /// Per-instance db state. One of these lives inside `HostState` per
@@ -22,8 +22,12 @@ pub struct DbHostState {
 
 pub(super) enum DbConn {
     Mysql(Conn),
-    /// The handle was passed to `subscribe-changes`, which consumed the
-    /// underlying connection. Subsequent db.query calls on this id fail.
+    Postgres(sqlx::PgConnection),
+    /// The MySQL handle was passed to `subscribe-changes`, which
+    /// consumed the underlying connection. Subsequent db.query calls
+    /// on this id fail. Postgres never sets this — pg connections
+    /// move into the PgSubscription on subscribe and the conn map
+    /// just removes the entry.
     Consumed,
 }
 
@@ -70,24 +74,29 @@ use super::bindings::platform::connector::db::{
 
 impl DbHost for super::host::HostState {
     async fn open(&mut self, url: String) -> wasmtime::Result<Result<DbHandle, DbError>> {
+        if url.starts_with("mysql://") {
+            return match Conn::from_url(&url).await {
+                Ok(conn) => {
+                    let id = self.db.alloc_id();
+                    self.db.conns.insert(id, DbConn::Mysql(conn));
+                    Ok(Ok(DbHandle { id }))
+                }
+                Err(e) => Ok(Err(DbError::ConnectFailed(e.to_string()))),
+            };
+        }
         if url.starts_with("postgres://") || url.starts_with("postgresql://") {
-            return Ok(Err(DbError::Unsupported(
-                "postgres support not in v1; use mysql:// urls".into(),
-            )));
+            return match sqlx::PgConnection::connect(&url).await {
+                Ok(conn) => {
+                    let id = self.db.alloc_id();
+                    self.db.conns.insert(id, DbConn::Postgres(conn));
+                    Ok(Ok(DbHandle { id }))
+                }
+                Err(e) => Ok(Err(DbError::ConnectFailed(e.to_string()))),
+            };
         }
-        if !url.starts_with("mysql://") {
-            return Ok(Err(DbError::InvalidConfig(format!(
-                "unsupported scheme in url: {url}"
-            ))));
-        }
-        match Conn::from_url(&url).await {
-            Ok(conn) => {
-                let id = self.db.alloc_id();
-                self.db.conns.insert(id, DbConn::Mysql(conn));
-                Ok(Ok(DbHandle { id }))
-            }
-            Err(e) => Ok(Err(DbError::ConnectFailed(e.to_string()))),
-        }
+        Ok(Err(DbError::InvalidConfig(format!(
+            "unsupported scheme in url: {url}"
+        ))))
     }
 
     async fn query(
@@ -102,36 +111,54 @@ impl DbHost for super::host::HostState {
                 h.id
             ))));
         };
-        let conn = match entry {
-            DbConn::Mysql(c) => c,
-            DbConn::Consumed => {
-                return Ok(Err(DbError::QueryFailed(
-                    "this handle was consumed by subscribe-changes".into(),
-                )));
+        match entry {
+            DbConn::Mysql(conn) => {
+                let params_v: Vec<Value> = params
+                    .into_iter()
+                    .map(|s| Value::Bytes(s.into_bytes()))
+                    .collect();
+                let rows: Vec<mysql_async::Row> = match conn.exec(&sql, params_v).await {
+                    Ok(r) => r,
+                    Err(e) => return Ok(Err(DbError::QueryFailed(e.to_string()))),
+                };
+                let mut out: Vec<Vec<Option<String>>> = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let n = row.columns_ref().len();
+                    let mut cells: Vec<Option<String>> = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let v: Value = row.as_ref(i).cloned().unwrap_or(Value::NULL);
+                        cells.push(value_to_string(v));
+                    }
+                    out.push(cells);
+                }
+                Ok(Ok(out))
             }
-        };
-
-        let params_v: Vec<Value> = params
-            .into_iter()
-            .map(|s| Value::Bytes(s.into_bytes()))
-            .collect();
-
-        let rows: Vec<mysql_async::Row> = match conn.exec(&sql, params_v).await {
-            Ok(r) => r,
-            Err(e) => return Ok(Err(DbError::QueryFailed(e.to_string()))),
-        };
-
-        let mut out: Vec<Vec<Option<String>>> = Vec::with_capacity(rows.len());
-        for row in rows {
-            let n = row.columns_ref().len();
-            let mut cells: Vec<Option<String>> = Vec::with_capacity(n);
-            for i in 0..n {
-                let v: Value = row.as_ref(i).cloned().unwrap_or(Value::NULL);
-                cells.push(value_to_string(v));
+            DbConn::Postgres(conn) => {
+                let mut q = sqlx::query(&sql);
+                for p in &params {
+                    q = q.bind(p);
+                }
+                let rows = match q.fetch_all(&mut *conn).await {
+                    Ok(r) => r,
+                    Err(e) => return Ok(Err(DbError::QueryFailed(e.to_string()))),
+                };
+                let mut out: Vec<Vec<Option<String>>> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    use sqlx::Row as _;
+                    let n = row.len();
+                    let mut cells: Vec<Option<String>> = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let v: Option<String> = row.try_get(i).unwrap_or_default();
+                        cells.push(v);
+                    }
+                    out.push(cells);
+                }
+                Ok(Ok(out))
             }
-            out.push(cells);
+            DbConn::Consumed => Ok(Err(DbError::QueryFailed(
+                "this handle was consumed by subscribe-changes".into(),
+            ))),
         }
-        Ok(Ok(out))
     }
 
     async fn subscribe_changes(
@@ -142,6 +169,13 @@ impl DbHost for super::host::HostState {
     ) -> wasmtime::Result<Result<ChangeStream, DbError>> {
         let conn = match self.db.conns.remove(&h.id) {
             Some(DbConn::Mysql(c)) => c,
+            Some(DbConn::Postgres(_)) => {
+                // Phase II.3.f Task 3 lands the real Postgres subscribe arm.
+                return Ok(Err(DbError::Unsupported(
+                    "postgres subscribe-changes not yet implemented (lands in phase-2-3f-3)"
+                        .into(),
+                )));
+            }
             Some(DbConn::Consumed) => {
                 return Ok(Err(DbError::QueryFailed(
                     "handle already consumed by an earlier subscribe-changes".into(),
@@ -195,8 +229,14 @@ impl DbHost for super::host::HostState {
 
     async fn close(&mut self, h: DbHandle) -> wasmtime::Result<()> {
         if let Some(conn) = self.db.conns.remove(&h.id) {
-            if let DbConn::Mysql(c) = conn {
-                let _ = c.disconnect().await;
+            match conn {
+                DbConn::Mysql(c) => {
+                    let _ = c.disconnect().await;
+                }
+                DbConn::Postgres(c) => {
+                    let _ = c.close().await;
+                }
+                DbConn::Consumed => {}
             }
         }
         Ok(())
@@ -333,5 +373,20 @@ mod tests {
             value_to_string(v),
             Some("2026-05-02 13:14:15.999999".into())
         );
+    }
+
+    #[tokio::test]
+    async fn open_rejects_unknown_scheme() {
+        use crate::wasm_runtime::limits::Limits;
+        let mut state = crate::wasm_runtime::host::HostState::new(Limits::default());
+        let res = DbHost::open(&mut state, "redis://localhost:6379".into())
+            .await
+            .unwrap();
+        match res {
+            Err(DbError::InvalidConfig(msg)) => {
+                assert!(msg.contains("unsupported scheme"), "got: {msg}");
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
     }
 }
