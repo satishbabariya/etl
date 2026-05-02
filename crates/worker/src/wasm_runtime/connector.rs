@@ -122,9 +122,9 @@ impl SourceConnector for WasmSourceConnector {
                 kind: match c.kind {
                     CursorKind::Int64 => wit_types::CursorKind::Int64,
                     CursorKind::TimestampTz => wit_types::CursorKind::TimestampTz,
-                    CursorKind::Lsn => {
-                        anyhow::bail!("LSN cursor not supported in WASM connectors")
-                    }
+                    CursorKind::Gtid => wit_types::CursorKind::Gtid,
+                    CursorKind::Lsn => wit_types::CursorKind::Lsn,
+                    CursorKind::SnapshotPk => wit_types::CursorKind::SnapshotPk,
                 },
                 value: c.value,
             }),
@@ -159,6 +159,9 @@ impl SourceConnector for WasmSourceConnector {
             kind: match c.kind {
                 wit_types::CursorKind::Int64 => CursorKind::Int64,
                 wit_types::CursorKind::TimestampTz => CursorKind::TimestampTz,
+                wit_types::CursorKind::Gtid => CursorKind::Gtid,
+                wit_types::CursorKind::Lsn => CursorKind::Lsn,
+                wit_types::CursorKind::SnapshotPk => CursorKind::SnapshotPk,
             },
             value: c.value,
         });

@@ -89,7 +89,9 @@ fn bind_cursor<'a>(
                 .context("cursor value is not RFC-3339 timestamptz")?;
             q.bind(v)
         }
-        CursorKind::Lsn => anyhow::bail!("LSN cursors only valid in CDC mode"),
+        CursorKind::Lsn | CursorKind::Gtid | CursorKind::SnapshotPk => {
+            anyhow::bail!("CDC-only cursor kinds not valid for plain read: {:?}", cursor.kind)
+        }
     })
 }
 
@@ -110,7 +112,9 @@ fn extract_cursor(
                 value: ts.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
             }
         }
-        CursorKind::Lsn => anyhow::bail!("LSN cursors only valid in CDC mode"),
+        CursorKind::Lsn | CursorKind::Gtid | CursorKind::SnapshotPk => {
+            anyhow::bail!("CDC-only cursor kinds not valid for plain read: {:?}", kind)
+        }
     })
 }
 
