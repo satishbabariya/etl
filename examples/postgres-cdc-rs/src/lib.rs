@@ -25,6 +25,7 @@ wit_bindgen::generate!({
     world: "source-connector",
 });
 
+use platform::connector::db;
 use platform::connector::host::{log, LogLevel};
 use platform::connector::types::CursorKind;
 
@@ -63,8 +64,13 @@ pub(crate) fn publication_name(schema: &str, table: &str) -> String {
 }
 
 impl Guest for Component {
-    fn discover(_conn: ConnectionConfig, _source: SourceConfig) -> Result<Vec<u8>, ConnectorError> {
-        arrow_io::schema_ipc_bytes()
+    fn discover(conn: ConnectionConfig, source: SourceConfig) -> Result<Vec<u8>, ConnectorError> {
+        let cfg = parse_source_cfg(&source.json)?;
+        let h = db::open(&conn.url).map_err(snapshot::db_err_to_connector_err)?;
+        let cols = discover::query_columns(h, &cfg.schema, &cfg.table)?;
+        db::close(h);
+        let schema = arrow_io::build_full_schema(&discover::columns_to_fields(&cols));
+        arrow_io::schema_ipc_bytes(&schema)
             .map_err(|e| ConnectorError::Other(format!("schema ipc: {e}")))
     }
 

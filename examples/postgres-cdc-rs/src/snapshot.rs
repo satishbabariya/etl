@@ -1,16 +1,13 @@
-//! Snapshot phase: chunked SELECT WHERE id > last_pk ORDER BY id LIMIT N.
-//!
-//! On the initial call we additionally:
-//!   - pin the LSN via `SELECT pg_current_wal_lsn()`;
-//!   - ensure the publication exists (CREATE PUBLICATION FOR TABLE; guarded
-//!     by a pg_publication lookup);
-//!   - ensure the replication slot exists (idempotent SELECT-WHERE-NOT-EXISTS guard
-//!     around `pg_create_logical_replication_slot`).
-//!
-//! Cursor format during snapshot: `snapshot-pk` value=`<lsn>|<last_pk>`.
-//! Transitions to `lsn` value=`<lsn>` once a short chunk arrives.
+//! Snapshot phase for Postgres: discover schema + PK on each call,
+//! ensure publication + slot on the initial call, build dynamic
+//! SELECT projection, decode rows through DynamicBatchBuilder.
 
-use crate::arrow_io::{rows_to_ipc, Row};
+use std::sync::Arc;
+
+use arrow_schema::Schema;
+
+use crate::arrow_io::{build_full_schema, DynamicBatchBuilder};
+use crate::discover::{columns_to_fields, query_columns, query_pk_column, DiscoveredColumn};
 use crate::platform::connector::db;
 use crate::platform::connector::types::{CursorKind, CursorValue};
 use crate::{
@@ -23,9 +20,11 @@ pub fn initial(url: &str, cfg: &SourceCfg, batch_size: i64) -> Result<ReadOutcom
     ensure_publication(h, cfg)?;
     ensure_slot(h, cfg)?;
     let lsn = read_current_lsn(h)?;
-    let chunk = chunk_after(h, cfg, 0, batch_size)?;
+    let cols = query_columns(h, &cfg.schema, &cfg.table)?;
+    let pk = query_pk_column(h, &cfg.schema, &cfg.table)?;
+    let chunk = chunk_after(h, cfg, &cols, &pk, 0, batch_size)?;
     db::close(h);
-    finalize(chunk, &lsn, 0, batch_size)
+    finalize(chunk, &cols, &lsn, 0, batch_size)
 }
 
 pub fn next_chunk(
@@ -36,20 +35,67 @@ pub fn next_chunk(
 ) -> Result<ReadOutcome, ConnectorError> {
     let (lsn, last_pk) = parse_snapshot_cursor(cursor_value)?;
     let h = open(url)?;
-    let chunk = chunk_after(h, cfg, last_pk, batch_size)?;
+    let cols = query_columns(h, &cfg.schema, &cfg.table)?;
+    let pk = query_pk_column(h, &cfg.schema, &cfg.table)?;
+    let chunk = chunk_after(h, cfg, &cols, &pk, last_pk, batch_size)?;
     db::close(h);
-    finalize(chunk, &lsn, last_pk, batch_size)
+    finalize(chunk, &cols, &lsn, last_pk, batch_size)
+}
+
+struct Chunk {
+    rows: Vec<Vec<Option<String>>>,
+    last_pk_in_chunk: Option<i64>,
+}
+
+fn chunk_after(
+    h: db::DbHandle,
+    cfg: &SourceCfg,
+    cols: &[DiscoveredColumn],
+    pk: &str,
+    last_pk: i64,
+    batch_size: i64,
+) -> Result<Chunk, ConnectorError> {
+    let select_list = cols
+        .iter()
+        .map(|c| format!("\"{}\"", c.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT {select_list} FROM \"{schema}\".\"{table}\" \
+         WHERE \"{pk}\" > $1 ORDER BY \"{pk}\" LIMIT {limit}",
+        schema = cfg.schema,
+        table = cfg.table,
+        limit = batch_size,
+    );
+    let rows = db::query(h, &sql, &[last_pk.to_string()]).map_err(db_err_to_connector_err)?;
+    let pk_idx = cols.iter().position(|c| c.name == pk).ok_or_else(|| {
+        ConnectorError::Other(format!("PK column {pk} missing from discovered columns"))
+    })?;
+    let mut last_pk_in_chunk: Option<i64> = None;
+    for r in &rows {
+        if let Some(Some(s)) = r.get(pk_idx) {
+            if let Ok(v) = s.parse::<i64>() {
+                last_pk_in_chunk = Some(v);
+            }
+        }
+    }
+    Ok(Chunk {
+        rows: rows.into_iter().collect(),
+        last_pk_in_chunk,
+    })
 }
 
 fn finalize(
     chunk: Chunk,
+    cols: &[DiscoveredColumn],
     lsn: &str,
     last_pk_in: i64,
     batch_size: i64,
 ) -> Result<ReadOutcome, ConnectorError> {
+    let schema = build_full_schema(&columns_to_fields(cols));
     if chunk.rows.is_empty() {
         return Ok(ReadOutcome {
-            batch_ipc: vec![],
+            batch_ipc: schema_only_bytes(&schema)?,
             rows: 0,
             new_cursor: Some(CursorValue {
                 kind: CursorKind::Lsn,
@@ -58,29 +104,27 @@ fn finalize(
             is_final: true,
         });
     }
-    let new_last_pk = chunk.rows.last().map(|(id, _)| *id).unwrap_or(last_pk_in);
-    let pos = format!("snapshot:{lsn}|{new_last_pk}");
-    let arrow_rows: Vec<Row> = chunk
-        .rows
-        .into_iter()
-        .map(|(id, name)| Row {
-            id,
-            name,
-            op: 's',
-            position: pos.clone(),
-        })
-        .collect();
-    let rows_n = arrow_rows.len() as u32;
-    let bytes = rows_to_ipc(&arrow_rows)
-        .map_err(|e| ConnectorError::Other(format!("rows_to_ipc: {e}")))?;
-
+    let new_last_pk = chunk.last_pk_in_chunk.unwrap_or(last_pk_in);
+    let position = format!("snapshot:{lsn}|{new_last_pk}");
+    let mut bb = DynamicBatchBuilder::new(schema.clone());
+    for row in &chunk.rows {
+        let cells: Vec<Option<&str>> = row
+            .iter()
+            .take(cols.len())
+            .map(|c| c.as_deref())
+            .collect();
+        bb.append_row(&cells, 's', &position);
+    }
+    let rows_n = bb.rows() as u32;
+    let bytes = bb
+        .finish_to_ipc()
+        .map_err(|e| ConnectorError::Other(format!("finish_to_ipc: {e}")))?;
     let snapshot_done = (rows_n as i64) < batch_size;
     let (kind, value) = if snapshot_done {
         (CursorKind::Lsn, lsn.to_string())
     } else {
         (CursorKind::SnapshotPk, format!("{lsn}|{new_last_pk}"))
     };
-
     Ok(ReadOutcome {
         batch_ipc: bytes,
         rows: rows_n,
@@ -89,40 +133,14 @@ fn finalize(
     })
 }
 
-struct Chunk {
-    rows: Vec<(i64, Option<String>)>,
-}
-
-fn chunk_after(
-    h: db::DbHandle,
-    cfg: &SourceCfg,
-    last_pk: i64,
-    batch_size: i64,
-) -> Result<Chunk, ConnectorError> {
-    let sql = format!(
-        "SELECT id, name FROM \"{schema}\".\"{table}\" \
-         WHERE id > $1 ORDER BY id LIMIT {limit}",
-        schema = cfg.schema,
-        table = cfg.table,
-        limit = batch_size,
-    );
-    let rows = db::query(h, &sql, &[last_pk.to_string()]).map_err(db_err_to_connector_err)?;
-    let mut out: Vec<(i64, Option<String>)> = Vec::with_capacity(rows.len());
-    for r in rows {
-        let id: i64 = r
-            .first()
-            .and_then(|v| v.as_deref())
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| ConnectorError::Other("snapshot: expected i64 id".into()))?;
-        let name: Option<String> = r.get(1).and_then(|v| v.clone());
-        out.push((id, name));
-    }
-    Ok(Chunk { rows: out })
+fn schema_only_bytes(schema: &Arc<Schema>) -> Result<Vec<u8>, ConnectorError> {
+    crate::arrow_io::schema_ipc_bytes(schema)
+        .map_err(|e| ConnectorError::Other(format!("schema_ipc_bytes: {e}")))
 }
 
 fn read_current_lsn(h: db::DbHandle) -> Result<String, ConnectorError> {
-    let rows =
-        db::query(h, "SELECT pg_current_wal_lsn()::text", &[]).map_err(db_err_to_connector_err)?;
+    let rows = db::query(h, "SELECT pg_current_wal_lsn()::text", &[])
+        .map_err(db_err_to_connector_err)?;
     let cell = rows
         .into_iter()
         .next()
@@ -201,15 +219,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_snapshot_cursor_accepts_basic() {
+    fn parse_snapshot_cursor_basic() {
         let (lsn, pk) = parse_snapshot_cursor("0/16B3748|42").unwrap();
         assert_eq!(lsn, "0/16B3748");
         assert_eq!(pk, 42);
     }
 
     #[test]
-    fn parse_snapshot_cursor_rejects_malformed() {
-        assert!(parse_snapshot_cursor("no-pipe-here").is_err());
-        assert!(parse_snapshot_cursor("lsn|notanumber").is_err());
+    fn parse_snapshot_cursor_rejects_bad() {
+        assert!(parse_snapshot_cursor("nopipe").is_err());
+        assert!(parse_snapshot_cursor("lsn|bad").is_err());
     }
 }
