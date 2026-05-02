@@ -1,0 +1,65 @@
+name: e2e-tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install build + stack dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler postgresql-client netcat-openbsd
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bring up docker-compose stack
+        run: docker compose up -d postgres temporal-postgres temporal vault
+
+      - name: Wait for stack readiness
+        run: ./ci/wait-for-stack.sh
+
+      - name: Build workspace
+        run: cargo build --workspace --locked
+
+      - name: e2e — mysql_cdc_wasm
+        run: cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture
+
+      - name: e2e — postgres_cdc_wasm
+        run: cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture
+
+      - name: e2e — wasm_connector
+        run: cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture
+
+      - name: e2e — mysql_cdc (native streaming-only)
+        run: cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture
+
+      - name: docker compose logs (on failure)
+        if: failure()
+        run: |
+          echo "=== docker compose ps ==="
+          docker compose ps
+          echo "=== temporal logs ==="
+          docker compose logs temporal | tail -200
+          echo "=== postgres logs ==="
+          docker compose logs postgres | tail -100
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

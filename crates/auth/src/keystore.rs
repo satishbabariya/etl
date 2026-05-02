@@ -125,12 +125,9 @@ impl Keystore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn run_with_env<F: FnOnce()>(key: &str, val: Option<&str>, f: F) {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    pub(crate) fn with_env<F: FnOnce()>(key: &str, val: Option<&str>, f: F) {
         let prev = std::env::var(key).ok();
         match val {
             Some(v) => std::env::set_var(key, v),
@@ -144,10 +141,11 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_master_key)]
     fn init_writes_keypair_and_marks_active() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
-        run_with_env("ETL_MASTER_KEY", None, || {
+        with_env("ETL_MASTER_KEY", None, || {
             let kid = ks.init().unwrap();
             assert!(dir.path().join(&kid).join("private.pem").exists());
             assert!(dir.path().join(&kid).join("public.pem").exists());
@@ -160,10 +158,11 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_master_key)]
     fn init_writes_enc_when_master_key_set() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
-        run_with_env("ETL_MASTER_KEY", Some(&"00".repeat(32)), || {
+        with_env("ETL_MASTER_KEY", Some(&"00".repeat(32)), || {
             let kid = ks.init().unwrap();
             assert!(dir.path().join(&kid).join("private.enc").exists());
             assert!(!dir.path().join(&kid).join("private.pem").exists());
@@ -173,13 +172,14 @@ mod tests {
     }
 
     #[test]
+    #[serial(env_master_key)]
     fn seal_in_place_upgrades_pem_to_enc() {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
-        run_with_env("ETL_MASTER_KEY", None, || {
+        with_env("ETL_MASTER_KEY", None, || {
             ks.init().unwrap();
         });
-        run_with_env("ETL_MASTER_KEY", Some(&"11".repeat(32)), || {
+        with_env("ETL_MASTER_KEY", Some(&"11".repeat(32)), || {
             let count = ks.seal_in_place().unwrap();
             assert_eq!(count, 1);
             let kid = ks.active_kid().unwrap();
