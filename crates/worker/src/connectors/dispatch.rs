@@ -2,6 +2,10 @@
 //!
 //! - `"postgres@0.1.0"` → in-process Rust PostgresConnector
 //! - `"wasm:<name>@<version>"` → WasmSourceConnector loading name@version
+//! - `"wasm-cdc:<name>@<version>"` → same WasmSourceConnector, but the
+//!   workflow it runs in (WasmCdcPipelineWorkflow) keeps polling
+//!   indefinitely instead of stopping on empty batches. The component
+//!   itself is identical; only the workflow shape differs.
 
 use anyhow::{Context, bail};
 use connector_sdk::SourceConnector;
@@ -14,7 +18,10 @@ pub fn build_source_connector(
     connector_ref: &str,
     wasm_runtime: Option<Arc<WasmSourceRuntime>>,
 ) -> anyhow::Result<Box<dyn SourceConnector>> {
-    if let Some(rest) = connector_ref.strip_prefix("wasm:") {
+    let wasm_artifact = connector_ref
+        .strip_prefix("wasm-cdc:")
+        .or_else(|| connector_ref.strip_prefix("wasm:"));
+    if let Some(rest) = wasm_artifact {
         let runtime = wasm_runtime
             .context("wasm connector requested but no WasmSourceRuntime provided")?;
         return Ok(Box::new(WasmSourceConnector::new(runtime, rest.to_string())));
@@ -48,6 +55,17 @@ mod tests {
         match build_source_connector("wasm:csv-source@0.1.0", None) {
             Ok(_) => panic!("expected error when runtime missing"),
             Err(e) => assert!(e.to_string().contains("no WasmSourceRuntime")),
+        }
+    }
+
+    #[test]
+    fn wasm_cdc_prefix_is_recognized() {
+        match build_source_connector("wasm-cdc:mysql-cdc-rs@0.1.0", None) {
+            Ok(_) => panic!("expected error when runtime missing"),
+            Err(e) => assert!(
+                e.to_string().contains("no WasmSourceRuntime"),
+                "got: {e}"
+            ),
         }
     }
 }
