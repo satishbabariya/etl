@@ -23,6 +23,7 @@
 //! Schema (hardcoded for the demo): `id BIGINT PRIMARY KEY, name TEXT`.
 
 mod arrow_io;
+mod discover;
 mod snapshot;
 mod streaming;
 
