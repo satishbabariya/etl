@@ -16,6 +16,7 @@
 //! Schema (hardcoded for the demo): `id BIGINT, name TEXT NULL`.
 
 mod arrow_io;
+mod discover;
 mod snapshot;
 mod streaming;
 
