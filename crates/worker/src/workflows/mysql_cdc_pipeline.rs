@@ -163,9 +163,66 @@ impl MysqlCdcPipelineWorkflow {
             )
             .await?;
 
+        // Snapshot phase: when initial_sync == SnapshotThenStreaming,
+        // chunked SELECT against the source until is_final. The captured
+        // GTID was already recorded above (capture_start_gtid runs before
+        // discover_schema), so streaming will resume from that point and
+        // overlap is reconciled at the destination via PK merge.
+        if matches!(
+            my.initial_sync,
+            common_types::pipeline_spec::MysqlInitialSync::SnapshotThenStreaming
+        ) {
+            let pk_col = my.pk_column.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "MysqlCdcSourceSpec.pk_column required for snapshot mode"
+                )
+            })?;
+            let mut snap_seq: u32 = 0;
+            let mut last_pk: Option<i64> = None;
+            loop {
+                let snap_out = ctx
+                    .start_activity(
+                        MysqlCdcActivities::mysql_snapshot_chunk,
+                        MysqlSnapshotChunkInput {
+                            pipeline_id: input.pipeline_id,
+                            run_id: input.run_id,
+                            tenant_id: input.tenant_id,
+                            principal_id: input.principal_id,
+                            jti: input.jti,
+                            batch_seq: snap_seq,
+                            source_conn: input.source_conn.clone(),
+                            schema: my.schema.clone(),
+                            table: my.table.clone(),
+                            pk_column: pk_col.clone(),
+                            last_pk,
+                            batch_size: input.spec.batch_size.max(100) as u32,
+                            schema_json: schema_out.schema_json.clone(),
+                            captured_gtid: gtid_out.gtid_set.clone(),
+                            destination: dest.clone(),
+                        },
+                        opts_long(),
+                    )
+                    .await?;
+                last_pk = snap_out.last_pk;
+                snap_seq += 1;
+                if snap_out.is_final {
+                    break;
+                }
+            }
+        }
+
         let mut current_gtid = gtid_out.gtid_set;
         let mut window_seq: u32 = 0;
-        let mut batch_seq: u32 = 0;
+        let mut batch_seq: u32 = if matches!(
+            my.initial_sync,
+            common_types::pipeline_spec::MysqlInitialSync::SnapshotThenStreaming
+        ) {
+            // Streaming files start after the highest snapshot batch_seq.
+            // Use a high offset so snapshot+streaming don't share filenames.
+            10_000
+        } else {
+            0
+        };
         loop {
             if input.max_windows > 0 && window_seq >= input.max_windows {
                 break;
