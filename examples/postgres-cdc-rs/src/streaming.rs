@@ -5,6 +5,7 @@
 use crate::arrow_io::{build_full_schema, DynamicBatchBuilder};
 use crate::discover::{columns_to_fields, query_columns};
 use crate::platform::connector::db;
+use crate::platform::connector::host::{log, LogLevel};
 use crate::platform::connector::types::{CursorKind, CursorValue};
 use crate::snapshot::db_err_to_connector_err;
 use crate::{
@@ -80,6 +81,19 @@ fn append_event(bb: &mut DynamicBatchBuilder, evt: &db::ChangeEvent, n_cols: usi
         Some(a) => a,
         None => return false,
     };
+    if arr.len() != n_cols {
+        log(
+            LogLevel::Warn,
+            &format!(
+                "postgres-cdc-rs: row_json arity {} != discovered cols {} (op={}, table={}, json={})",
+                arr.len(),
+                n_cols,
+                evt.op,
+                evt.table,
+                evt.row_json
+            ),
+        );
+    }
     let mut owned: Vec<Option<String>> = Vec::with_capacity(n_cols);
     for i in 0..n_cols {
         owned.push(match arr.get(i) {
