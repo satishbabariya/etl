@@ -120,6 +120,10 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
             Ok(Some(ScalarValue::Boolean(b.iter().any(|&x| x != 0))))
         }
 
+        (Value::Bytes(b), DataType::Binary) => {
+            Ok(Some(ScalarValue::Binary(b.clone())))
+        }
+
         (Value::Date(y, m, d, h, mi, s, us), DataType::Date32) => {
             let _ = (h, mi, s, us);
             let date = NaiveDate::from_ymd_opt(*y as i32, *m as u32, *d as u32)
@@ -152,6 +156,26 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
                 .parse()
                 .with_context(|| format!("parse timestamp seconds '{}'", s))?;
             Ok(Some(ScalarValue::TimestampMicros(secs * 1_000_000)))
+        }
+
+        (Value::Time(neg, days, h, m, s, us), DataType::Time64(TimeUnit::Microsecond)) => {
+            // MySQL TIME range is [-838:59:59, 838:59:59] (multi-day);
+            // Arrow Time64 expects [00:00:00, 24:00:00). For values
+            // outside that range, error rather than silently truncate.
+            if *days != 0 {
+                return Err(anyhow!(
+                    "MySQL TIME with day component {} not representable in Arrow Time64",
+                    days
+                ));
+            }
+            let mut micros = (*h as i64) * 3_600_000_000
+                + (*m as i64) * 60_000_000
+                + (*s as i64) * 1_000_000
+                + (*us as i64);
+            if *neg {
+                micros = -micros;
+            }
+            Ok(Some(ScalarValue::Time64Micros(micros)))
         }
 
         (other_v, other_dt) => Err(anyhow!(

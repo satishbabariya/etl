@@ -339,8 +339,8 @@ fn build_record_batch(
 
 fn make_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::TimeUnit;
     Ok(match dt {
@@ -350,7 +350,9 @@ fn make_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
         DataType::Float64 => Box::new(Float64Builder::new()),
         DataType::Utf8 => Box::new(StringBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::Date32 => Box::new(Date32Builder::new()),
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(Time64MicrosecondBuilder::new()),
         // Preserve the timezone in the produced array — arrow's
         // RecordBatch::try_new validates that builder-produced types
         // exactly match the schema-declared types, including the tz.
@@ -371,8 +373,8 @@ fn append_scalar(
     dt: &DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::TimeUnit;
     match (scalar, dt) {
@@ -436,6 +438,26 @@ fn append_scalar(
             .downcast_mut::<BooleanBuilder>()
             .ok_or_else(|| anyhow!("type mismatch: expected BooleanBuilder"))?
             .append_value(*b),
+        (None, DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected BinaryBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Binary(b)), DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected BinaryBuilder"))?
+            .append_value(b.as_slice()),
+        (None, DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Time64MicrosecondBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Time64Micros(t)), DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: expected Time64MicrosecondBuilder"))?
+            .append_value(*t),
         (None, DataType::Date32) => builder
             .as_any_mut()
             .downcast_mut::<Date32Builder>()
