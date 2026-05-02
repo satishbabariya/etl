@@ -106,7 +106,7 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.d.6 — CDC snapshot resume via catalog persistence (complete)** on top of II.3.d.5. Both Postgres and MySQL CDC snapshots now persist `last_pk` + `captured_position` to a new `cdc_snapshots` catalog table after each chunk. A pipeline whose snapshot was interrupted resumes from the last persisted PK; a pipeline whose snapshot completed skips the loop on subsequent runs. MySQL CDC additionally reuses the persisted GTID on resume so writes during the failure window aren't lost. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Phase II.3.d.7 — MySQL CDC OID coverage: BLOB + TIME (complete)** on top of II.3.d.6. MySQL CDC now lands BLOB/TINYBLOB/MEDIUMBLOB/LONGBLOB/BINARY/VARBINARY columns as Arrow `Binary` and TIME as `Time64(Microsecond)`. Both connectors are at type-coverage parity for binary and time-of-day. Snapshot uses `HEX()` projection for Binary columns; streaming reads `BinlogValue::Bytes` directly. Runtime on **wasmtime 36**. Remaining II.3.x follow-ups (multi-table, lift CDC to SDK) ship next. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
 
 ## Auth (Phase II.2.b + II.2.c)
 
