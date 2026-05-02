@@ -157,11 +157,67 @@ impl CdcActivities {
                 .await
                 .map_err(retryable)?;
         }
+        // Per-chunk: persist snapshot state so a crashed-and-restarted
+        // workflow resumes from this last_pk. mark_completed is the
+        // workflow's job once is_final.
+        let snap_state = catalog::cdc_snapshot::CdcSnapshotState {
+            pipeline_id: PipelineId::from_uuid_unchecked(input.pipeline_id),
+            tenant_id: TenantId::from_uuid_unchecked(input.tenant_id),
+            last_pk: chunk.last_pk,
+            completed: false,
+            captured_position: input.consistent_point.clone(),
+        };
+        let snap_ctx = common_types::ids::TenantContext::new(
+            TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        self.catalog
+            .cdc_snapshot_upsert(snap_ctx, &snap_state)
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
         Ok(SnapshotChunkOutput {
             rows: chunk.batch.num_rows(),
             is_final: chunk.is_final,
             last_pk: chunk.last_pk,
         })
+    }
+
+    #[activity]
+    pub async fn cdc_snapshot_state_get(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: CdcSnapshotStateGetInput,
+    ) -> Result<CdcSnapshotStateGetOutput, ActivityError> {
+        let ctx = common_types::ids::TenantContext::new(
+            common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        let pid = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let state = self
+            .catalog
+            .cdc_snapshot_get(ctx, pid)
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        Ok(CdcSnapshotStateGetOutput {
+            last_pk: state.as_ref().and_then(|s| s.last_pk),
+            completed: state.as_ref().map(|s| s.completed).unwrap_or(false),
+            captured_position: state.map(|s| s.captured_position).unwrap_or_default(),
+        })
+    }
+
+    #[activity]
+    pub async fn cdc_snapshot_mark_completed(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: CdcSnapshotMarkCompletedInput,
+    ) -> Result<(), ActivityError> {
+        let ctx = common_types::ids::TenantContext::new(
+            common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+        );
+        let pid = common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id);
+        self.catalog
+            .cdc_snapshot_mark_completed(ctx, pid)
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        Ok(())
     }
 
     #[activity]
