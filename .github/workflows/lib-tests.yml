@@ -23,6 +23,9 @@ jobs:
         with:
           targets: wasm32-wasip2
 
+      - name: Install build dependencies (protoc for tonic/prost)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo build --workspace

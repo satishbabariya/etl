@@ -24,10 +24,10 @@ jobs:
         with:
           targets: wasm32-wasip2
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Install build + stack dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler postgresql-client netcat-openbsd
 
-      - name: Install Postgres client (pg_isready) and netcat
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client netcat-openbsd
+      - uses: Swatinem/rust-cache@v2
 
       - name: Bring up docker-compose stack
         run: docker compose up -d postgres temporal-postgres temporal vault
