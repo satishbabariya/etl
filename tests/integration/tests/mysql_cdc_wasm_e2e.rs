@@ -138,12 +138,17 @@ async fn seed_table_and_rows(url: &str) -> anyhow::Result<()> {
     conn.query_drop(
         "CREATE TABLE items (
             id BIGINT PRIMARY KEY,
-            name VARCHAR(255)
+            name VARCHAR(255),
+            active TINYINT(1),
+            created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
          )",
     )
     .await?;
     conn.query_drop(
-        "INSERT INTO items (id, name) VALUES (1, 'one'), (2, 'two'), (3, 'three')",
+        "INSERT INTO items (id, name, active, created) VALUES \
+         (1, 'one',   1, '2026-01-01 00:00:00'), \
+         (2, 'two',   0, '2026-01-01 00:00:01'), \
+         (3, 'three', 1, '2026-01-01 00:00:02')",
     )
     .await?;
     drop(conn);
@@ -154,8 +159,11 @@ async fn seed_table_and_rows(url: &str) -> anyhow::Result<()> {
 async fn perform_iud(url: &str) -> anyhow::Result<()> {
     let pool = mysql_async::Pool::new(url);
     let mut conn = pool.get_conn().await?;
-    conn.query_drop("INSERT INTO items (id, name) VALUES (4, 'four')")
-        .await?;
+    conn.query_drop(
+        "INSERT INTO items (id, name, active, created) \
+         VALUES (4, 'four', 1, '2026-01-02 00:00:00')",
+    )
+    .await?;
     conn.query_drop("UPDATE items SET name='TWO' WHERE id=2")
         .await?;
     conn.query_drop("DELETE FROM items WHERE id=1").await?;
