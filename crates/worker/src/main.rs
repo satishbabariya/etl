@@ -12,7 +12,10 @@ use worker::{
     activities::sync::SyncActivities,
     temporal::{make_client, make_runtime, TemporalConfig},
     wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime},
-    workflows::{CdcPipelineWorkflow, MysqlCdcPipelineWorkflow, PipelineRunWorkflow},
+    workflows::{
+        CdcPipelineWorkflow, MysqlCdcPipelineWorkflow, PipelineRunWorkflow,
+        WasmCdcPipelineWorkflow,
+    },
 };
 
 #[tokio::main]
@@ -182,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
                 .register_workflow::<PipelineRunWorkflow>()
                 .register_workflow::<CdcPipelineWorkflow>()
                 .register_workflow::<MysqlCdcPipelineWorkflow>()
+                .register_workflow::<WasmCdcPipelineWorkflow>()
                 .build();
             let mut w = match Worker::new(&runtime, ns_client, opts) {
                 Ok(w) => w,
