@@ -22,17 +22,24 @@ pub struct SnapshotChunk {
 
 /// Compose the SELECT statement for one snapshot chunk. Public for
 /// unit-testing the SQL shape; the real query is executed by `read_chunk`.
+/// Per-column projection: `HEX(\`col\`)` for Binary columns,
+/// `CAST(\`col\` AS CHAR)` for everything else.
 pub fn build_chunk_sql(
     schema: &str,
     table: &str,
     pk_col: &str,
-    data_field_names: &[&str],
+    data_columns: &[(&str, &arrow::datatypes::DataType)],
     has_last_pk: bool,
     batch_size: usize,
 ) -> String {
-    let projection = data_field_names
+    let projection = data_columns
         .iter()
-        .map(|n| format!("CAST(`{n}` AS CHAR) AS `{n}`"))
+        .map(|(name, dt)| match dt {
+            arrow::datatypes::DataType::Binary => {
+                format!("HEX(`{name}`) AS `{name}`")
+            }
+            _ => format!("CAST(`{name}` AS CHAR) AS `{name}`"),
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let where_clause = if has_last_pk {
@@ -71,18 +78,18 @@ pub async fn read_chunk(
         .len()
         .checked_sub(3)
         .ok_or_else(|| anyhow!("schema must have at least 3 _cdc.* metadata columns"))?;
-    let data_field_names: Vec<&str> = arrow_schema
+    let data_columns: Vec<(&str, &arrow::datatypes::DataType)> = arrow_schema
         .fields()
         .iter()
         .take(n_data)
-        .map(|f| f.name().as_str())
+        .map(|f| (f.name().as_str(), f.data_type()))
         .collect();
 
     let stmt = build_chunk_sql(
         schema_name,
         table_name,
         pk_column,
-        &data_field_names,
+        &data_columns,
         last_pk.is_some(),
         batch_size,
     );
@@ -169,8 +176,8 @@ fn make_snapshot_builder(
     dt: &arrow::datatypes::DataType,
 ) -> Result<Box<dyn ArrayBuilder>> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::{DataType, TimeUnit};
     Ok(match dt {
@@ -180,7 +187,9 @@ fn make_snapshot_builder(
         DataType::Float64 => Box::new(Float64Builder::new()),
         DataType::Utf8 => Box::new(StringBuilder::new()),
         DataType::Boolean => Box::new(BooleanBuilder::new()),
+        DataType::Binary => Box::new(BinaryBuilder::new()),
         DataType::Date32 => Box::new(Date32Builder::new()),
+        DataType::Time64(TimeUnit::Microsecond) => Box::new(Time64MicrosecondBuilder::new()),
         DataType::Timestamp(TimeUnit::Microsecond, tz) => {
             let mut b = TimestampMicrosecondBuilder::new();
             if let Some(tz) = tz.as_ref() {
@@ -198,8 +207,8 @@ fn append_snapshot_scalar(
     dt: &arrow::datatypes::DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
-        Int64Builder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
+        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::{DataType, TimeUnit};
     match (scalar, dt) {
@@ -263,6 +272,26 @@ fn append_snapshot_scalar(
             .downcast_mut::<BooleanBuilder>()
             .ok_or_else(|| anyhow!("type mismatch: BooleanBuilder"))?
             .append_value(*b),
+        (None, DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BinaryBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Binary(b)), DataType::Binary) => builder
+            .as_any_mut()
+            .downcast_mut::<BinaryBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: BinaryBuilder"))?
+            .append_value(b.as_slice()),
+        (None, DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: Time64MicrosecondBuilder"))?
+            .append_null(),
+        (Some(ScalarValue::Time64Micros(t)), DataType::Time64(TimeUnit::Microsecond)) => builder
+            .as_any_mut()
+            .downcast_mut::<Time64MicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: Time64MicrosecondBuilder"))?
+            .append_value(*t),
         (None, DataType::Date32) => builder
             .as_any_mut()
             .downcast_mut::<Date32Builder>()
@@ -308,14 +337,13 @@ mod tests {
 
     #[test]
     fn build_sql_with_last_pk() {
-        let s = build_chunk_sql(
-            "shop",
-            "orders",
-            "id",
-            &["id", "customer", "amount"],
-            true,
-            500,
-        );
+        use arrow::datatypes::DataType;
+        let cols: Vec<(&str, &DataType)> = vec![
+            ("id", &DataType::Int64),
+            ("customer", &DataType::Utf8),
+            ("amount", &DataType::Utf8),
+        ];
+        let s = build_chunk_sql("shop", "orders", "id", &cols, true, 500);
         assert!(s.contains("`shop`.`orders`"));
         assert!(s.contains("WHERE `id` > ?"));
         assert!(s.contains("ORDER BY `id`"));
@@ -326,9 +354,31 @@ mod tests {
 
     #[test]
     fn build_sql_without_last_pk() {
-        let s = build_chunk_sql("shop", "orders", "id", &["id", "amount"], false, 100);
+        use arrow::datatypes::DataType;
+        let cols: Vec<(&str, &DataType)> = vec![
+            ("id", &DataType::Int64),
+            ("amount", &DataType::Utf8),
+        ];
+        let s = build_chunk_sql("shop", "orders", "id", &cols, false, 100);
         assert!(!s.contains("WHERE"));
         assert!(s.contains("ORDER BY `id`"));
         assert!(s.contains("LIMIT 100"));
+    }
+
+    #[test]
+    fn build_sql_uses_hex_for_binary() {
+        use arrow::datatypes::DataType;
+        let cols: Vec<(&str, &DataType)> = vec![
+            ("id", &DataType::Int64),
+            ("payload", &DataType::Binary),
+            ("name", &DataType::Utf8),
+        ];
+        let s = build_chunk_sql("shop", "blobs", "id", &cols, false, 100);
+        assert!(
+            s.contains("HEX(`payload`) AS `payload`"),
+            "expected HEX projection for binary column; got: {s}"
+        );
+        assert!(s.contains("CAST(`id` AS CHAR) AS `id`"));
+        assert!(s.contains("CAST(`name` AS CHAR) AS `name`"));
     }
 }
