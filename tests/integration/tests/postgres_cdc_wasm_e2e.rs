@@ -137,21 +137,28 @@ async fn seed_table_and_rows(url: &str) -> anyhow::Result<()> {
     sqlx::query(
         "CREATE TABLE items (
             id BIGINT PRIMARY KEY,
-            name TEXT
+            name TEXT,
+            active BOOLEAN,
+            created TIMESTAMP NOT NULL DEFAULT '2026-01-01 00:00:00'
          )",
     )
     .execute(&mut conn)
     .await?;
-    sqlx::query("INSERT INTO items (id, name) VALUES (1, 'one'), (2, 'two'), (3, 'three')")
-        .execute(&mut conn)
-        .await?;
+    sqlx::query(
+        "INSERT INTO items (id, name, active, created) VALUES \
+         (1, 'one', true, '2026-01-01 00:00:00'), \
+         (2, 'two', false, '2026-01-01 00:00:01'), \
+         (3, 'three', true, '2026-01-01 00:00:02')",
+    )
+    .execute(&mut conn)
+    .await?;
     conn.close().await?;
     Ok(())
 }
 
 async fn perform_iud(url: &str) -> anyhow::Result<()> {
     let mut conn = sqlx::PgConnection::connect(url).await?;
-    sqlx::query("INSERT INTO items (id, name) VALUES (4, 'four')")
+    sqlx::query("INSERT INTO items (id, name, active, created) VALUES (4, 'four', true, '2026-01-02 00:00:00')")
         .execute(&mut conn)
         .await?;
     sqlx::query("UPDATE items SET name='TWO' WHERE id=2")
