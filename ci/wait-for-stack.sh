@@ -6,8 +6,14 @@ set -e
 
 echo "waiting for postgres on 127.0.0.1:5432..."
 for i in $(seq 1 60); do
+    # Prefer host pg_isready (CI installs it); fall back to docker exec
+    # when running locally on macOS without postgresql-client.
     if pg_isready -h 127.0.0.1 -p 5432 -U etl 2>/dev/null; then
         echo "postgres ready (${i}s)"
+        break
+    fi
+    if docker exec etl-postgres pg_isready -U etl > /dev/null 2>&1; then
+        echo "postgres ready via docker exec (${i}s)"
         break
     fi
     if [ "$i" -eq 60 ]; then

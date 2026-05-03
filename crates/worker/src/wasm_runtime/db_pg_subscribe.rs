@@ -31,6 +31,12 @@ pub struct PgSubscription {
     pub(super) current_position: String,
     pub(super) idle_timeout: Duration,
     pub(super) max_per_poll: usize,
+    /// Highest LSN we've actually returned to the guest from
+    /// next_event. Used by close_stream to advance the slot only as
+    /// far as the guest has consumed — events still buffered in
+    /// `pending` are NOT lost because we use peek (not get) when
+    /// polling, leaving them in the slot for the next subscription.
+    pub(super) last_consumed_lsn: Option<String>,
 }
 
 impl PgSubscription {
@@ -51,7 +57,30 @@ impl PgSubscription {
             current_position: start_position,
             idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
             max_per_poll: DEFAULT_MAX_PER_POLL,
+            last_consumed_lsn: None,
         }
+    }
+
+    /// Advance the slot to the highest LSN actually consumed by the
+    /// guest. Called from close_stream so any events left in `pending`
+    /// (drained from peek but not pulled by next_event) stay in the
+    /// slot for the next subscription.
+    pub async fn finalize(mut self) -> Result<(), DbError> {
+        if let Some(lsn) = self.last_consumed_lsn.take() {
+            let stmt = "SELECT pg_replication_slot_advance($1, $2::pg_lsn)";
+            if let Err(e) = sqlx::query(stmt)
+                .bind(&self.slot_name)
+                .bind(&lsn)
+                .execute(&mut self.conn)
+                .await
+            {
+                return Err(DbError::QueryFailed(format!(
+                    "pg_replication_slot_advance({}, {}): {e}",
+                    self.slot_name, lsn
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Drain one event. `Ok(None)` means the slot returned 0 rows on
@@ -59,17 +88,29 @@ impl PgSubscription {
     /// return from read_batch.
     pub async fn next(&mut self) -> Result<Option<ChangeEvent>, DbError> {
         if let Some(ev) = self.pending.pop_front() {
+            self.last_consumed_lsn = Some(ev.position.clone());
             return Ok(Some(ev));
         }
         match self.poll_and_buffer().await {
-            Ok(()) => Ok(self.pending.pop_front()),
+            Ok(()) => {
+                let next = self.pending.pop_front();
+                if let Some(ref ev) = next {
+                    self.last_consumed_lsn = Some(ev.position.clone());
+                }
+                Ok(next)
+            }
             Err(e) => Err(e),
         }
     }
 
     async fn poll_and_buffer(&mut self) -> Result<(), DbError> {
+        // PEEK, not GET. _peek_ leaves events in the slot until we
+        // explicitly advance via finalize() in close_stream — so events
+        // that get drained into `pending` but never pulled by next_event
+        // (e.g. when the connector hits batch_size and stops) stay in
+        // the slot for the next subscription instead of being lost.
         let stmt = "SELECT lsn::text, data \
-                    FROM pg_logical_slot_get_binary_changes($1, NULL, $2, \
+                    FROM pg_logical_slot_peek_binary_changes($1, NULL, $2, \
                         'proto_version', $3, \
                         'publication_names', $4)";
         let rows = match sqlx::query(stmt)

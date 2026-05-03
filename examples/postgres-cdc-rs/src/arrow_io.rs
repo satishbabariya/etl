@@ -21,7 +21,17 @@ use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 pub fn build_full_schema(data_fields: &[Field]) -> Arc<Schema> {
-    let mut all = data_fields.to_vec();
+    // Coerce all data columns to nullable. The discovered schema's
+    // is_nullable info is preserved at the source level, but we don't
+    // enforce it in the Arrow output: binlog/pgoutput edge cases (a
+    // value that fails our hand-rolled timestamp parser, an event with
+    // fewer columns than information_schema reports) emit nulls, and
+    // we'd rather land null cells than crash the entire batch with
+    // "non-nullable column contains null values".
+    let mut all: Vec<Field> = data_fields
+        .iter()
+        .map(|f| Field::new(f.name(), f.data_type().clone(), true))
+        .collect();
     all.push(Field::new("_cdc.op", DataType::Utf8, false));
     all.push(Field::new("_cdc.position", DataType::Utf8, false));
     Arc::new(Schema::new(all))

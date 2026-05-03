@@ -55,14 +55,33 @@ fn chunk_after(
     last_pk: i64,
     batch_size: i64,
 ) -> Result<Chunk, ConnectorError> {
+    use arrow_schema::DataType;
+    // Cast every column to text so the host's PgRow::try_get::<Option<String>>
+    // succeeds regardless of source column type. sqlx's default binary
+    // protocol doesn't auto-coerce BIGINT/TIMESTAMP/etc. to String, so
+    // without this every non-text column would arrive as None.
     let select_list = cols
         .iter()
-        .map(|c| format!("\"{}\"", c.name))
+        .map(|c| format!("\"{}\"::text AS \"{}\"", c.name, c.name))
         .collect::<Vec<_>>()
         .join(", ");
+    // Postgres rejects `bigint > $1` when sqlx binds $1 as text.
+    // Cast the bound string to the PK's actual SQL type. Snapshot
+    // requires an integer PK (we already document that) — derive
+    // the right cast from the discovered Arrow DataType.
+    let pk_cast = cols
+        .iter()
+        .find(|c| c.name == pk)
+        .map(|c| match &c.data_type {
+            DataType::Int16 => "smallint",
+            DataType::Int32 => "integer",
+            DataType::Int64 => "bigint",
+            _ => "bigint",
+        })
+        .unwrap_or("bigint");
     let sql = format!(
         "SELECT {select_list} FROM \"{schema}\".\"{table}\" \
-         WHERE \"{pk}\" > $1 ORDER BY \"{pk}\" LIMIT {limit}",
+         WHERE \"{pk}\" > $1::{pk_cast} ORDER BY \"{pk}\" LIMIT {limit}",
         schema = cfg.schema,
         table = cfg.table,
         limit = batch_size,
