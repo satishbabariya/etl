@@ -290,11 +290,21 @@ impl DbHost for super::host::HostState {
 
     async fn close_stream(&mut self, s: ChangeStream) -> wasmtime::Result<()> {
         if let Some(sub) = self.db.streams.remove(&s.id) {
-            // BinlogStream::close is async and consumes self. We
-            // explicitly drop without close to avoid blocking on the
-            // server roundtrip — the server will detect the closed
-            // socket on its end.
-            drop(sub);
+            match sub {
+                DbStream::Mysql(m) => {
+                    // BinlogStream::close consumes self and roundtrips
+                    // to the server. We just drop — the server detects
+                    // the closed socket and cleans up.
+                    drop(m);
+                }
+                DbStream::Postgres(p) => {
+                    // Advance the slot to the highest LSN actually
+                    // returned to the guest. peek_binary_changes left
+                    // un-consumed events in WAL; finalize commits the
+                    // consumed prefix.
+                    let _ = p.finalize().await;
+                }
+            }
         }
         Ok(())
     }

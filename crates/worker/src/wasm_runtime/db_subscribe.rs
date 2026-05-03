@@ -18,6 +18,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use super::bindings::platform::connector::db::{ChangeEvent, DbError};
+use crate::connectors::mysql::cdc::position::GtidSet;
 
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 5;
 
@@ -26,25 +27,37 @@ pub struct MysqlSubscription {
     pub(super) table_map_cache: HashMap<u64, TableMapEvent<'static>>,
     pub(super) pending: VecDeque<ChangeEvent>,
     /// Most-recent uuid:gno from the most-recent GtidEvent. Committed
-    /// into `current_gtid` on XidEvent.
+    /// into `executed_gtids` on XidEvent.
     pub(super) current_uuid_gno: Option<(String, u64)>,
     /// Microseconds since unix epoch from the most-recent GtidEvent.
     pub(super) current_commit_ts: i64,
-    /// Position string we surface to the guest. Updated whenever a
-    /// transaction commits.
-    pub(super) current_position: String,
+    /// Accumulated executed GTID set. Each XidEvent unions the
+    /// committed transaction's gno into this set. The formatted
+    /// string is what we hand back to the guest as `position`,
+    /// covering ALL gnos seen since subscription start. Critical:
+    /// the next read_batch passes this back to subscribe-changes,
+    /// and MySQL's server sends only events whose GTID is NOT in
+    /// this set — so an under-specified position causes already-
+    /// streamed events to re-emit on every subscription.
+    pub(super) executed_gtids: GtidSet,
     pub(super) idle_timeout: Duration,
 }
 
 impl MysqlSubscription {
     pub fn new(stream: BinlogStream, start_position: String) -> Self {
+        // Seed the executed set with whatever the guest passed in
+        // (typically the SELECT @@gtid_executed snapshot pin). If the
+        // input is malformed or empty, we start with an empty set —
+        // the binlog stream will replay from the server's earliest
+        // available GTID.
+        let executed_gtids = GtidSet::parse(&start_position).unwrap_or_else(|_| GtidSet::empty());
         Self {
             stream,
             table_map_cache: HashMap::new(),
             pending: VecDeque::new(),
             current_uuid_gno: None,
             current_commit_ts: 0,
-            current_position: start_position,
+            executed_gtids,
             idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
         }
     }
@@ -86,10 +99,17 @@ impl MysqlSubscription {
                 }
                 EventData::XidEvent(_) => {
                     if let Some((uuid, gno)) = self.current_uuid_gno.take() {
-                        // We don't merge into a GtidSet here — the guest
-                        // owns position arithmetic. We just hand back the
-                        // most-recent committed gno as the position.
-                        self.current_position = format!("{uuid}:{gno}");
+                        // Union the committed transaction's gno into
+                        // the executed set. The next read_batch passes
+                        // executed_gtids.format() as the position to
+                        // subscribe-changes; MySQL's server uses that
+                        // as the "GTIDs we've already seen" exclusion
+                        // set, so under-specifying it would cause
+                        // already-streamed events to re-emit.
+                        let single_str = format!("{uuid}:{gno}");
+                        if let Ok(single) = GtidSet::parse(&single_str) {
+                            self.executed_gtids.union_with(&single);
+                        }
                     }
                 }
                 EventData::TableMapEvent(tme) => {
@@ -191,7 +211,7 @@ impl MysqlSubscription {
         let json = serde_json::Value::Object(obj).to_string();
         Ok(ChangeEvent {
             op,
-            position: self.current_position.clone(),
+            position: self.executed_gtids.format(),
             commit_ts: self.current_commit_ts,
             txid: 0,
             table: table.to_string(),

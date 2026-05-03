@@ -17,7 +17,7 @@ build:
 	cargo build --workspace
 
 e2e: stack build
-	cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture
-	cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture
-	cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture
-	cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture
+	cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
+	cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
+	cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture --test-threads=1
+	cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture --test-threads=1

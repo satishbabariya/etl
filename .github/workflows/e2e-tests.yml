@@ -54,17 +54,21 @@ jobs:
           cargo test -p integration-tests --test wasm_connector --no-run --locked
           cargo test -p integration-tests --test mysql_cdc_e2e --no-run --locked
 
+      # --test-threads=1: tests in mysql_cdc_e2e share catalog state
+      # (truncate_all_for_tests + create_pipeline) and stomp on each
+      # other under the default parallel runner. Single-threaded
+      # execution is the simplest fix; per-binary cost is small.
       - name: e2e — mysql_cdc_wasm
-        run: cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture
+        run: cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
 
       - name: e2e — postgres_cdc_wasm
-        run: cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture
+        run: cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
 
       - name: e2e — wasm_connector
-        run: cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture
+        run: cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture --test-threads=1
 
-      - name: e2e — mysql_cdc (native streaming-only)
-        run: cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture
+      - name: e2e — mysql_cdc (native)
+        run: cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture --test-threads=1
 
       - name: docker compose logs (on failure)
         if: failure()
