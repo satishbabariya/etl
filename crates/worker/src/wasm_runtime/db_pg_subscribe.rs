@@ -15,27 +15,43 @@ use sqlx::Row as _;
 use crate::connectors::postgres::cdc::decode::{
     decode_message, CdcEvent, RelationInfo, RelationTable,
 };
+use common_types::cursor::lsn_to_string;
 
 use super::bindings::platform::connector::db::{ChangeEvent, DbError};
 
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_MAX_PER_POLL: usize = 1000;
 
+/// One pending entry holds the decoded ChangeEvent + the LSN of the
+/// transaction's Commit message. When the guest pulls this event via
+/// next_event, we use `txn_commit_lsn` (when present) as the slot-
+/// advance target rather than the data event's own position. That
+/// way the slot moves past the entire transaction in one step,
+/// avoiding the next subscription replaying the trailing Commit
+/// (which would re-emit the data events too).
+pub(super) struct PendingEvent {
+    pub(super) event: ChangeEvent,
+    /// Set when the txn's Commit message was decoded in the same
+    /// peek that produced this event. None if the peek ended mid-
+    /// transaction (shouldn't happen with peek_binary_changes, which
+    /// always returns whole txns, but defensive).
+    pub(super) txn_commit_lsn: Option<String>,
+}
+
 pub struct PgSubscription {
     pub(super) conn: PgConnection,
     pub(super) slot_name: String,
     pub(super) publication_names: String,
     pub(super) proto_version: String,
-    pub(super) pending: VecDeque<ChangeEvent>,
+    pub(super) pending: VecDeque<PendingEvent>,
     pub(super) relations: RelationTable,
     pub(super) current_position: String,
     pub(super) idle_timeout: Duration,
     pub(super) max_per_poll: usize,
-    /// Highest LSN we've actually returned to the guest from
-    /// next_event. Used by close_stream to advance the slot only as
-    /// far as the guest has consumed — events still buffered in
-    /// `pending` are NOT lost because we use peek (not get) when
-    /// polling, leaving them in the slot for the next subscription.
+    /// Highest LSN safe to advance the slot to. Set when next_event
+    /// pulls a PendingEvent — uses `txn_commit_lsn` if present
+    /// (advances past the whole transaction), falls back to the
+    /// event's own position otherwise.
     pub(super) last_consumed_lsn: Option<String>,
 }
 
@@ -87,17 +103,23 @@ impl PgSubscription {
     /// this poll — the guest should treat that as "drain done" and
     /// return from read_batch.
     pub async fn next(&mut self) -> Result<Option<ChangeEvent>, DbError> {
-        if let Some(ev) = self.pending.pop_front() {
-            self.last_consumed_lsn = Some(ev.position.clone());
-            return Ok(Some(ev));
+        if let Some(p) = self.pending.pop_front() {
+            self.last_consumed_lsn = p
+                .txn_commit_lsn
+                .clone()
+                .or_else(|| Some(p.event.position.clone()));
+            return Ok(Some(p.event));
         }
         match self.poll_and_buffer().await {
             Ok(()) => {
                 let next = self.pending.pop_front();
-                if let Some(ref ev) = next {
-                    self.last_consumed_lsn = Some(ev.position.clone());
+                if let Some(ref p) = next {
+                    self.last_consumed_lsn = p
+                        .txn_commit_lsn
+                        .clone()
+                        .or_else(|| Some(p.event.position.clone()));
                 }
-                Ok(next)
+                Ok(next.map(|p| p.event))
             }
             Err(e) => Err(e),
         }
@@ -128,6 +150,12 @@ impl PgSubscription {
                 )));
             }
         };
+        // Index in `pending` of the first event of the in-progress
+        // transaction. When we see the matching Commit, back-fill
+        // each entry from this index forward with the Commit's
+        // end_lsn — that's what we'll advance the slot to once the
+        // guest consumes those events.
+        let mut txn_start_index: Option<usize> = None;
         for r in &rows {
             let lsn: String = r.try_get(0).unwrap_or_default();
             let data: Vec<u8> = r.try_get(1).unwrap_or_default();
@@ -139,8 +167,29 @@ impl PgSubscription {
                     )));
                 }
             };
-            if let Some(ce) = self.cdc_event_to_change_event(event, &lsn) {
-                self.pending.push_back(ce);
+            match &event {
+                CdcEvent::Begin { .. } => {
+                    txn_start_index = Some(self.pending.len());
+                }
+                CdcEvent::Commit { end_lsn, .. } => {
+                    // Use end_lsn (next byte after the Commit message)
+                    // so pg_replication_slot_advance moves the slot
+                    // PAST the entire transaction.
+                    let commit_lsn_str = lsn_to_string(*end_lsn);
+                    if let Some(start) = txn_start_index.take() {
+                        for entry in self.pending.iter_mut().skip(start) {
+                            entry.txn_commit_lsn = Some(commit_lsn_str.clone());
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(ce) = self.cdc_event_to_change_event(event, &lsn) {
+                        self.pending.push_back(PendingEvent {
+                            event: ce,
+                            txn_commit_lsn: None,
+                        });
+                    }
+                }
             }
         }
         if let Some(last) = rows.last() {
