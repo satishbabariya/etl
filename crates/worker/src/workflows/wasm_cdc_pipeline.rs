@@ -207,6 +207,14 @@ impl WasmCdcPipelineWorkflow {
                 continue;
             }
 
+            // Per-batch stream_name override (multi-table CDC) falls
+            // back to the pipeline-level stream_name when the connector
+            // didn't set one.
+            let batch_stream = read_out
+                .stream_name
+                .clone()
+                .unwrap_or_else(|| input.stream_name.clone());
+
             ctx.start_activity(
                 SyncActivities::load_batch,
                 LoadBatchInput {
@@ -220,6 +228,7 @@ impl WasmCdcPipelineWorkflow {
                     dead_letter_threshold,
                     rows_rejected_so_far: rows_rejected_so_far as usize,
                     rows_total_so_far: rows_total_so_far as usize,
+                    stream_name: batch_stream.clone(),
                 },
                 opts_long(),
             )
@@ -231,7 +240,7 @@ impl WasmCdcPipelineWorkflow {
                     pipeline_id: input.pipeline_id,
                     tenant_id: input.tenant_id,
                     run_id: input.run_id,
-                    stream_name: input.stream_name.clone(),
+                    stream_name: batch_stream,
                     cursor: read_out.new_cursor.clone(),
                 },
                 opts_short(),

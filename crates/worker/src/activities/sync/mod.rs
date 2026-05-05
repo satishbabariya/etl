@@ -223,6 +223,7 @@ impl SyncActivities {
             is_final: outcome.is_final,
             rejected_ipc_b64: rejected_b64,
             rows_rejected,
+            stream_name: outcome.stream_name,
         })
     }
 
@@ -238,6 +239,7 @@ impl SyncActivities {
             pipeline_id: PipelineId::from_uuid_unchecked(input.pipeline_id),
             run_id: RunId::from_uuid_unchecked(input.run_id),
             batch_seq: input.batch_seq,
+            stream_name: input.stream_name.clone(),
         };
         let res = LocalParquetLoader
             .load(&input.destination, load_id.clone(), batch)

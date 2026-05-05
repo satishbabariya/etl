@@ -121,6 +121,7 @@ fn finalize(
                 value: lsn.to_string(),
             }),
             is_final: true,
+            stream_name: None,
         });
     }
     let new_last_pk = chunk.last_pk_in_chunk.unwrap_or(last_pk_in);
@@ -149,6 +150,7 @@ fn finalize(
         rows: rows_n,
         new_cursor: Some(CursorValue { kind, value }),
         is_final: snapshot_done,
+        stream_name: None,
     })
 }
 

@@ -59,6 +59,10 @@ pub struct ReadBatchOutput {
     pub rejected_ipc_b64: Option<String>,
     #[serde(default)]
     pub rows_rejected: usize,
+    /// Per-batch stream override from the connector (multi-table CDC).
+    /// None = use the pipeline-level stream_name in LoadBatchInput.
+    #[serde(default)]
+    pub stream_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,6 +81,12 @@ pub struct LoadBatchInput {
     pub rows_rejected_so_far: usize,
     #[serde(default)]
     pub rows_total_so_far: usize,
+    /// Per-batch stream override that the loader uses to build a
+    /// per-stream sub-path. Empty string = no subdir. The workflow
+    /// fills this from `read_out.stream_name` (multi-table CDC) or
+    /// the pipeline-level stream_name (everything else).
+    #[serde(default)]
+    pub stream_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

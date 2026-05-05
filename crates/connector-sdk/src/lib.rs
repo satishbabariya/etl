@@ -39,6 +39,11 @@ pub struct ReadOutcome {
     /// True if fewer than `batch_size` rows were returned — indicates the source
     /// has no more data at this moment.
     pub is_final: bool,
+    /// Per-batch destination stream override. None = use the pipeline's
+    /// configured stream_name; Some routes the batch to <base_path>/<stream-name>/...
+    /// Used by multi-table CDC connectors to dispatch each table's batches
+    /// to its own per-table directory.
+    pub stream_name: Option<String>,
 }
 
 /// Canonical Component Model definition for source connectors. Host-side

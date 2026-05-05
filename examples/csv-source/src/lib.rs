@@ -111,6 +111,7 @@ impl Guest for Component {
                 })
             },
             is_final,
+            stream_name: None,
         })
     }
 }

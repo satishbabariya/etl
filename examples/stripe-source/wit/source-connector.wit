@@ -21,6 +21,7 @@ interface types {
         rows: u32,
         new-cursor: option<cursor-value>,
         is-final: bool,
+        stream-name: option<string>,
     }
 
     variant connector-error {

@@ -31,6 +31,7 @@ impl DestinationLoader for LocalParquetLoader {
         let spec = match dest {
             DestinationSpec::LocalParquet(s) => s,
         };
+        validate_stream_name(&load_id.stream_name)?;
         let path = target_path(spec, &load_id);
         fs::create_dir_all(path.parent().unwrap())
             .with_context(|| format!("creating dir for {}", path.display()))?;
@@ -58,9 +59,24 @@ fn target_path(spec: &LocalParquetSpec, load_id: &LoadId) -> PathBuf {
     let mut p = PathBuf::from(&spec.base_path);
     p.push(load_id.tenant_id.as_uuid().to_string());
     p.push(load_id.pipeline_id.as_uuid().to_string());
+    if !load_id.stream_name.is_empty() {
+        p.push(&load_id.stream_name);
+    }
     p.push(load_id.run_id.as_uuid().to_string());
     p.push(format!("batch-{:05}.parquet", load_id.batch_seq));
     p
+}
+
+/// Reject path components that would let the per-batch stream_name
+/// escape the destination root via `..` or path separators.
+pub(crate) fn validate_stream_name(s: &str) -> anyhow::Result<()> {
+    if s.is_empty() {
+        return Ok(());
+    }
+    if s.contains("..") || s.contains('/') || s.contains('\\') {
+        anyhow::bail!("stream_name contains illegal path component: {s}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -101,6 +117,7 @@ mod tests {
             pipeline_id: PipelineId::new(),
             run_id: RunId::new(),
             batch_seq: 0,
+            stream_name: String::new(),
         };
         let res = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();
         assert_eq!(res.rows_loaded, 3);
@@ -126,6 +143,7 @@ mod tests {
             pipeline_id: PipelineId::new(),
             run_id: RunId::new(),
             batch_seq: 5,
+            stream_name: String::new(),
         };
         let r1 = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();
         let r2 = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();

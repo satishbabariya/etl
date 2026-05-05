@@ -32,6 +32,11 @@ interface types {
         rows: u32,
         new-cursor: option<cursor-value>,
         is-final: bool,
+        /// Per-batch destination stream override. When Some, the
+        /// workflow uses this as `stream_name` for `load_batch` and
+        /// the loader writes to `<base_path>/<stream-name>/...`.
+        /// None = use the pipeline's configured stream_name (back-compat).
+        stream-name: option<string>,
     }
 
     variant connector-error {

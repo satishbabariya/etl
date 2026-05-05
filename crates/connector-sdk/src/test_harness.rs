@@ -94,6 +94,7 @@ mod tests {
                 batch,
                 new_cursor: None,
                 is_final: true,
+                stream_name: None,
             })
         }
     }
@@ -153,6 +154,7 @@ mod tests {
                 batch,
                 new_cursor: None,
                 is_final: true,
+                stream_name: None,
             })
         }
     }

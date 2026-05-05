@@ -70,6 +70,7 @@ pub async fn run(
         batch,
         new_cursor,
         is_final: row_count < batch_size,
+        stream_name: None,
     })
 }
 
