@@ -170,6 +170,7 @@ impl SourceConnector for WasmSourceConnector {
             batch,
             new_cursor,
             is_final: outcome.is_final,
+            stream_name: outcome.stream_name,
         })
     }
 }

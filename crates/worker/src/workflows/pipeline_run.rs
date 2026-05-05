@@ -246,6 +246,13 @@ impl PipelineRunWorkflow {
                 break;
             }
 
+            // Per-batch stream override (multi-table CDC); falls back
+            // to the pipeline-level stream_name.
+            let batch_stream = read_out
+                .stream_name
+                .clone()
+                .unwrap_or_else(|| stream_name.clone());
+
             ctx.start_activity(
                 SyncActivities::load_batch,
                 LoadBatchInput {
@@ -259,6 +266,7 @@ impl PipelineRunWorkflow {
                     dead_letter_threshold,
                     rows_rejected_so_far: rows_rejected_so_far as usize,
                     rows_total_so_far: rows_total_so_far as usize,
+                    stream_name: batch_stream.clone(),
                 },
                 opts_long(),
             )
@@ -270,7 +278,7 @@ impl PipelineRunWorkflow {
                     pipeline_id,
                     tenant_id,
                     run_id,
-                    stream_name: stream_name.clone(),
+                    stream_name: batch_stream,
                     cursor: read_out.new_cursor.clone(),
                 },
                 opts_short(),

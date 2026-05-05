@@ -24,13 +24,20 @@ pub trait DestinationLoader: Send + Sync {
 }
 
 /// Deterministic identifier for a single loaded batch.
-/// Same `(tenant_id, pipeline_id, run_id, batch_seq)` tuple ⇒ same artifact.
+/// Same `(tenant_id, pipeline_id, run_id, batch_seq, stream_name)` tuple
+/// ⇒ same artifact.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadId {
     pub tenant_id: TenantId,
     pub pipeline_id: PipelineId,
     pub run_id: RunId,
     pub batch_seq: u32,
+    /// Per-table dispatch hint. Empty string = no stream-level
+    /// subdirectory (loader writes to `<base_path>/...` directly).
+    /// Multi-table CDC connectors set this to "<schema>.<table>" so
+    /// each table's batches land at `<base_path>/<schema>.<table>/...`.
+    #[serde(default)]
+    pub stream_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

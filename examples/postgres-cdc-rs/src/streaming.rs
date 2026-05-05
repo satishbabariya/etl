@@ -64,6 +64,7 @@ pub fn next_window(
             value: latest_position,
         }),
         is_final: false,
+        stream_name: None,
     })
 }
 

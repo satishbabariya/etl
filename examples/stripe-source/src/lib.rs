@@ -105,6 +105,7 @@ impl Guest for Component {
             rows: page.rows,
             new_cursor,
             is_final: !page.has_more,
+            stream_name: None,
         })
     }
 }

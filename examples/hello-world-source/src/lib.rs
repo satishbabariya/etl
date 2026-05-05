@@ -72,6 +72,7 @@ impl Guest for Component {
                 rows: 0,
                 new_cursor: cursor,
                 is_final: true,
+                stream_name: None,
             });
         }
         let ids = Int64Array::from(vec![1i64, 2, 3]);
@@ -89,6 +90,7 @@ impl Guest for Component {
                 value: "1".into(),
             }),
             is_final: true,
+            stream_name: None,
         })
     }
 }
