@@ -389,7 +389,10 @@ impl DestinationLoader for PostgresLoader {
             .await
             .context("ensure log table")?;
 
-        // 2. Idempotency check — if this load_id is already logged, no-op.
+        // 2. Resolve target table (validates stream_name even for retried loads).
+        let target_table = resolve_target_table(spec, &load_id.stream_name)?;
+
+        // 3. Idempotency check — if this load_id is already logged, no-op.
         let existing = sqlx::query(&format!(
             "SELECT rows_loaded FROM \"{}\".\"_etl_loaded_batches\" \
              WHERE tenant_id=$1 AND pipeline_id=$2 AND run_id=$3 \
@@ -410,11 +413,11 @@ impl DestinationLoader for PostgresLoader {
             return Ok(LoadResult {
                 rows_loaded: 0,
                 bytes_written: 0,
-                path: format!("{}.{} (already loaded)", spec.schema, spec.table),
+                path: format!("{}.{} (already loaded)", spec.schema, target_table),
             });
         }
 
-        // 3. CDC vs plain. CDC mode is data-driven: any batch carrying
+        // 4. CDC vs plain. CDC mode is data-driven: any batch carrying
         //    `_cdc.op` is routed through the CDC path; otherwise the
         //    original append/upsert path applies.
         let mut rows_loaded = 0usize;
@@ -426,9 +429,9 @@ impl DestinationLoader for PostgresLoader {
                      CDC ops require a primary key for upsert/delete routing"
                 );
             }
-            rows_loaded = cdc_apply(&mut tx, spec, &spec.table, &batch).await?;
+            rows_loaded = cdc_apply(&mut tx, spec, target_table, &batch).await?;
         } else if batch.num_rows() > 0 {
-            rows_loaded = plain_apply(&mut tx, spec, &spec.table, &batch).await?;
+            rows_loaded = plain_apply(&mut tx, spec, target_table, &batch).await?;
         }
 
         // 5. Record in log.
@@ -452,7 +455,7 @@ impl DestinationLoader for PostgresLoader {
         Ok(LoadResult {
             rows_loaded,
             bytes_written: 0,
-            path: format!("{}.{}", spec.schema, spec.table),
+            path: format!("{}.{}", spec.schema, target_table),
         })
     }
 }
