@@ -426,7 +426,7 @@ impl DestinationLoader for PostgresLoader {
                      CDC ops require a primary key for upsert/delete routing"
                 );
             }
-            rows_loaded = cdc_apply(&mut tx, spec, &batch).await?;
+            rows_loaded = cdc_apply(&mut tx, spec, &spec.table, &batch).await?;
         } else if batch.num_rows() > 0 {
             let ddl = create_table_ddl(
                 &spec.schema,
@@ -513,16 +513,17 @@ fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationS
 async fn cdc_apply(
     tx: &mut Transaction<'_, Postgres>,
     spec: &PostgresDestinationSpec,
+    target_table: &str,
     batch: &RecordBatch,
 ) -> anyhow::Result<usize> {
     let data_schema = cdc_data_schema(batch.schema().as_ref());
-    let ddl = create_table_ddl(&spec.schema, &spec.table, &data_schema, &spec.pk_columns)?;
+    let ddl = create_table_ddl(&spec.schema, target_table, &data_schema, &spec.pk_columns)?;
     tx.execute(sqlx::query(&ddl))
         .await
         .context("create target table (cdc)")?;
 
-    let upsert_sql = insert_sql(&spec.schema, &spec.table, &data_schema, &spec.pk_columns);
-    let del_sql = delete_sql(&spec.schema, &spec.table, &spec.pk_columns);
+    let upsert_sql = insert_sql(&spec.schema, target_table, &data_schema, &spec.pk_columns);
+    let del_sql = delete_sql(&spec.schema, target_table, &spec.pk_columns);
 
     let mut applied = 0usize;
     for r in 0..batch.num_rows() {
