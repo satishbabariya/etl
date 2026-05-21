@@ -19,6 +19,14 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 use crate::connectors::dispatch::build_source_connector;
 use crate::loaders::parquet_local::LocalParquetLoader;
+use crate::loaders::postgres::PostgresLoader;
+
+fn loader_name(dest: &common_types::pipeline_spec::DestinationSpec) -> &'static str {
+    match dest {
+        common_types::pipeline_spec::DestinationSpec::LocalParquet(_) => "local_parquet",
+        common_types::pipeline_spec::DestinationSpec::Postgres(_) => "postgres",
+    }
+}
 use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
 use inputs::*;
 
@@ -241,17 +249,45 @@ impl SyncActivities {
             batch_seq: input.batch_seq,
             stream_name: input.stream_name.clone(),
         };
-        let res = LocalParquetLoader
-            .load(&input.destination, load_id.clone(), batch)
-            .await
-            .map_err(to_retryable)?;
+        let res = match &input.destination {
+            common_types::pipeline_spec::DestinationSpec::LocalParquet(_) => {
+                LocalParquetLoader
+                    .load(&input.destination, load_id.clone(), batch)
+                    .await
+            }
+            common_types::pipeline_spec::DestinationSpec::Postgres(_) => {
+                PostgresLoader
+                    .load(&input.destination, load_id.clone(), batch)
+                    .await
+            }
+        }
+        .map_err(to_retryable)?;
         metrics::counter!(
             crate::metrics::ROWS_LOADED,
             "tenant_id" => input.tenant_id.to_string(),
         )
         .increment(res.rows_loaded as u64);
 
-        // Dead-letter routing (LocalParquet only — see plan phase-2-4a).
+        // Dead-letter routing (LocalParquet only — Postgres dead-letter
+        // is a follow-up; rejected rows are logged and dropped).
+        let dl_supported = matches!(
+            &input.destination,
+            common_types::pipeline_spec::DestinationSpec::LocalParquet(_)
+        );
+        if !dl_supported {
+            if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
+                let rej = decode_batch(rej_b64).map_err(to_retryable)?;
+                if rej.num_rows() > 0 {
+                    tracing::warn!(
+                        target: "loader.dead_letter",
+                        loader = loader_name(&input.destination),
+                        rows = rej.num_rows(),
+                        "dead-letter routing not implemented for this destination; rejected rows dropped"
+                    );
+                }
+            }
+        }
+        if dl_supported {
         if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
             let rej = decode_batch(rej_b64).map_err(to_retryable)?;
             if rej.num_rows() > 0 {
@@ -268,8 +304,7 @@ impl SyncActivities {
                         p
                     }
                     common_types::pipeline_spec::DestinationSpec::Postgres(_) => {
-                        // Refactored properly in Task 3 dispatch.
-                        unreachable!("Postgres destination is not yet wired into load_batch");
+                        unreachable!("guarded by dl_supported");
                     }
                 };
                 let file = std::fs::File::create(&dest_path)
@@ -290,6 +325,7 @@ impl SyncActivities {
                     "dead-letter batch written"
                 );
             }
+        }
         }
 
         // Threshold check (cumulative).
@@ -333,3 +369,29 @@ impl SyncActivities {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
+
+    #[test]
+    fn pick_loader_returns_postgres_for_postgres_spec() {
+        let spec = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        assert_eq!(loader_name(&spec), "postgres");
+    }
+
+    #[test]
+    fn pick_loader_returns_local_parquet_for_parquet_spec() {
+        let spec = DestinationSpec::LocalParquet(
+            common_types::pipeline_spec::LocalParquetSpec { base_path: "/tmp".into() },
+        );
+        assert_eq!(loader_name(&spec), "local_parquet");
+    }
+}
+
