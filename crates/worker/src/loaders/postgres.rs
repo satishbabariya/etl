@@ -361,6 +361,180 @@ pub(crate) fn create_table_ddl(
     ))
 }
 
+/// One column as reported by `information_schema.columns`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DestCol {
+    pub name: String,
+    /// Lower-cased PG type name as returned by `information_schema.columns.data_type`,
+    /// e.g. `"bigint"`, `"text"`, `"timestamp with time zone"`.
+    pub pg_type: String,
+    pub nullable: bool,
+}
+
+/// Query the live column list for `"<schema>"."<table>"` from
+/// `information_schema.columns`, ordered by `ordinal_position`.
+/// Returns an empty `Vec` if the table does not yet exist.
+pub(crate) async fn query_destination_columns(
+    tx: &mut Transaction<'_, Postgres>,
+    schema: &str,
+    table: &str,
+) -> anyhow::Result<Vec<DestCol>> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT column_name, data_type, is_nullable \
+         FROM information_schema.columns \
+         WHERE table_schema = $1 AND table_name = $2 \
+         ORDER BY ordinal_position",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(&mut **tx)
+    .await
+    .context("query information_schema.columns")?;
+
+    let cols = rows
+        .into_iter()
+        .map(|r| {
+            let nullable_str: String = r.get(2);
+            DestCol {
+                name: r.get(0),
+                pg_type: r.get::<String, _>(1).to_lowercase(),
+                nullable: nullable_str.eq_ignore_ascii_case("YES"),
+            }
+        })
+        .collect();
+    Ok(cols)
+}
+
+/// A change between the batch's data schema and the destination table's columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SchemaDelta {
+    AddColumn { name: String, pg_type: String, nullable: bool },
+    DropColumn { name: String },
+    WidenType { name: String, new_pg_type: String },
+    NarrowType { name: String },
+    IncompatibleType { name: String, dest_pg_type: String, batch_pg_type: String },
+}
+
+impl SchemaDelta {
+    pub(crate) fn is_destructive(&self) -> bool {
+        matches!(
+            self,
+            SchemaDelta::DropColumn { .. }
+                | SchemaDelta::NarrowType { .. }
+                | SchemaDelta::IncompatibleType { .. }
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TypeRelation {
+    Same,
+    Widening,
+    Narrowing,
+    Incompatible,
+}
+
+fn pg_type_relation(dest: &str, batch: &str) -> TypeRelation {
+    let d = dest.to_lowercase();
+    let b = batch.to_lowercase();
+    if d == b {
+        return TypeRelation::Same;
+    }
+    const WIDENINGS: &[(&str, &str)] = &[
+        ("smallint", "integer"),
+        ("smallint", "bigint"),
+        ("integer", "bigint"),
+        ("real", "double precision"),
+        ("character varying", "text"),
+        ("varchar", "text"),
+        ("character", "text"),
+    ];
+    const NARROWINGS: &[(&str, &str)] = &[
+        ("integer", "smallint"),
+        ("bigint", "smallint"),
+        ("bigint", "integer"),
+        ("double precision", "real"),
+    ];
+    if WIDENINGS.iter().any(|(f, t)| *f == d.as_str() && *t == b.as_str()) {
+        TypeRelation::Widening
+    } else if NARROWINGS.iter().any(|(f, t)| *f == d.as_str() && *t == b.as_str()) {
+        TypeRelation::Narrowing
+    } else {
+        TypeRelation::Incompatible
+    }
+}
+
+pub(crate) fn diff_schema(
+    batch_data_schema: &Schema,
+    dest_cols: &[DestCol],
+) -> anyhow::Result<Vec<SchemaDelta>> {
+    let mut deltas = Vec::new();
+
+    for field in batch_data_schema.fields() {
+        let batch_pg = pg_column_type(field.data_type())?;
+        match dest_cols.iter().find(|c| c.name == *field.name()) {
+            None => {
+                deltas.push(SchemaDelta::AddColumn {
+                    name: field.name().clone(),
+                    pg_type: batch_pg.to_string(),
+                    nullable: field.is_nullable(),
+                });
+            }
+            Some(dest_col) => match pg_type_relation(dest_col.pg_type.as_str(), batch_pg) {
+                TypeRelation::Same => {}
+                TypeRelation::Widening => deltas.push(SchemaDelta::WidenType {
+                    name: field.name().clone(),
+                    new_pg_type: batch_pg.to_string(),
+                }),
+                TypeRelation::Narrowing => deltas.push(SchemaDelta::NarrowType {
+                    name: field.name().clone(),
+                }),
+                TypeRelation::Incompatible => deltas.push(SchemaDelta::IncompatibleType {
+                    name: field.name().clone(),
+                    dest_pg_type: dest_col.pg_type.clone(),
+                    batch_pg_type: batch_pg.to_string(),
+                }),
+            },
+        }
+    }
+
+    for dest_col in dest_cols {
+        if batch_data_schema.field_with_name(&dest_col.name).is_err() {
+            deltas.push(SchemaDelta::DropColumn { name: dest_col.name.clone() });
+        }
+    }
+
+    Ok(deltas)
+}
+
+/// `ALTER TABLE "<schema>"."<table>" ADD COLUMN IF NOT EXISTS "<name>" <pg_type>`.
+/// Always omits `NOT NULL` (existing rows survive without DEFAULT).
+pub(crate) fn add_column_ddl(
+    schema: &str,
+    table: &str,
+    col_name: &str,
+    pg_type: &str,
+    _nullable: bool,
+) -> String {
+    format!(
+        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \"{col_name}\" {pg_type}"
+    )
+}
+
+/// `ALTER TABLE "<schema>"."<table>" ALTER COLUMN "<name>" TYPE <new_type> USING "<name>"::<new_type>`
+pub(crate) fn alter_column_type_ddl(
+    schema: &str,
+    table: &str,
+    col_name: &str,
+    new_pg_type: &str,
+) -> String {
+    format!(
+        "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{col_name}\" \
+         TYPE {new_pg_type} USING \"{col_name}\"::{new_pg_type}"
+    )
+}
+
 pub struct PostgresLoader;
 
 impl PostgresLoader {
@@ -1063,5 +1237,126 @@ mod tests {
         .unwrap();
         let err = extract_pk_values(&batch, 0, &["missing".into()]).unwrap_err();
         assert!(format!("{err}").contains("missing"));
+    }
+
+    // ───── phase-2-4d: schema evolution helpers ─────
+
+    #[test]
+    fn dest_col_equality() {
+        let a = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
+        let b = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn dest_col_nullable_differs() {
+        let a = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
+        let b = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: true };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn diff_schema_detects_new_column() {
+        let dest = vec![DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false }];
+        let batch_schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+        ]));
+        let deltas = diff_schema(&batch_schema, &dest).unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(
+            &deltas[0],
+            SchemaDelta::AddColumn { name, pg_type, nullable: true }
+                if name == "name" && pg_type == "TEXT"
+        ));
+    }
+
+    #[test]
+    fn diff_schema_detects_widen_int32_to_int64() {
+        let dest = vec![DestCol { name: "id".into(), pg_type: "integer".into(), nullable: false }];
+        let batch_schema = Schema::new(fields(&[("id", DataType::Int64, false)]));
+        let deltas = diff_schema(&batch_schema, &dest).unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(
+            &deltas[0],
+            SchemaDelta::WidenType { name, new_pg_type }
+                if name == "id" && new_pg_type == "BIGINT"
+        ));
+    }
+
+    #[test]
+    fn diff_schema_detects_dropped_column() {
+        let dest = vec![
+            DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false },
+            DestCol { name: "name".into(), pg_type: "text".into(), nullable: true },
+        ];
+        let batch_schema = Schema::new(fields(&[("id", DataType::Int64, false)]));
+        let deltas = diff_schema(&batch_schema, &dest).unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(&deltas[0], SchemaDelta::DropColumn { name } if name == "name"));
+    }
+
+    #[test]
+    fn diff_schema_no_delta_when_schemas_match() {
+        let dest = vec![
+            DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false },
+            DestCol { name: "name".into(), pg_type: "text".into(), nullable: true },
+        ];
+        let batch_schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+        ]));
+        let deltas = diff_schema(&batch_schema, &dest).unwrap();
+        assert!(deltas.is_empty());
+    }
+
+    #[test]
+    fn diff_schema_narrowing_int64_to_int32_is_destructive() {
+        let dest = vec![DestCol { name: "val".into(), pg_type: "bigint".into(), nullable: true }];
+        let batch_schema = Schema::new(fields(&[("val", DataType::Int32, true)]));
+        let deltas = diff_schema(&batch_schema, &dest).unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(matches!(&deltas[0], SchemaDelta::NarrowType { name } if name == "val"));
+    }
+
+    #[test]
+    fn add_column_ddl_builds_nullable_column() {
+        let sql = add_column_ddl("myschema", "mytable", "score", "DOUBLE PRECISION", true);
+        assert_eq!(
+            sql,
+            r#"ALTER TABLE "myschema"."mytable" ADD COLUMN IF NOT EXISTS "score" DOUBLE PRECISION"#
+        );
+    }
+
+    #[test]
+    fn add_column_ddl_always_omits_not_null() {
+        let sql = add_column_ddl("s", "t", "id2", "BIGINT", false);
+        assert!(!sql.contains("NOT NULL"), "ADD COLUMN must never emit NOT NULL; got: {sql}");
+    }
+
+    #[test]
+    fn alter_column_type_ddl_emits_using_cast() {
+        let sql = alter_column_type_ddl("public", "orders", "amount", "BIGINT");
+        assert_eq!(
+            sql,
+            r#"ALTER TABLE "public"."orders" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT"#
+        );
+    }
+
+    #[test]
+    fn schema_delta_is_destructive_classification() {
+        assert!(!SchemaDelta::AddColumn {
+            name: "x".into(), pg_type: "TEXT".into(), nullable: true,
+        }.is_destructive());
+        assert!(!SchemaDelta::WidenType {
+            name: "x".into(), new_pg_type: "BIGINT".into(),
+        }.is_destructive());
+        assert!(SchemaDelta::DropColumn { name: "x".into() }.is_destructive());
+        assert!(SchemaDelta::NarrowType { name: "x".into() }.is_destructive());
+        assert!(SchemaDelta::IncompatibleType {
+            name: "x".into(),
+            dest_pg_type: "text".into(),
+            batch_pg_type: "boolean".into(),
+        }.is_destructive());
     }
 }
