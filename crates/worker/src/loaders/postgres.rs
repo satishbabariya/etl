@@ -380,8 +380,20 @@ impl DestinationLoader for PostgresLoader {
             });
         }
 
-        // 3. Ensure target table on first non-empty batch.
-        if batch.num_rows() > 0 {
+        // 3. CDC vs plain. CDC mode is data-driven: any batch carrying
+        //    `_cdc.op` is routed through the CDC path; otherwise the
+        //    original append/upsert path applies.
+        let mut rows_loaded = 0usize;
+
+        if batch.num_rows() > 0 && is_cdc_batch(batch.schema().as_ref()) {
+            if spec.pk_columns.is_empty() {
+                bail!(
+                    "CDC batch arrived at postgres loader but pk_columns is empty; \
+                     CDC ops require a primary key for upsert/delete routing"
+                );
+            }
+            rows_loaded = cdc_apply(&mut tx, spec, &batch).await?;
+        } else if batch.num_rows() > 0 {
             let ddl = create_table_ddl(
                 &spec.schema,
                 &spec.table,
@@ -391,26 +403,24 @@ impl DestinationLoader for PostgresLoader {
             tx.execute(sqlx::query(&ddl))
                 .await
                 .context("create target table")?;
-        }
 
-        // 4. Insert rows.
-        let sql = insert_sql(
-            &spec.schema,
-            &spec.table,
-            batch.schema().as_ref(),
-            &spec.pk_columns,
-        );
-        let mut rows_loaded = 0usize;
-        for r in 0..batch.num_rows() {
-            let values = extract_row(&batch, r)?;
-            let mut q = sqlx::query(&sql);
-            for v in &values {
-                q = bind_one(q, v);
+            let sql = insert_sql(
+                &spec.schema,
+                &spec.table,
+                batch.schema().as_ref(),
+                &spec.pk_columns,
+            );
+            for r in 0..batch.num_rows() {
+                let values = extract_row(&batch, r)?;
+                let mut q = sqlx::query(&sql);
+                for v in &values {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("INSERT row {r}"))?;
+                rows_loaded += 1;
             }
-            q.execute(&mut *tx)
-                .await
-                .with_context(|| format!("INSERT row {r}"))?;
-            rows_loaded += 1;
         }
 
         // 5. Record in log.
@@ -464,6 +474,66 @@ fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationS
         DestinationSpec::Postgres(s) => Ok(s),
         other => bail!("PostgresLoader received non-postgres destination: {other:?}"),
     }
+}
+
+async fn cdc_apply(
+    tx: &mut Transaction<'_, Postgres>,
+    spec: &PostgresDestinationSpec,
+    batch: &RecordBatch,
+) -> anyhow::Result<usize> {
+    let data_schema = cdc_data_schema(batch.schema().as_ref());
+    let ddl = create_table_ddl(&spec.schema, &spec.table, &data_schema, &spec.pk_columns)?;
+    tx.execute(sqlx::query(&ddl))
+        .await
+        .context("create target table (cdc)")?;
+
+    let upsert_sql = insert_sql(&spec.schema, &spec.table, &data_schema, &spec.pk_columns);
+    let del_sql = delete_sql(&spec.schema, &spec.table, &spec.pk_columns);
+
+    let mut applied = 0usize;
+    for r in 0..batch.num_rows() {
+        let op = cdc_op_at(batch, r)?;
+        match op {
+            "i" | "u" | "s" => {
+                let values = extract_data_row(batch, r)?;
+                let mut q = sqlx::query(&upsert_sql);
+                for v in &values {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut **tx)
+                    .await
+                    .with_context(|| format!("CDC upsert row {r}"))?;
+                applied += 1;
+            }
+            "d" => {
+                let pks = extract_pk_values(batch, r, &spec.pk_columns)?;
+                let mut q = sqlx::query(&del_sql);
+                for v in &pks {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut **tx)
+                    .await
+                    .with_context(|| format!("CDC delete row {r}"))?;
+                applied += 1;
+            }
+            "c" => {
+                tracing::warn!(
+                    target: "loader.postgres.cdc",
+                    "schema-change CDC event skipped (mid-run schema evolution not implemented)"
+                );
+            }
+            "t" => {
+                tracing::warn!(
+                    target: "loader.postgres.cdc",
+                    "truncate CDC event skipped (destructive ops not auto-applied)"
+                );
+            }
+            other => {
+                bail!("unknown CDC op {other:?} at row {r}");
+            }
+        }
+    }
+    Ok(applied)
 }
 
 #[cfg(test)]
@@ -817,6 +887,43 @@ mod tests {
         assert_eq!(pks.len(), 2);
         assert!(matches!(pks[0], BoundValue::Text(Some(ref s)) if s == "eu"));
         assert!(matches!(pks[1], BoundValue::Int64(7)));
+    }
+
+    #[tokio::test]
+    async fn load_cdc_batch_errors_when_pk_columns_empty() {
+        use common_types::ids::{PipelineId, RunId, TenantId};
+        use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
+        use loader_sdk::LoadId;
+
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(ArrStr::from(vec!["i"])),
+            ],
+        )
+        .unwrap();
+        let spec = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: std::env::var("ETL_INTEGRATION_PG_URL")
+                .unwrap_or_else(|_| "postgres://etl:etl@localhost:5432/etl_catalog".into()),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        let load_id = LoadId {
+            tenant_id: TenantId::new(),
+            pipeline_id: PipelineId::new(),
+            run_id: RunId::new(),
+            batch_seq: 0,
+            stream_name: String::new(),
+        };
+        let err = PostgresLoader.load(&spec, load_id, batch).await.unwrap_err();
+        let msg = format!("{err}").to_lowercase();
+        assert!(msg.contains("cdc") && msg.contains("pk"), "got: {msg}");
     }
 
     #[test]
