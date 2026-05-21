@@ -428,33 +428,7 @@ impl DestinationLoader for PostgresLoader {
             }
             rows_loaded = cdc_apply(&mut tx, spec, &spec.table, &batch).await?;
         } else if batch.num_rows() > 0 {
-            let ddl = create_table_ddl(
-                &spec.schema,
-                &spec.table,
-                batch.schema().as_ref(),
-                &spec.pk_columns,
-            )?;
-            tx.execute(sqlx::query(&ddl))
-                .await
-                .context("create target table")?;
-
-            let sql = insert_sql(
-                &spec.schema,
-                &spec.table,
-                batch.schema().as_ref(),
-                &spec.pk_columns,
-            );
-            for r in 0..batch.num_rows() {
-                let values = extract_row(&batch, r)?;
-                let mut q = sqlx::query(&sql);
-                for v in &values {
-                    q = bind_one(q, v);
-                }
-                q.execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("INSERT row {r}"))?;
-                rows_loaded += 1;
-            }
+            rows_loaded = plain_apply(&mut tx, spec, &spec.table, &batch).await?;
         }
 
         // 5. Record in log.
@@ -508,6 +482,43 @@ fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationS
         DestinationSpec::Postgres(s) => Ok(s),
         other => bail!("PostgresLoader received non-postgres destination: {other:?}"),
     }
+}
+
+async fn plain_apply(
+    tx: &mut Transaction<'_, Postgres>,
+    spec: &PostgresDestinationSpec,
+    target_table: &str,
+    batch: &RecordBatch,
+) -> anyhow::Result<usize> {
+    let ddl = create_table_ddl(
+        &spec.schema,
+        target_table,
+        batch.schema().as_ref(),
+        &spec.pk_columns,
+    )?;
+    tx.execute(sqlx::query(&ddl))
+        .await
+        .context("create target table")?;
+
+    let sql = insert_sql(
+        &spec.schema,
+        target_table,
+        batch.schema().as_ref(),
+        &spec.pk_columns,
+    );
+    let mut rows_loaded = 0usize;
+    for r in 0..batch.num_rows() {
+        let values = extract_row(batch, r)?;
+        let mut q = sqlx::query(&sql);
+        for v in &values {
+            q = bind_one(q, v);
+        }
+        q.execute(&mut **tx)
+            .await
+            .with_context(|| format!("INSERT row {r}"))?;
+        rows_loaded += 1;
+    }
+    Ok(rows_loaded)
 }
 
 async fn cdc_apply(
