@@ -17,14 +17,24 @@
 //!
 //! Retrying the same `LoadId` re-runs steps 1–2 and stops at step 2.
 //!
+//! ## CDC mode
+//! Auto-detected when the incoming batch carries `_cdc.op`. Requires
+//! `pk_columns`. Routes per row:
+//!   - `i` / `u` / `s` ⇒ upsert into target (same UPSERT SQL as plain mode)
+//!   - `d` ⇒ DELETE keyed on the configured PKs
+//!   - `c` ⇒ skipped (schema evolution is a follow-up)
+//!   - `t` ⇒ skipped (destructive ops are not auto-applied)
+//! `_cdc.*` columns are stripped from the destination table schema.
+//!
 //! ## Deferred
-//! - CDC `_cdc.op`-aware DELETE / UPDATE (RFC-9 Pattern 3).
 //! - Mid-run schema evolution (only first-load CREATE TABLE).
 //! - Soft delete / tombstone columns.
 //! - Dead-letter routing (rejected rows are logged + dropped by the activity).
 //! - `COPY FROM STDIN` fast path (perf optimization).
 //! - RFC-11 secret-ref connection URLs (MVP takes an inline `postgres://`).
 //! - Multi-table per spec — MVP is one target table per pipeline.
+//! - Audit-log destination mode (keep `_cdc.*` columns at the destination).
+//! - PK-change updates that omit a delete of the old key.
 
 use anyhow::{Context, bail};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
