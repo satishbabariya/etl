@@ -82,12 +82,27 @@ pub struct MysqlCdcSourceSpec {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DestinationSpec {
     LocalParquet(LocalParquetSpec),
+    Postgres(PostgresDestinationSpec),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalParquetSpec {
     /// Directory where Parquet files will be written. Created on demand.
     pub base_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostgresDestinationSpec {
+    /// Plain `postgres://...` URL. MVP — RFC-11 secret refs are a follow-up.
+    pub connection_url: String,
+    /// Postgres schema (namespace) that owns the target table.
+    pub schema: String,
+    /// Target table name. Created on first load if absent.
+    pub table: String,
+    /// Upsert key columns. Empty ⇒ insert-only (append). Non-empty ⇒
+    /// `INSERT ... ON CONFLICT (pk) DO UPDATE`.
+    #[serde(default)]
+    pub pk_columns: Vec<String>,
 }
 
 #[cfg(test)]
@@ -253,6 +268,48 @@ mod tests {
             assert_eq!(m.pk_column.as_deref(), Some("id"));
         } else {
             panic!();
+        }
+    }
+
+    #[test]
+    fn postgres_destination_roundtrips() {
+        let s = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: "postgres://etl:etl@localhost:5432/etl_dest".into(),
+            schema: "public".into(),
+            table: "customers".into(),
+            pk_columns: vec!["id".into()],
+        });
+        let j = serde_json::to_string(&s).unwrap();
+        let back: DestinationSpec = serde_json::from_str(&j).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), j);
+    }
+
+    #[test]
+    fn postgres_destination_serialized_form_is_tagged() {
+        let s = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        let j: serde_json::Value = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["type"], "postgres");
+        assert!(j["pk_columns"].is_array());
+    }
+
+    #[test]
+    fn postgres_destination_pk_columns_default_empty() {
+        let j = r#"{
+            "type": "postgres",
+            "connection_url": "postgres://x",
+            "schema": "public",
+            "table": "t"
+        }"#;
+        let s: DestinationSpec = serde_json::from_str(j).unwrap();
+        if let DestinationSpec::Postgres(p) = s {
+            assert!(p.pk_columns.is_empty());
+        } else {
+            panic!("expected Postgres variant");
         }
     }
 

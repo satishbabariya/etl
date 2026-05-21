@@ -3096,6 +3096,7 @@ dependencies = [
  "chrono",
  "common-types",
  "dirs 5.0.1",
+ "loader-sdk",
  "mysql_async",
  "parquet",
  "reqwest",
@@ -3108,6 +3109,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+ "worker",
 ]
 
 [[package]]

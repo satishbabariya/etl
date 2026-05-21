@@ -26,3 +26,5 @@ wiremock = "0.6"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 mysql_async = { workspace = true }
+worker = { workspace = true }
+loader-sdk = { workspace = true }
