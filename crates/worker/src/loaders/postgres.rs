@@ -17,14 +17,24 @@
 //!
 //! Retrying the same `LoadId` re-runs steps 1–2 and stops at step 2.
 //!
+//! ## CDC mode
+//! Auto-detected when the incoming batch carries `_cdc.op`. Requires
+//! `pk_columns`. Routes per row:
+//!   - `i` / `u` / `s` ⇒ upsert into target (same UPSERT SQL as plain mode)
+//!   - `d` ⇒ DELETE keyed on the configured PKs
+//!   - `c` ⇒ skipped (schema evolution is a follow-up)
+//!   - `t` ⇒ skipped (destructive ops are not auto-applied)
+//! `_cdc.*` columns are stripped from the destination table schema.
+//!
 //! ## Deferred
-//! - CDC `_cdc.op`-aware DELETE / UPDATE (RFC-9 Pattern 3).
 //! - Mid-run schema evolution (only first-load CREATE TABLE).
 //! - Soft delete / tombstone columns.
 //! - Dead-letter routing (rejected rows are logged + dropped by the activity).
 //! - `COPY FROM STDIN` fast path (perf optimization).
 //! - RFC-11 secret-ref connection URLs (MVP takes an inline `postgres://`).
 //! - Multi-table per spec — MVP is one target table per pipeline.
+//! - Audit-log destination mode (keep `_cdc.*` columns at the destination).
+//! - PK-change updates that omit a delete of the old key.
 
 use anyhow::{Context, bail};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -34,6 +44,86 @@ use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
 use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Postgres, Transaction};
+
+pub(crate) fn is_cdc_batch(schema: &Schema) -> bool {
+    schema.field_with_name(common_types::cdc::COL_OP).is_ok()
+}
+
+fn is_cdc_metadata_col(name: &str) -> bool {
+    name == common_types::cdc::COL_OP
+        || name == common_types::cdc::COL_LSN
+        || name == common_types::cdc::COL_COMMIT_TS
+        || name == common_types::cdc::COL_TXID
+}
+
+pub(crate) fn cdc_data_schema(schema: &Schema) -> Schema {
+    let kept: Vec<arrow::datatypes::Field> = schema
+        .fields()
+        .iter()
+        .filter(|f| !is_cdc_metadata_col(f.name()))
+        .map(|f| f.as_ref().clone())
+        .collect();
+    Schema::new(kept)
+}
+
+pub(crate) fn cdc_data_field_indices(schema: &Schema) -> Vec<usize> {
+    schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| (!is_cdc_metadata_col(f.name())).then_some(i))
+        .collect()
+}
+
+pub(crate) fn cdc_op_at<'a>(batch: &'a RecordBatch, row: usize) -> anyhow::Result<&'a str> {
+    let idx = batch
+        .schema()
+        .index_of(common_types::cdc::COL_OP)
+        .map_err(|_| anyhow::anyhow!("batch is missing _cdc.op column"))?;
+    let col = batch.column(idx);
+    let arr = col
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| anyhow::anyhow!("_cdc.op column is not Utf8"))?;
+    Ok(arr.value(row))
+}
+
+pub(crate) fn delete_sql(schema: &str, table: &str, pk_columns: &[String]) -> String {
+    let where_clause = pk_columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("\"{c}\" = ${}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    format!("DELETE FROM \"{schema}\".\"{table}\" WHERE {where_clause}")
+}
+
+pub(crate) fn extract_data_row(
+    batch: &RecordBatch,
+    row: usize,
+) -> anyhow::Result<Vec<BoundValue>> {
+    let schema = batch.schema();
+    let keep = cdc_data_field_indices(schema.as_ref());
+    let full = extract_row(batch, row)?;
+    Ok(keep.into_iter().map(|i| full[i].clone()).collect())
+}
+
+pub(crate) fn extract_pk_values(
+    batch: &RecordBatch,
+    row: usize,
+    pk_columns: &[String],
+) -> anyhow::Result<Vec<BoundValue>> {
+    let schema = batch.schema();
+    let full = extract_row(batch, row)?;
+    let mut out = Vec::with_capacity(pk_columns.len());
+    for pk in pk_columns {
+        let idx = schema
+            .index_of(pk)
+            .map_err(|_| anyhow::anyhow!("pk column {pk:?} missing from batch schema"))?;
+        out.push(full[idx].clone());
+    }
+    Ok(out)
+}
 
 pub(crate) fn pg_column_type(t: &DataType) -> anyhow::Result<&'static str> {
     Ok(match t {
@@ -300,8 +390,20 @@ impl DestinationLoader for PostgresLoader {
             });
         }
 
-        // 3. Ensure target table on first non-empty batch.
-        if batch.num_rows() > 0 {
+        // 3. CDC vs plain. CDC mode is data-driven: any batch carrying
+        //    `_cdc.op` is routed through the CDC path; otherwise the
+        //    original append/upsert path applies.
+        let mut rows_loaded = 0usize;
+
+        if batch.num_rows() > 0 && is_cdc_batch(batch.schema().as_ref()) {
+            if spec.pk_columns.is_empty() {
+                bail!(
+                    "CDC batch arrived at postgres loader but pk_columns is empty; \
+                     CDC ops require a primary key for upsert/delete routing"
+                );
+            }
+            rows_loaded = cdc_apply(&mut tx, spec, &batch).await?;
+        } else if batch.num_rows() > 0 {
             let ddl = create_table_ddl(
                 &spec.schema,
                 &spec.table,
@@ -311,26 +413,24 @@ impl DestinationLoader for PostgresLoader {
             tx.execute(sqlx::query(&ddl))
                 .await
                 .context("create target table")?;
-        }
 
-        // 4. Insert rows.
-        let sql = insert_sql(
-            &spec.schema,
-            &spec.table,
-            batch.schema().as_ref(),
-            &spec.pk_columns,
-        );
-        let mut rows_loaded = 0usize;
-        for r in 0..batch.num_rows() {
-            let values = extract_row(&batch, r)?;
-            let mut q = sqlx::query(&sql);
-            for v in &values {
-                q = bind_one(q, v);
+            let sql = insert_sql(
+                &spec.schema,
+                &spec.table,
+                batch.schema().as_ref(),
+                &spec.pk_columns,
+            );
+            for r in 0..batch.num_rows() {
+                let values = extract_row(&batch, r)?;
+                let mut q = sqlx::query(&sql);
+                for v in &values {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("INSERT row {r}"))?;
+                rows_loaded += 1;
             }
-            q.execute(&mut *tx)
-                .await
-                .with_context(|| format!("INSERT row {r}"))?;
-            rows_loaded += 1;
         }
 
         // 5. Record in log.
@@ -384,6 +484,66 @@ fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationS
         DestinationSpec::Postgres(s) => Ok(s),
         other => bail!("PostgresLoader received non-postgres destination: {other:?}"),
     }
+}
+
+async fn cdc_apply(
+    tx: &mut Transaction<'_, Postgres>,
+    spec: &PostgresDestinationSpec,
+    batch: &RecordBatch,
+) -> anyhow::Result<usize> {
+    let data_schema = cdc_data_schema(batch.schema().as_ref());
+    let ddl = create_table_ddl(&spec.schema, &spec.table, &data_schema, &spec.pk_columns)?;
+    tx.execute(sqlx::query(&ddl))
+        .await
+        .context("create target table (cdc)")?;
+
+    let upsert_sql = insert_sql(&spec.schema, &spec.table, &data_schema, &spec.pk_columns);
+    let del_sql = delete_sql(&spec.schema, &spec.table, &spec.pk_columns);
+
+    let mut applied = 0usize;
+    for r in 0..batch.num_rows() {
+        let op = cdc_op_at(batch, r)?;
+        match op {
+            "i" | "u" | "s" => {
+                let values = extract_data_row(batch, r)?;
+                let mut q = sqlx::query(&upsert_sql);
+                for v in &values {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut **tx)
+                    .await
+                    .with_context(|| format!("CDC upsert row {r}"))?;
+                applied += 1;
+            }
+            "d" => {
+                let pks = extract_pk_values(batch, r, &spec.pk_columns)?;
+                let mut q = sqlx::query(&del_sql);
+                for v in &pks {
+                    q = bind_one(q, v);
+                }
+                q.execute(&mut **tx)
+                    .await
+                    .with_context(|| format!("CDC delete row {r}"))?;
+                applied += 1;
+            }
+            "c" => {
+                tracing::warn!(
+                    target: "loader.postgres.cdc",
+                    "schema-change CDC event skipped (mid-run schema evolution not implemented)"
+                );
+            }
+            "t" => {
+                tracing::warn!(
+                    target: "loader.postgres.cdc",
+                    "truncate CDC event skipped (destructive ops not auto-applied)"
+                );
+            }
+            other => {
+                bail!("unknown CDC op {other:?} at row {r}");
+            }
+        }
+    }
+    Ok(applied)
 }
 
 #[cfg(test)]
@@ -583,5 +743,208 @@ mod tests {
         } else {
             panic!("expected TimestampTz, got {:?}", row[0]);
         }
+    }
+
+    // ───── phase-2-4b: CDC op-aware writes ─────
+
+    use arrow::array::StringArray as ArrStr;
+
+    #[test]
+    fn is_cdc_batch_true_when_op_column_present() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+        ])));
+        assert!(is_cdc_batch(&schema));
+    }
+
+    #[test]
+    fn is_cdc_batch_false_for_plain_data_schema() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+        ])));
+        assert!(!is_cdc_batch(&schema));
+    }
+
+    #[test]
+    fn cdc_data_schema_drops_metadata_columns() {
+        let schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+            (common_types::cdc::COL_LSN, DataType::Utf8, false),
+            (
+                common_types::cdc::COL_COMMIT_TS,
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+        let stripped = cdc_data_schema(&schema);
+        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["id", "name"]);
+    }
+
+    #[test]
+    fn cdc_data_schema_is_identity_on_non_cdc_schema() {
+        let schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+        ]));
+        let stripped = cdc_data_schema(&schema);
+        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["id", "name"]);
+    }
+
+    #[test]
+    fn cdc_data_field_indices_lists_non_cdc_columns_in_order() {
+        let schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+            ("name", DataType::Utf8, true),
+            (common_types::cdc::COL_LSN, DataType::Utf8, false),
+        ]));
+        assert_eq!(cdc_data_field_indices(&schema), vec![0usize, 2]);
+    }
+
+    #[test]
+    fn cdc_op_at_returns_op_string_per_row() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(ArrStr::from(vec!["i", "u", "d"])),
+            ],
+        )
+        .unwrap();
+        assert_eq!(cdc_op_at(&batch, 0).unwrap(), "i");
+        assert_eq!(cdc_op_at(&batch, 1).unwrap(), "u");
+        assert_eq!(cdc_op_at(&batch, 2).unwrap(), "d");
+    }
+
+    #[test]
+    fn cdc_op_at_errors_when_column_missing() {
+        let schema = Arc::new(Schema::new(fields(&[("id", DataType::Int64, false)])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![1]))],
+        )
+        .unwrap();
+        let err = cdc_op_at(&batch, 0).unwrap_err();
+        assert!(format!("{err}").contains("_cdc.op"));
+    }
+
+    #[test]
+    fn delete_sql_single_pk() {
+        let sql = delete_sql("public", "customers", &["id".to_string()]);
+        assert_eq!(sql, r#"DELETE FROM "public"."customers" WHERE "id" = $1"#);
+    }
+
+    #[test]
+    fn delete_sql_composite_pk() {
+        let sql = delete_sql("public", "t", &["tenant".to_string(), "id".to_string()]);
+        assert_eq!(
+            sql,
+            r#"DELETE FROM "public"."t" WHERE "tenant" = $1 AND "id" = $2"#
+        );
+    }
+
+    #[test]
+    fn extract_data_row_skips_cdc_columns() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+            ("name", DataType::Utf8, true),
+            (common_types::cdc::COL_LSN, DataType::Utf8, false),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![42])),
+                Arc::new(ArrStr::from(vec!["i"])),
+                Arc::new(ArrStr::from(vec![Some("hello")])),
+                Arc::new(ArrStr::from(vec!["lsn-1"])),
+            ],
+        )
+        .unwrap();
+        let row = extract_data_row(&batch, 0).unwrap();
+        assert_eq!(row.len(), 2);
+        assert!(matches!(row[0], BoundValue::Int64(42)));
+        assert!(matches!(row[1], BoundValue::Text(Some(ref s)) if s == "hello"));
+    }
+
+    #[test]
+    fn extract_pk_values_picks_pk_columns_in_order() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("region", DataType::Utf8, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![7])),
+                Arc::new(ArrStr::from(vec!["eu"])),
+                Arc::new(ArrStr::from(vec!["d"])),
+            ],
+        )
+        .unwrap();
+        let pks = extract_pk_values(&batch, 0, &["region".into(), "id".into()]).unwrap();
+        assert_eq!(pks.len(), 2);
+        assert!(matches!(pks[0], BoundValue::Text(Some(ref s)) if s == "eu"));
+        assert!(matches!(pks[1], BoundValue::Int64(7)));
+    }
+
+    #[tokio::test]
+    async fn load_cdc_batch_errors_when_pk_columns_empty() {
+        use common_types::ids::{PipelineId, RunId, TenantId};
+        use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
+        use loader_sdk::LoadId;
+
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (common_types::cdc::COL_OP, DataType::Utf8, false),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1])),
+                Arc::new(ArrStr::from(vec!["i"])),
+            ],
+        )
+        .unwrap();
+        let spec = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: std::env::var("ETL_INTEGRATION_PG_URL")
+                .unwrap_or_else(|_| "postgres://etl:etl@localhost:5432/etl_catalog".into()),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        let load_id = LoadId {
+            tenant_id: TenantId::new(),
+            pipeline_id: PipelineId::new(),
+            run_id: RunId::new(),
+            batch_seq: 0,
+            stream_name: String::new(),
+        };
+        let err = PostgresLoader.load(&spec, load_id, batch).await.unwrap_err();
+        let msg = format!("{err}").to_lowercase();
+        assert!(msg.contains("cdc") && msg.contains("pk"), "got: {msg}");
+    }
+
+    #[test]
+    fn extract_pk_values_errors_on_missing_pk_column() {
+        let schema = Arc::new(Schema::new(fields(&[("id", DataType::Int64, false)])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![1]))],
+        )
+        .unwrap();
+        let err = extract_pk_values(&batch, 0, &["missing".into()]).unwrap_err();
+        assert!(format!("{err}").contains("missing"));
     }
 }
