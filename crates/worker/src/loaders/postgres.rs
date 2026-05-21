@@ -45,6 +45,30 @@ use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Postgres, Transaction};
 
+pub(crate) fn resolve_target_table<'a>(
+    spec: &'a PostgresDestinationSpec,
+    stream_name: &'a str,
+) -> anyhow::Result<&'a str> {
+    let candidate = if stream_name.is_empty() {
+        spec.table.as_str()
+    } else {
+        stream_name
+    };
+    if candidate.is_empty() {
+        bail!(
+            "postgres loader: target table is empty (both stream_name and spec.table are empty)"
+        );
+    }
+    for ch in candidate.chars() {
+        if ch == '"' || ch == '\0' || ch.is_control() {
+            bail!(
+                "postgres loader: illegal character {ch:?} in target table name {candidate:?}"
+            );
+        }
+    }
+    Ok(candidate)
+}
+
 pub(crate) fn is_cdc_batch(schema: &Schema) -> bool {
     schema.field_with_name(common_types::cdc::COL_OP).is_ok()
 }
@@ -897,6 +921,73 @@ mod tests {
         assert_eq!(pks.len(), 2);
         assert!(matches!(pks[0], BoundValue::Text(Some(ref s)) if s == "eu"));
         assert!(matches!(pks[1], BoundValue::Int64(7)));
+    }
+
+    #[test]
+    fn resolve_target_table_uses_stream_name_when_present() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "fallback".into(),
+            pk_columns: vec![],
+        };
+        assert_eq!(
+            resolve_target_table(&spec, "public.users").unwrap(),
+            "public.users"
+        );
+    }
+
+    #[test]
+    fn resolve_target_table_falls_back_to_spec_table_when_stream_empty() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "fallback".into(),
+            pk_columns: vec![],
+        };
+        assert_eq!(resolve_target_table(&spec, "").unwrap(), "fallback");
+    }
+
+    #[test]
+    fn resolve_target_table_rejects_double_quote() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        };
+        let err = resolve_target_table(&spec, "evil\"name").unwrap_err();
+        assert!(format!("{err}").to_lowercase().contains("illegal"));
+    }
+
+    #[test]
+    fn resolve_target_table_rejects_control_chars() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        };
+        for bad in &["with\0nul", "with\nnewline", "with\rcr"] {
+            let err = resolve_target_table(&spec, bad).unwrap_err();
+            assert!(
+                format!("{err}").to_lowercase().contains("illegal"),
+                "expected illegal-char rejection for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_target_table_errors_when_both_empty() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "".into(),
+            pk_columns: vec![],
+        };
+        let err = resolve_target_table(&spec, "").unwrap_err();
+        let msg = format!("{err}").to_lowercase();
+        assert!(msg.contains("table") && msg.contains("empty"), "got: {msg}");
     }
 
     #[tokio::test]
