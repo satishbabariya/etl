@@ -29,6 +29,99 @@ pub(crate) fn pg_column_type(t: &DataType) -> anyhow::Result<&'static str> {
     })
 }
 
+use arrow::array::{
+    Array, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
+    Int32Array, Int64Array, StringArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+
+#[derive(Debug, Clone)]
+pub(crate) enum BoundValue {
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    Float32(Option<f32>),
+    Float64(Option<f64>),
+    Bool(bool),
+    Text(Option<String>),
+    Bytea(Option<Vec<u8>>),
+    Date(NaiveDate),
+    Time(NaiveTime),
+    Timestamp(chrono::NaiveDateTime),
+    TimestampTz(DateTime<Utc>),
+}
+
+pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec<BoundValue>> {
+    let mut out = Vec::with_capacity(batch.num_columns());
+    for (idx, col) in batch.columns().iter().enumerate() {
+        let field = batch.schema().field(idx).clone();
+        let is_null = col.is_null(row);
+        let v = match field.data_type() {
+            DataType::Int64 => BoundValue::Int64(
+                col.as_any().downcast_ref::<Int64Array>().unwrap().value(row),
+            ),
+            DataType::Int32 => BoundValue::Int32(
+                col.as_any().downcast_ref::<Int32Array>().unwrap().value(row),
+            ),
+            DataType::Int16 => BoundValue::Int16(
+                col.as_any().downcast_ref::<Int16Array>().unwrap().value(row),
+            ),
+            DataType::Boolean => BoundValue::Bool(
+                col.as_any().downcast_ref::<BooleanArray>().unwrap().value(row),
+            ),
+            DataType::Float64 => {
+                let arr = col.as_any().downcast_ref::<Float64Array>().unwrap();
+                BoundValue::Float64(if is_null { None } else { Some(arr.value(row)) })
+            }
+            DataType::Float32 => {
+                let arr = col.as_any().downcast_ref::<Float32Array>().unwrap();
+                BoundValue::Float32(if is_null { None } else { Some(arr.value(row)) })
+            }
+            DataType::Utf8 => {
+                let arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+                BoundValue::Text(if is_null { None } else { Some(arr.value(row).to_string()) })
+            }
+            DataType::Binary => {
+                let arr = col.as_any().downcast_ref::<BinaryArray>().unwrap();
+                BoundValue::Bytea(if is_null { None } else { Some(arr.value(row).to_vec()) })
+            }
+            DataType::Date32 => {
+                let arr = col.as_any().downcast_ref::<Date32Array>().unwrap();
+                let days = arr.value(row);
+                let date = NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                    .context("date32 out of range")?;
+                BoundValue::Date(date)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                let arr = col.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+                let micros = arr.value(row);
+                let secs = (micros / 1_000_000) as u32;
+                let nanos = ((micros % 1_000_000) * 1_000) as u32;
+                let t = NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
+                    .context("time64 out of range")?;
+                BoundValue::Time(t)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+                let arr = col.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                let micros = arr.value(row);
+                let dt = DateTime::<Utc>::from_timestamp_micros(micros)
+                    .context("timestamp_us out of range")?;
+                BoundValue::TimestampTz(dt)
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                let arr = col.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                let micros = arr.value(row);
+                let dt = DateTime::<Utc>::from_timestamp_micros(micros)
+                    .context("timestamp_us out of range")?;
+                BoundValue::Timestamp(dt.naive_utc())
+            }
+            other => bail!("extract_row: unsupported Arrow type {other:?}"),
+        };
+        out.push(v);
+    }
+    Ok(out)
+}
+
 pub(crate) fn insert_sql(
     schema: &str,
     table: &str,
@@ -258,5 +351,62 @@ mod tests {
         let schema = Arc::new(Schema::new(fields(&[("id", DataType::Int64, false)])));
         let sql = insert_sql("public", "t", &schema, &["id".into()]);
         assert!(sql.contains("ON CONFLICT (\"id\") DO NOTHING"));
+    }
+
+    use arrow::array::{
+        BooleanArray, Float64Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    };
+
+    #[test]
+    fn extract_row_handles_int64_text_bool_float() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+            ("active", DataType::Boolean, false),
+            ("score", DataType::Float64, true),
+        ])));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![10, 20])),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(Float64Array::from(vec![Some(1.5), None])),
+            ],
+        )
+        .unwrap();
+
+        let row0 = extract_row(&batch, 0).unwrap();
+        assert!(matches!(row0[0], BoundValue::Int64(10)));
+        assert!(matches!(row0[1], BoundValue::Text(Some(ref s)) if s == "a"));
+        assert!(matches!(row0[2], BoundValue::Bool(true)));
+        assert!(matches!(row0[3], BoundValue::Float64(Some(v)) if (v - 1.5).abs() < 1e-9));
+
+        let row1 = extract_row(&batch, 1).unwrap();
+        assert!(matches!(row1[1], BoundValue::Text(None)));
+        assert!(matches!(row1[3], BoundValue::Float64(None)));
+    }
+
+    #[test]
+    fn extract_row_handles_timestamptz_utc() {
+        let schema = Arc::new(Schema::new(fields(&[(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            false,
+        )])));
+        let micros: i64 = 1_779_667_200_000_000;
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![micros]).with_timezone("UTC"),
+            )],
+        )
+        .unwrap();
+        let row = extract_row(&batch, 0).unwrap();
+        if let BoundValue::TimestampTz(dt) = &row[0] {
+            assert_eq!(dt.timestamp_micros(), micros);
+        } else {
+            panic!("expected TimestampTz, got {:?}", row[0]);
+        }
     }
 }
