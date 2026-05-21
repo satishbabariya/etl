@@ -251,7 +251,7 @@ impl SyncActivities {
         )
         .increment(res.rows_loaded as u64);
 
-        // Dead-letter routing.
+        // Dead-letter routing (LocalParquet only — see plan phase-2-4a).
         if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
             let rej = decode_batch(rej_b64).map_err(to_retryable)?;
             if rej.num_rows() > 0 {
@@ -266,6 +266,10 @@ impl SyncActivities {
                             .map_err(|e| to_retryable(anyhow::anyhow!("create dir: {e}")))?;
                         p.push(format!("batch-{:05}.parquet", input.batch_seq));
                         p
+                    }
+                    common_types::pipeline_spec::DestinationSpec::Postgres(_) => {
+                        // Refactored properly in Task 3 dispatch.
+                        unreachable!("Postgres destination is not yet wired into load_batch");
                     }
                 };
                 let file = std::fs::File::create(&dest_path)

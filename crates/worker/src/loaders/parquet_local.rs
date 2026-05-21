@@ -19,6 +19,7 @@ impl DestinationLoader for LocalParquetLoader {
                     .with_context(|| format!("creating {}", p.base_path))?;
                 Ok(())
             }
+            other => anyhow::bail!("LocalParquetLoader expects LocalParquet, got {other:?}"),
         }
     }
 
@@ -30,6 +31,7 @@ impl DestinationLoader for LocalParquetLoader {
     ) -> anyhow::Result<LoadResult> {
         let spec = match dest {
             DestinationSpec::LocalParquet(s) => s,
+            other => anyhow::bail!("LocalParquetLoader expects LocalParquet, got {other:?}"),
         };
         validate_stream_name(&load_id.stream_name)?;
         let path = target_path(spec, &load_id);

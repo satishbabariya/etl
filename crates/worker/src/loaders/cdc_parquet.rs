@@ -20,6 +20,7 @@ impl CdcParquetLoader {
     ) -> Result<PathBuf> {
         let base = match dest {
             DestinationSpec::LocalParquet(s) => s.base_path.clone(),
+            other => anyhow::bail!("CdcParquetLoader expects LocalParquet, got {other:?}"),
         };
         let mut path = PathBuf::from(&base);
         path.push(tenant_id.to_string());
