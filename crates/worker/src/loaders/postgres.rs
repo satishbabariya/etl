@@ -26,15 +26,26 @@
 //!   - `t` ⇒ skipped (destructive ops are not auto-applied)
 //! `_cdc.*` columns are stripped from the destination table schema.
 //!
+//! ## Multi-table routing
+//! `LoadId.stream_name` selects the target table per batch:
+//!   - `stream_name = ""` ⇒ `spec.table` (single-table pipeline).
+//!   - `stream_name = "<n>"` ⇒ table `<n>` inside `spec.schema`. Connectors
+//!     today emit `"<src_schema>.<src_table>"`, which lands as a literal
+//!     `<src_schema>.<src_table>` table name inside `spec.schema`.
+//! Validation forbids `"`, NUL, and control chars in the resolved name
+//! to prevent quoted-identifier escapes.
+//!
 //! ## Deferred
 //! - Mid-run schema evolution (only first-load CREATE TABLE).
+//! - Per-stream `pk_columns` override — every stream uses `spec.pk_columns`.
 //! - Soft delete / tombstone columns.
 //! - Dead-letter routing (rejected rows are logged + dropped by the activity).
 //! - `COPY FROM STDIN` fast path (perf optimization).
 //! - RFC-11 secret-ref connection URLs (MVP takes an inline `postgres://`).
-//! - Multi-table per spec — MVP is one target table per pipeline.
 //! - Audit-log destination mode (keep `_cdc.*` columns at the destination).
 //! - PK-change updates that omit a delete of the old key.
+//! - Destination-schema split: `stream_name = "<src_schema>.<table>"` ⇒
+//!   destination `<src_schema>."<table>"` instead of one literal-dot table.
 
 use anyhow::{Context, bail};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
