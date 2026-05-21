@@ -22,7 +22,10 @@
 //! `pk_columns`. Routes per row:
 //!   - `i` / `u` / `s` ⇒ upsert into target (same UPSERT SQL as plain mode)
 //!   - `d` ⇒ DELETE keyed on the configured PKs
-//!   - `c` ⇒ skipped (schema evolution is a follow-up)
+//!   - `c` ⇒ schema evolution applied before the row loop: additive changes
+//!            (ADD COLUMN, widened types) are applied via ALTER TABLE; destructive
+//!            changes (DROP, narrow, incompatible) return a non-retriable error per
+//!            RFC-9 §"Mid-run schema change" + RFC-10 propagate_additive.
 //!   - `t` ⇒ skipped (destructive ops are not auto-applied)
 //! `_cdc.*` columns are stripped from the destination table schema.
 //!
@@ -36,7 +39,11 @@
 //! to prevent quoted-identifier escapes.
 //!
 //! ## Deferred
-//! - Mid-run schema evolution (only first-load CREATE TABLE).
+//! - Catalog wiring for schema evolution (loader applies DDL inline; no
+//!   applied_to_destination_at updates, no catalog policy evaluation).
+//! - Column rename via ALTER TABLE ... RENAME COLUMN (treated as drop+add → pauses).
+//! - PK-type-change guard (WidenType on a PK column is applied; should pause).
+//! - Backfilling new columns with a non-null default value.
 //! - Per-stream `pk_columns` override — every stream uses `spec.pk_columns`.
 //! - Soft delete / tombstone columns.
 //! - Dead-letter routing (rejected rows are logged + dropped by the activity).
