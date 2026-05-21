@@ -122,6 +122,21 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
     Ok(out)
 }
 
+pub(crate) fn ensure_log_table_ddl(schema: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS \"{schema}\".\"_etl_loaded_batches\" (\
+            tenant_id UUID NOT NULL, \
+            pipeline_id UUID NOT NULL, \
+            run_id UUID NOT NULL, \
+            stream_name TEXT NOT NULL, \
+            batch_seq BIGINT NOT NULL, \
+            rows_loaded BIGINT NOT NULL, \
+            loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
+            PRIMARY KEY (tenant_id, pipeline_id, run_id, stream_name, batch_seq)\
+        )"
+    )
+}
+
 pub(crate) fn insert_sql(
     schema: &str,
     table: &str,
@@ -385,6 +400,20 @@ mod tests {
         let row1 = extract_row(&batch, 1).unwrap();
         assert!(matches!(row1[1], BoundValue::Text(None)));
         assert!(matches!(row1[3], BoundValue::Float64(None)));
+    }
+
+    #[test]
+    fn ensure_log_table_ddl_is_idempotent_and_keyed_by_load_id() {
+        let ddl = ensure_log_table_ddl("public");
+        assert!(ddl.contains("CREATE TABLE IF NOT EXISTS \"public\".\"_etl_loaded_batches\""));
+        assert!(ddl.contains("tenant_id UUID"));
+        assert!(ddl.contains("pipeline_id UUID"));
+        assert!(ddl.contains("run_id UUID"));
+        assert!(ddl.contains("batch_seq BIGINT"));
+        assert!(ddl.contains("stream_name TEXT"));
+        assert!(ddl.contains(
+            "PRIMARY KEY (tenant_id, pipeline_id, run_id, stream_name, batch_seq)"
+        ));
     }
 
     #[test]
