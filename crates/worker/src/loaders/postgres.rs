@@ -709,6 +709,72 @@ async fn plain_apply(
     Ok(rows_loaded)
 }
 
+/// Query destination columns, diff against `batch_data_schema`, apply additive
+/// changes, and return `Err` on any destructive change.
+async fn apply_schema_evolution(
+    tx: &mut Transaction<'_, Postgres>,
+    schema: &str,
+    target_table: &str,
+    batch_data_schema: &Schema,
+) -> anyhow::Result<()> {
+    let dest_cols = query_destination_columns(tx, schema, target_table).await?;
+    if dest_cols.is_empty() {
+        return Ok(()); // table doesn't exist yet; CREATE TABLE will run after this.
+    }
+
+    let deltas = diff_schema(batch_data_schema, &dest_cols)?;
+
+    let destructive: Vec<&SchemaDelta> = deltas.iter().filter(|d| d.is_destructive()).collect();
+    if !destructive.is_empty() {
+        let descriptions: Vec<String> = destructive
+            .iter()
+            .map(|d| match d {
+                SchemaDelta::DropColumn { name } => {
+                    format!("column dropped from source: {name:?}")
+                }
+                SchemaDelta::NarrowType { name } => {
+                    format!("type narrowed (data loss risk): {name:?}")
+                }
+                SchemaDelta::IncompatibleType { name, dest_pg_type, batch_pg_type } => {
+                    format!(
+                        "incompatible type for {name:?}: \
+                         destination is {dest_pg_type}, batch expects {batch_pg_type}"
+                    )
+                }
+                _ => unreachable!(),
+            })
+            .collect();
+        bail!(
+            "destructive schema change detected for table {target_table:?} — \
+             operator action required before pipeline can resume:\n  {}",
+            descriptions.join("\n  ")
+        );
+    }
+
+    for delta in &deltas {
+        let ddl = match delta {
+            SchemaDelta::AddColumn { name, pg_type, nullable } => {
+                add_column_ddl(schema, target_table, name, pg_type, *nullable)
+            }
+            SchemaDelta::WidenType { name, new_pg_type } => {
+                alter_column_type_ddl(schema, target_table, name, new_pg_type)
+            }
+            _ => continue,
+        };
+        tracing::info!(
+            target: "loader.postgres.schema_evolution",
+            %target_table,
+            %ddl,
+            "applying additive schema change"
+        );
+        tx.execute(sqlx::query(&ddl))
+            .await
+            .with_context(|| format!("schema evolution DDL failed: {ddl}"))?;
+    }
+
+    Ok(())
+}
+
 async fn cdc_apply(
     tx: &mut Transaction<'_, Postgres>,
     spec: &PostgresDestinationSpec,
@@ -716,6 +782,16 @@ async fn cdc_apply(
     batch: &RecordBatch,
 ) -> anyhow::Result<usize> {
     let data_schema = cdc_data_schema(batch.schema().as_ref());
+
+    // Pre-loop: if the batch carries a "c" sentinel, evolve the destination
+    // schema before any row is processed. The Arrow batch already has the
+    // widened schema; the "c" row is just the signal.
+    let has_schema_change = (0..batch.num_rows())
+        .any(|r| cdc_op_at(batch, r).map(|op| op == "c").unwrap_or(false));
+    if has_schema_change {
+        apply_schema_evolution(&mut *tx, &spec.schema, target_table, &data_schema).await?;
+    }
+
     let ddl = create_table_ddl(&spec.schema, target_table, &data_schema, &spec.pk_columns)?;
     tx.execute(sqlx::query(&ddl))
         .await
@@ -751,9 +827,12 @@ async fn cdc_apply(
                 applied += 1;
             }
             "c" => {
-                tracing::warn!(
+                // Schema evolution was applied pre-loop; the "c" row itself
+                // carries no data values — skip data binding.
+                tracing::debug!(
                     target: "loader.postgres.cdc",
-                    "schema-change CDC event skipped (mid-run schema evolution not implemented)"
+                    row = r,
+                    "schema-change event: DDL already applied pre-loop, skipping row data"
                 );
             }
             "t" => {
