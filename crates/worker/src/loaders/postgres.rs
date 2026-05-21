@@ -1,8 +1,30 @@
-//! Postgres destination loader (RFC-9). MVP: insert-only or
-//! `ON CONFLICT DO UPDATE`, per-call transaction, idempotency log.
+//! Postgres destination loader (RFC-9).
 //!
-//! Scope cuts (see plan): no CDC op-aware DELETE, no mid-run schema
-//! evolution, no soft delete, no dead-letter routing.
+//! ## Delivery patterns
+//! - Append: `pk_columns` empty ⇒ plain `INSERT`.
+//! - Upsert: `pk_columns` non-empty ⇒ `INSERT ... ON CONFLICT (pk) DO UPDATE`
+//!   (or `DO NOTHING` when every column is part of the PK).
+//!
+//! ## Idempotency
+//! Per-call sqlx transaction:
+//!   1. Ensure `<schema>._etl_loaded_batches` exists.
+//!   2. If the (tenant, pipeline, run, stream, batch_seq) row is already there,
+//!      short-circuit (rows_loaded = 0).
+//!   3. Ensure target table on first non-empty batch.
+//!   4. Bind and INSERT each row.
+//!   5. Record the load_id in `_etl_loaded_batches`.
+//!   6. Commit.
+//!
+//! Retrying the same `LoadId` re-runs steps 1–2 and stops at step 2.
+//!
+//! ## Deferred
+//! - CDC `_cdc.op`-aware DELETE / UPDATE (RFC-9 Pattern 3).
+//! - Mid-run schema evolution (only first-load CREATE TABLE).
+//! - Soft delete / tombstone columns.
+//! - Dead-letter routing (rejected rows are logged + dropped by the activity).
+//! - `COPY FROM STDIN` fast path (perf optimization).
+//! - RFC-11 secret-ref connection URLs (MVP takes an inline `postgres://`).
+//! - Multi-table per spec — MVP is one target table per pipeline.
 
 use anyhow::{Context, bail};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
