@@ -29,6 +29,51 @@ pub(crate) fn pg_column_type(t: &DataType) -> anyhow::Result<&'static str> {
     })
 }
 
+pub(crate) fn insert_sql(
+    schema: &str,
+    table: &str,
+    arrow_schema: &Schema,
+    pk_columns: &[String],
+) -> String {
+    let field_names: Vec<&str> = arrow_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    let col_list = field_names
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = (1..=field_names.len())
+        .map(|i| format!("${i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let base =
+        format!("INSERT INTO \"{schema}\".\"{table}\" ({col_list}) VALUES ({placeholders})");
+    if pk_columns.is_empty() {
+        return base;
+    }
+    let pk_list = pk_columns
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let non_pk: Vec<String> = field_names
+        .iter()
+        .filter(|n| !pk_columns.iter().any(|p| p == *n))
+        .map(|n| format!("\"{n}\" = EXCLUDED.\"{n}\""))
+        .collect();
+    if non_pk.is_empty() {
+        format!("{base} ON CONFLICT ({pk_list}) DO NOTHING")
+    } else {
+        format!(
+            "{base} ON CONFLICT ({pk_list}) DO UPDATE SET {}",
+            non_pk.join(", ")
+        )
+    }
+}
+
 pub(crate) fn create_table_ddl(
     schema: &str,
     table: &str,
@@ -165,5 +210,53 @@ mod tests {
         let schema = Arc::new(Schema::new(fields(&[("name", DataType::Utf8, true)])));
         let err = create_table_ddl("public", "t", &schema, &["id".to_string()]).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("pk column"));
+    }
+
+    #[test]
+    fn insert_sql_append_form_no_pk() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+        ])));
+        let sql = insert_sql("public", "events", &schema, &[]);
+        assert_eq!(
+            sql,
+            r#"INSERT INTO "public"."events" ("id", "name") VALUES ($1, $2)"#
+        );
+    }
+
+    #[test]
+    fn insert_sql_upsert_form_with_pk() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("name", DataType::Utf8, true),
+            ("amount", DataType::Float64, true),
+        ])));
+        let sql = insert_sql("public", "customers", &schema, &["id".to_string()]);
+        assert_eq!(
+            sql,
+            r#"INSERT INTO "public"."customers" ("id", "name", "amount") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "amount" = EXCLUDED."amount""#
+        );
+    }
+
+    #[test]
+    fn insert_sql_upsert_excludes_pk_columns_from_update_set() {
+        let schema = Arc::new(Schema::new(fields(&[
+            ("tenant", DataType::Utf8, false),
+            ("id", DataType::Int64, false),
+            ("val", DataType::Int64, true),
+        ])));
+        let sql = insert_sql("public", "t", &schema, &["tenant".into(), "id".into()]);
+        assert!(sql.contains("ON CONFLICT (\"tenant\", \"id\")"));
+        assert!(sql.contains("SET \"val\" = EXCLUDED.\"val\""));
+        assert!(!sql.contains("SET \"tenant\""));
+        assert!(!sql.contains("SET \"id\""));
+    }
+
+    #[test]
+    fn insert_sql_pk_only_uses_do_nothing() {
+        let schema = Arc::new(Schema::new(fields(&[("id", DataType::Int64, false)])));
+        let sql = insert_sql("public", "t", &schema, &["id".into()]);
+        assert!(sql.contains("ON CONFLICT (\"id\") DO NOTHING"));
     }
 }
