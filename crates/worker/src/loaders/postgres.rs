@@ -10,6 +10,8 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
 use loader_sdk::{DestinationLoader, LoadId, LoadResult};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{Executor, Postgres, Transaction};
 
 pub(crate) fn pg_column_type(t: &DataType) -> anyhow::Result<&'static str> {
     Ok(match t {
@@ -214,22 +216,144 @@ pub(crate) fn create_table_ddl(
 
 pub struct PostgresLoader;
 
+impl PostgresLoader {
+    async fn connect(spec: &PostgresDestinationSpec) -> anyhow::Result<sqlx::PgPool> {
+        PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&spec.connection_url)
+            .await
+            .with_context(|| format!("connect to {}", spec.connection_url))
+    }
+}
+
 #[async_trait]
 impl DestinationLoader for PostgresLoader {
     async fn validate(&self, dest: &DestinationSpec) -> anyhow::Result<()> {
-        let _spec = postgres_spec(dest)?;
-        // Connectivity check arrives in Task 4.
+        let spec = postgres_spec(dest)?;
+        let pool = Self::connect(spec).await?;
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .context("SELECT 1 health check")?;
         Ok(())
     }
 
     async fn load(
         &self,
         dest: &DestinationSpec,
-        _load_id: LoadId,
-        _batch: RecordBatch,
+        load_id: LoadId,
+        batch: RecordBatch,
     ) -> anyhow::Result<LoadResult> {
-        let _spec = postgres_spec(dest)?;
-        bail!("PostgresLoader::load not yet implemented");
+        let spec = postgres_spec(dest)?;
+        let pool = Self::connect(spec).await?;
+        let mut tx: Transaction<'_, Postgres> = pool.begin().await.context("begin tx")?;
+
+        // 1. Ensure log table.
+        tx.execute(sqlx::query(&ensure_log_table_ddl(&spec.schema)))
+            .await
+            .context("ensure log table")?;
+
+        // 2. Idempotency check — if this load_id is already logged, no-op.
+        let existing = sqlx::query(&format!(
+            "SELECT rows_loaded FROM \"{}\".\"_etl_loaded_batches\" \
+             WHERE tenant_id=$1 AND pipeline_id=$2 AND run_id=$3 \
+             AND stream_name=$4 AND batch_seq=$5",
+            spec.schema
+        ))
+        .bind(load_id.tenant_id.as_uuid())
+        .bind(load_id.pipeline_id.as_uuid())
+        .bind(load_id.run_id.as_uuid())
+        .bind(&load_id.stream_name)
+        .bind(load_id.batch_seq as i64)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("query log")?;
+
+        if existing.is_some() {
+            tx.commit().await.ok();
+            return Ok(LoadResult {
+                rows_loaded: 0,
+                bytes_written: 0,
+                path: format!("{}.{} (already loaded)", spec.schema, spec.table),
+            });
+        }
+
+        // 3. Ensure target table on first non-empty batch.
+        if batch.num_rows() > 0 {
+            let ddl = create_table_ddl(
+                &spec.schema,
+                &spec.table,
+                batch.schema().as_ref(),
+                &spec.pk_columns,
+            )?;
+            tx.execute(sqlx::query(&ddl))
+                .await
+                .context("create target table")?;
+        }
+
+        // 4. Insert rows.
+        let sql = insert_sql(
+            &spec.schema,
+            &spec.table,
+            batch.schema().as_ref(),
+            &spec.pk_columns,
+        );
+        let mut rows_loaded = 0usize;
+        for r in 0..batch.num_rows() {
+            let values = extract_row(&batch, r)?;
+            let mut q = sqlx::query(&sql);
+            for v in &values {
+                q = bind_one(q, v);
+            }
+            q.execute(&mut *tx)
+                .await
+                .with_context(|| format!("INSERT row {r}"))?;
+            rows_loaded += 1;
+        }
+
+        // 5. Record in log.
+        sqlx::query(&format!(
+            "INSERT INTO \"{}\".\"_etl_loaded_batches\" \
+             (tenant_id, pipeline_id, run_id, stream_name, batch_seq, rows_loaded) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            spec.schema
+        ))
+        .bind(load_id.tenant_id.as_uuid())
+        .bind(load_id.pipeline_id.as_uuid())
+        .bind(load_id.run_id.as_uuid())
+        .bind(&load_id.stream_name)
+        .bind(load_id.batch_seq as i64)
+        .bind(rows_loaded as i64)
+        .execute(&mut *tx)
+        .await
+        .context("insert log row")?;
+
+        tx.commit().await.context("commit tx")?;
+        Ok(LoadResult {
+            rows_loaded,
+            bytes_written: 0,
+            path: format!("{}.{}", spec.schema, spec.table),
+        })
+    }
+}
+
+fn bind_one<'a>(
+    q: sqlx::query::Query<'a, Postgres, sqlx::postgres::PgArguments>,
+    v: &'a BoundValue,
+) -> sqlx::query::Query<'a, Postgres, sqlx::postgres::PgArguments> {
+    match v {
+        BoundValue::Int16(x) => q.bind(*x),
+        BoundValue::Int32(x) => q.bind(*x),
+        BoundValue::Int64(x) => q.bind(*x),
+        BoundValue::Float32(x) => q.bind(*x),
+        BoundValue::Float64(x) => q.bind(*x),
+        BoundValue::Bool(x) => q.bind(*x),
+        BoundValue::Text(x) => q.bind(x.clone()),
+        BoundValue::Bytea(x) => q.bind(x.clone()),
+        BoundValue::Date(x) => q.bind(*x),
+        BoundValue::Time(x) => q.bind(*x),
+        BoundValue::Timestamp(x) => q.bind(*x),
+        BoundValue::TimestampTz(x) => q.bind(*x),
     }
 }
 
