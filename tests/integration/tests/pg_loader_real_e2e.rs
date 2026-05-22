@@ -358,3 +358,223 @@ async fn pg_loader_full_stack_cdc_e2e() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// =================================================================
+// CURSOR-MODE E2E: native PG source (PipelineRunWorkflow) → PG dest
+// =================================================================
+// Exercises a completely different code path:
+//   - PipelineRunWorkflow (not WasmCdcPipelineWorkflow)
+//   - Native postgres source connector (not WASM)
+//   - Cursor mode (updated_at timestamp), not CDC
+//   - Multi-run incremental sync (verifies cursor state persistence)
+
+async fn seed_cursor_source(url: &str) -> anyhow::Result<()> {
+    let mut conn = sqlx::PgConnection::connect(url).await?;
+    let _ = sqlx::query("DROP TABLE IF EXISTS customers").execute(&mut conn).await;
+    sqlx::query(
+        "CREATE TABLE customers (
+            id BIGINT PRIMARY KEY,
+            name TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL
+         )",
+    )
+    .execute(&mut conn)
+    .await?;
+    sqlx::query(
+        "INSERT INTO customers (id, name, updated_at) VALUES \
+         (1, 'Alice', '2026-04-22T10:00:00Z'), \
+         (2, 'Bob',   '2026-04-22T10:30:00Z'), \
+         (3, 'Carol', '2026-04-22T11:00:00Z')",
+    )
+    .execute(&mut conn)
+    .await?;
+    conn.close().await?;
+    Ok(())
+}
+
+async fn add_two_more_customers(url: &str) -> anyhow::Result<()> {
+    let mut conn = sqlx::PgConnection::connect(url).await?;
+    sqlx::query(
+        "INSERT INTO customers (id, name, updated_at) VALUES \
+         (4, 'Dan', '2026-04-22T12:00:00Z'), \
+         (5, 'Eve', '2026-04-22T12:30:00Z')",
+    )
+    .execute(&mut conn)
+    .await?;
+    conn.close().await?;
+    Ok(())
+}
+
+async fn customers_in_dest(url: &str, schema: &str) -> anyhow::Result<Vec<(i64, String)>> {
+    let mut conn = sqlx::PgConnection::connect(url).await?;
+    let rows = sqlx::query(&format!(
+        "SELECT id, name FROM \"{schema}\".\"customers\" ORDER BY id"
+    ))
+    .fetch_all(&mut conn)
+    .await?;
+    conn.close().await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get::<i64, _>(0), r.get::<String, _>(1)))
+        .collect())
+}
+
+async fn wait_for_last_run_completed(catalog: &str, timeout: Duration) -> anyhow::Result<()> {
+    let mut conn = sqlx::PgConnection::connect(catalog).await?;
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT status FROM runs ORDER BY started_at DESC LIMIT 1")
+                .fetch_optional(&mut conn)
+                .await?;
+        if let Some((s,)) = row {
+            if s == "completed" {
+                conn.close().await?;
+                return Ok(());
+            }
+            if s == "failed" {
+                conn.close().await?;
+                anyhow::bail!("run failed");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    conn.close().await?;
+    anyhow::bail!("timeout waiting for run completion")
+}
+
+async fn dest_columns_for(url: &str, schema: &str, table: &str) -> anyhow::Result<Vec<String>> {
+    let mut conn = sqlx::PgConnection::connect(url).await?;
+    let rows = sqlx::query(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = $1 AND table_name = $2 \
+         ORDER BY ordinal_position",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(&mut conn)
+    .await?;
+    conn.close().await?;
+    Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
+}
+
+#[tokio::test]
+#[ignore = "requires docker + temporal; ~90s"]
+async fn pg_loader_full_stack_cursor_mode_e2e() -> anyhow::Result<()> {
+    build_workspace().await?;
+
+    let (_src_container, source_url) = start_pg_container().await?;
+    let (_dst_container, dest_url) = start_pg_container().await?;
+    seed_cursor_source(&source_url).await?;
+
+    let dest_schema = "etl_cursor_dest";
+    {
+        let mut conn = sqlx::PgConnection::connect(&dest_url).await?;
+        sqlx::query(&format!("CREATE SCHEMA \"{dest_schema}\""))
+            .execute(&mut conn)
+            .await?;
+        conn.close().await?;
+    }
+
+    let connectors = workspace_root().join("connectors");
+
+    let cat = Catalog::connect(&catalog_url()).await?;
+    cat.migrate().await?;
+    cat.truncate_all_for_tests().await?;
+
+    let tenant = cat.create_tenant("dev").await?;
+    let src = cat
+        .create_connection(NewConnection {
+            tenant_id: tenant,
+            name: "pg-cursor-src".into(),
+            connector_ref: "postgres@0.1.0".into(),
+            config: json!({ "url": source_url }),
+        })
+        .await?;
+
+    let spec = json!({
+        "source": {
+            "type": "postgres",
+            "schema": "public",
+            "table": "customers",
+            "cursor_column": "updated_at",
+            "cursor_kind": "timestamp_tz",
+            "pk_columns": ["id"]
+        },
+        "destination": {
+            "type": "postgres",
+            "connection_url": dest_url,
+            "schema": dest_schema,
+            "table": "customers",
+            "pk_columns": ["id"]
+        },
+        "batch_size": 2
+    });
+    let pipe = cat
+        .create_pipeline(NewPipeline {
+            tenant_id: tenant,
+            name: "customers-pg-to-pg".into(),
+            source_conn_id: src,
+            dest_conn_id: None,
+            spec,
+        })
+        .await?;
+
+    let mut worker = spawn_worker(&connectors).await?;
+
+    // Run 1: full sync of 3 rows.
+    let out = Command::new(cargo_bin("platform"))
+        .args(["pipeline", "run", &pipe.to_string()])
+        .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
+        .env("TEMPORAL_ADDRESS", "127.0.0.1:7233")
+        .env("TEMPORAL_NAMESPACE", "default")
+        .env("TEMPORAL_TASK_QUEUE", "pipeline-default")
+        .env("ETL_CONNECTORS_DIR", &connectors)
+        .current_dir(workspace_root())
+        .output()
+        .await?;
+    assert!(out.status.success(), "run 1 failed: {}", String::from_utf8_lossy(&out.stderr));
+    wait_for_last_run_completed(&catalog_url(), Duration::from_secs(60)).await?;
+
+    let rows1 = customers_in_dest(&dest_url, dest_schema).await?;
+    eprintln!("run 1 dest rows: {rows1:?}");
+    assert_eq!(rows1.len(), 3, "after run 1, expected 3 customers");
+    assert_eq!(rows1[0], (1, "Alice".into()));
+    assert_eq!(rows1[1], (2, "Bob".into()));
+    assert_eq!(rows1[2], (3, "Carol".into()));
+
+    // Run 2: incremental — add 2 more, expect cursor to skip the first 3.
+    add_two_more_customers(&source_url).await?;
+    let out = Command::new(cargo_bin("platform"))
+        .args(["pipeline", "run", &pipe.to_string()])
+        .env("DATABASE_URL", catalog_url())
+        .env("ETL_AUTH_BYPASS", "1")
+        .env("TEMPORAL_ADDRESS", "127.0.0.1:7233")
+        .env("TEMPORAL_NAMESPACE", "default")
+        .env("TEMPORAL_TASK_QUEUE", "pipeline-default")
+        .env("ETL_CONNECTORS_DIR", &connectors)
+        .current_dir(workspace_root())
+        .output()
+        .await?;
+    assert!(out.status.success(), "run 2 failed: {}", String::from_utf8_lossy(&out.stderr));
+    wait_for_last_run_completed(&catalog_url(), Duration::from_secs(60)).await?;
+
+    let rows2 = customers_in_dest(&dest_url, dest_schema).await?;
+    eprintln!("run 2 dest rows: {rows2:?}");
+    assert_eq!(rows2.len(), 5, "after run 2, expected 5 customers");
+    assert_eq!(rows2[3], (4, "Dan".into()));
+    assert_eq!(rows2[4], (5, "Eve".into()));
+
+    worker.kill().await?;
+    worker.wait().await?;
+
+    let cols = dest_columns_for(&dest_url, dest_schema, "customers").await?;
+    assert_eq!(
+        cols,
+        vec!["id".to_string(), "name".into(), "updated_at".into()],
+        "cursor-mode destination must include cursor column; got {cols:?}"
+    );
+
+    Ok(())
+}
