@@ -227,6 +227,38 @@ impl SyncActivities {
             )
             .increment(rows_rejected as u64);
         }
+
+        // Metering: emit RowsRead + BytesRead (best-effort).
+        // ReadBatchInput doesn't carry pipeline_id today; we emit None for it.
+        {
+            let tid = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
+            let rows_ev = metering::MeteringEvent::new(
+                tid.clone(),
+                None,
+                None,
+                metering::BillableMetric::RowsRead,
+                rows as i64,
+                metering::MeteringSource::Read,
+            );
+            let bytes_ev = metering::MeteringEvent::new(
+                tid,
+                None,
+                None,
+                metering::BillableMetric::BytesRead,
+                b64.len() as i64,
+                metering::MeteringSource::Read,
+            );
+            for ev in [&rows_ev, &bytes_ev] {
+                if let Err(e) = self.metering.emit(ev).await {
+                    tracing::warn!(
+                        metric = ?ev.metric,
+                        error = %e,
+                        "metering emit failed in read_batch (best-effort, ignored)"
+                    );
+                }
+            }
+        }
+
         Ok(ReadBatchOutput {
             batch_ipc_b64: b64,
             rows,
@@ -345,6 +377,38 @@ impl SyncActivities {
                     )
                     .into(),
                 ));
+            }
+        }
+
+        // Metering: emit RowsWritten + BytesWritten (best-effort).
+        {
+            let tid = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
+            let pid = Some(common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id));
+            let rid = Some(common_types::ids::RunId::from_uuid_unchecked(input.run_id));
+            let rows_ev = metering::MeteringEvent::new(
+                tid.clone(),
+                pid.clone(),
+                rid.clone(),
+                metering::BillableMetric::RowsWritten,
+                res.rows_loaded as i64,
+                metering::MeteringSource::Load,
+            );
+            let bytes_ev = metering::MeteringEvent::new(
+                tid,
+                pid,
+                rid,
+                metering::BillableMetric::BytesWritten,
+                res.bytes_written as i64,
+                metering::MeteringSource::Load,
+            );
+            for ev in [&rows_ev, &bytes_ev] {
+                if let Err(e) = self.metering.emit(ev).await {
+                    tracing::warn!(
+                        metric = ?ev.metric,
+                        error = %e,
+                        "metering emit failed in load_batch (best-effort, ignored)"
+                    );
+                }
             }
         }
 
