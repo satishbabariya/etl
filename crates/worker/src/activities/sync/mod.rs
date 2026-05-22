@@ -36,6 +36,9 @@ pub struct SyncActivities {
     pub wasm_runtime: Arc<WasmSourceRuntime>,
     pub scalar_runtime: Arc<WasmScalarRuntime>,
     pub secrets: Arc<crate::secrets::auditing::AuditingSecrets>,
+    /// Best-effort metering event emitter. Errors are logged and ignored;
+    /// activities never fail due to a metering write failure.
+    pub metering: Arc<dyn metering::MeteringSink>,
 }
 
 fn to_retryable(e: anyhow::Error) -> ActivityError {

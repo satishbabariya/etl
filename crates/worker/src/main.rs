@@ -75,11 +75,14 @@ async fn main() -> anyhow::Result<()> {
     let lifecycle = RunLifecycleActivities {
         catalog: catalog.clone(),
     };
+    let metering: Arc<dyn metering::MeteringSink> =
+        Arc::new(metering::CatalogMeteringSink::new(catalog.pool().clone()));
     let sync = SyncActivities {
         catalog: catalog.clone(),
         wasm_runtime: wasm_runtime.clone(),
         scalar_runtime: scalar_runtime.clone(),
         secrets: secrets.clone(),
+        metering,
     };
     let cdc = CdcActivities {
         catalog: catalog.clone(),

@@ -17,6 +17,7 @@ common-types = { workspace = true }
 catalog = { workspace = true }
 connector-sdk = { workspace = true }
 loader-sdk = { workspace = true }
+metering = { workspace = true }
 tokio = { workspace = true }
 arrow = { workspace = true }
 parquet = { workspace = true }
