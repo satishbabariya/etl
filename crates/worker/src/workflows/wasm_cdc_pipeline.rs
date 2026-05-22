@@ -23,8 +23,6 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, WorkflowResult};
 use uuid::Uuid;
 
-use crate::activities::cdc::CdcActivities;
-use crate::activities::cdc::inputs::AdvanceSlotInput;
 use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
 use crate::activities::sync::SyncActivities;
 use crate::activities::sync::inputs::{
@@ -249,41 +247,15 @@ impl WasmCdcPipelineWorkflow {
             )
             .await?;
 
-            // Post-commit slot advance: release WAL the destination has
-            // durably persisted. Only meaningful for LSN-typed cursors
-            // (Postgres logical replication). Errors here are non-fatal —
-            // log and continue; the slot will advance on the next batch.
-            // This is the workflow-durable complement to the opportunistic
-            // advance inside PgSubscription::finalize (db_pg_subscribe.rs).
-            if let Some(ref cv) = read_out.new_cursor {
-                if cv.kind == common_types::cursor::CursorKind::Lsn {
-                    let slot_name =
-                        format!("etl_{}", input.pipeline_id.as_simple());
-                    let advance_result = ctx
-                        .start_activity(
-                            CdcActivities::advance_slot,
-                            AdvanceSlotInput {
-                                pipeline_id: input.pipeline_id,
-                                tenant_id: input.tenant_id,
-                                principal_id: input.principal_id,
-                                jti: input.jti,
-                                source_conn: input.source_connection.clone(),
-                                slot_name,
-                                target_lsn: cv.value.clone(),
-                            },
-                            opts_short(),
-                        )
-                        .await;
-                    if let Err(ref e) = advance_result {
-                        tracing::warn!(
-                            target: "workflow.wasm_cdc_pipeline",
-                            pipeline_id = %input.pipeline_id,
-                            error = %e,
-                            "advance_slot failed (non-fatal, will retry on next batch)"
-                        );
-                    }
-                }
-            }
+            // NB: Workflow-driven advance_slot intentionally omitted here.
+            // The WASM CDC connector owns its slot name (etl_pgrs_<sha256>
+            // per examples/postgres-cdc-rs/src/lib.rs::slot_name), which
+            // the workflow has no visibility into — calling advance_slot
+            // with the etl_<pipeline_id> formula would error every batch.
+            // WAL release for this path happens opportunistically inside
+            // PgSubscription::finalize (db_pg_subscribe.rs, phase-2-3j-1).
+            // The advance_slot activity (phase-2-3k) remains available
+            // for the native PG CDC workflow when wired.
 
             cursor = read_out.new_cursor;
             batch_seq += 1;
