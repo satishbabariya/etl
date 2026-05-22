@@ -86,3 +86,32 @@ pub async fn slot_lag_bytes(conn_url: &str, slot: &str) -> anyhow::Result<i64> {
     .await?;
     Ok(lag)
 }
+
+/// Advance the logical replication slot to `target_lsn`, releasing WAL the
+/// consumer has durably committed. Returns the slot's `confirmed_flush_lsn`
+/// after the advance.
+///
+/// Idempotent: `pg_replication_slot_advance` is a no-op when
+/// `target_lsn` ≤ the current `confirmed_flush_lsn` (PG 11+).
+pub async fn advance_slot(
+    conn_url: &str,
+    slot: &str,
+    target_lsn: &str,
+) -> anyhow::Result<String> {
+    let mut c = PgConnection::connect(conn_url).await?;
+    sqlx::query("SELECT pg_replication_slot_advance($1, $2::pg_lsn)")
+        .bind(slot)
+        .bind(target_lsn)
+        .execute(&mut c)
+        .await
+        .context("pg_replication_slot_advance")?;
+    let (confirmed,): (Option<String>,) = sqlx::query_as(
+        "SELECT confirmed_flush_lsn::text \
+         FROM pg_replication_slots WHERE slot_name = $1",
+    )
+    .bind(slot)
+    .fetch_one(&mut c)
+    .await
+    .context("re-query confirmed_flush_lsn after advance")?;
+    Ok(confirmed.unwrap_or_else(|| target_lsn.to_string()))
+}

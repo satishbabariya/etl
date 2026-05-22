@@ -105,3 +105,58 @@ pub struct CdcSnapshotMarkCompletedInput {
     pub pipeline_id: Uuid,
     pub tenant_id: Uuid,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdvanceSlotInput {
+    pub pipeline_id: Uuid,
+    pub tenant_id: Uuid,
+    #[serde(default)]
+    pub principal_id: Uuid,
+    #[serde(default)]
+    pub jti: Uuid,
+    pub source_conn: ConnectionConfig,
+    /// Logical replication slot name to advance. Callers derive this as
+    /// `format!("etl_{}", pipeline_id.as_simple())` — same formula as
+    /// `ensure_slot`.
+    pub slot_name: String,
+    /// Target LSN in Postgres text format, e.g. `"0/1A2B3C4"`. The destination
+    /// has durably persisted everything up to and including this position.
+    pub target_lsn: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AdvanceSlotOutput {
+    /// The slot's `confirmed_flush_lsn` after the advance, as reported by
+    /// `pg_replication_slots`.
+    pub confirmed_flush_lsn: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advance_slot_input_roundtrips_serde() {
+        let input = AdvanceSlotInput {
+            pipeline_id: Uuid::nil(),
+            tenant_id: Uuid::nil(),
+            principal_id: Uuid::nil(),
+            jti: Uuid::nil(),
+            source_conn: ConnectionConfig::from_url("postgres://localhost/test".to_string()),
+            slot_name: "etl_abc".into(),
+            target_lsn: "0/1A2B3C4".into(),
+        };
+        let j = serde_json::to_string(&input).unwrap();
+        let back: AdvanceSlotInput = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.slot_name, "etl_abc");
+        assert_eq!(back.target_lsn, "0/1A2B3C4");
+    }
+
+    #[test]
+    fn advance_slot_output_roundtrips_serde() {
+        let out = AdvanceSlotOutput { confirmed_flush_lsn: "0/1A2B3C4".into() };
+        let j = serde_json::to_string(&out).unwrap();
+        let back: AdvanceSlotOutput = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.confirmed_flush_lsn, "0/1A2B3C4");
+    }
+}
