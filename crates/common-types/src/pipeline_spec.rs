@@ -328,3 +328,29 @@ mod tests {
         assert_eq!(serde_json::to_string(&back).unwrap(), j);
     }
 }
+
+#[cfg(test)]
+mod e2e_diag {
+    use super::*;
+    #[test]
+    fn wasm_source_to_pg_dest_spec_deserializes() {
+        let s = serde_json::json!({
+            "source": { "type": "wasm", "config": { "schema": "public", "table": "items" } },
+            "destination": {
+                "type": "postgres",
+                "connection_url": "postgres://x",
+                "schema": "etl_dest",
+                "table": "items",
+                "pk_columns": ["id"]
+            },
+            "batch_size": 2
+        });
+        let spec: PipelineSpec = serde_json::from_value(s).expect("deserialize");
+        assert!(matches!(spec.destination, DestinationSpec::Postgres(_)));
+        if let DestinationSpec::Postgres(p) = &spec.destination {
+            assert_eq!(p.schema, "etl_dest");
+            assert_eq!(p.table, "items");
+            assert_eq!(p.pk_columns, vec!["id".to_string()]);
+        }
+    }
+}
