@@ -10,6 +10,7 @@ members = [
     "crates/cli",
     "crates/auth",
     "crates/audit",
+    "crates/metering",
     "tests/integration",
 ]
 exclude = ["examples/csv-source", "examples/upper-case-scalar", "examples/hello-world-source", "examples/stripe-source", "examples/stripe-source-ts"]
@@ -109,6 +110,7 @@ connector-sdk = { path = "crates/connector-sdk" }
 loader-sdk = { path = "crates/loader-sdk" }
 auth = { path = "crates/auth" }
 audit = { path = "crates/audit" }
+metering = { path = "crates/metering" }
 
 [profile.dev]
 opt-level = 1
