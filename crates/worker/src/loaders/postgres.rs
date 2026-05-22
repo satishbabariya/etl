@@ -26,15 +26,26 @@
 //!   - `t` ⇒ skipped (destructive ops are not auto-applied)
 //! `_cdc.*` columns are stripped from the destination table schema.
 //!
+//! ## Multi-table routing
+//! `LoadId.stream_name` selects the target table per batch:
+//!   - `stream_name = ""` ⇒ `spec.table` (single-table pipeline).
+//!   - `stream_name = "<n>"` ⇒ table `<n>` inside `spec.schema`. Connectors
+//!     today emit `"<src_schema>.<src_table>"`, which lands as a literal
+//!     `<src_schema>.<src_table>` table name inside `spec.schema`.
+//! Validation forbids `"`, NUL, and control chars in the resolved name
+//! to prevent quoted-identifier escapes.
+//!
 //! ## Deferred
 //! - Mid-run schema evolution (only first-load CREATE TABLE).
+//! - Per-stream `pk_columns` override — every stream uses `spec.pk_columns`.
 //! - Soft delete / tombstone columns.
 //! - Dead-letter routing (rejected rows are logged + dropped by the activity).
 //! - `COPY FROM STDIN` fast path (perf optimization).
 //! - RFC-11 secret-ref connection URLs (MVP takes an inline `postgres://`).
-//! - Multi-table per spec — MVP is one target table per pipeline.
 //! - Audit-log destination mode (keep `_cdc.*` columns at the destination).
 //! - PK-change updates that omit a delete of the old key.
+//! - Destination-schema split: `stream_name = "<src_schema>.<table>"` ⇒
+//!   destination `<src_schema>."<table>"` instead of one literal-dot table.
 
 use anyhow::{Context, bail};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -44,6 +55,30 @@ use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
 use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Postgres, Transaction};
+
+pub(crate) fn resolve_target_table<'a>(
+    spec: &'a PostgresDestinationSpec,
+    stream_name: &'a str,
+) -> anyhow::Result<&'a str> {
+    let candidate = if stream_name.is_empty() {
+        spec.table.as_str()
+    } else {
+        stream_name
+    };
+    if candidate.is_empty() {
+        bail!(
+            "postgres loader: target table is empty (both stream_name and spec.table are empty)"
+        );
+    }
+    for ch in candidate.chars() {
+        if ch == '"' || ch == '\0' || ch.is_control() {
+            bail!(
+                "postgres loader: illegal character {ch:?} in target table name {candidate:?}"
+            );
+        }
+    }
+    Ok(candidate)
+}
 
 pub(crate) fn is_cdc_batch(schema: &Schema) -> bool {
     schema.field_with_name(common_types::cdc::COL_OP).is_ok()
@@ -365,7 +400,10 @@ impl DestinationLoader for PostgresLoader {
             .await
             .context("ensure log table")?;
 
-        // 2. Idempotency check — if this load_id is already logged, no-op.
+        // 2. Resolve target table (validates stream_name even for retried loads).
+        let target_table = resolve_target_table(spec, &load_id.stream_name)?;
+
+        // 3. Idempotency check — if this load_id is already logged, no-op.
         let existing = sqlx::query(&format!(
             "SELECT rows_loaded FROM \"{}\".\"_etl_loaded_batches\" \
              WHERE tenant_id=$1 AND pipeline_id=$2 AND run_id=$3 \
@@ -386,11 +424,11 @@ impl DestinationLoader for PostgresLoader {
             return Ok(LoadResult {
                 rows_loaded: 0,
                 bytes_written: 0,
-                path: format!("{}.{} (already loaded)", spec.schema, spec.table),
+                path: format!("{}.{} (already loaded)", spec.schema, target_table),
             });
         }
 
-        // 3. CDC vs plain. CDC mode is data-driven: any batch carrying
+        // 4. CDC vs plain. CDC mode is data-driven: any batch carrying
         //    `_cdc.op` is routed through the CDC path; otherwise the
         //    original append/upsert path applies.
         let mut rows_loaded = 0usize;
@@ -402,35 +440,9 @@ impl DestinationLoader for PostgresLoader {
                      CDC ops require a primary key for upsert/delete routing"
                 );
             }
-            rows_loaded = cdc_apply(&mut tx, spec, &batch).await?;
+            rows_loaded = cdc_apply(&mut tx, spec, target_table, &batch).await?;
         } else if batch.num_rows() > 0 {
-            let ddl = create_table_ddl(
-                &spec.schema,
-                &spec.table,
-                batch.schema().as_ref(),
-                &spec.pk_columns,
-            )?;
-            tx.execute(sqlx::query(&ddl))
-                .await
-                .context("create target table")?;
-
-            let sql = insert_sql(
-                &spec.schema,
-                &spec.table,
-                batch.schema().as_ref(),
-                &spec.pk_columns,
-            );
-            for r in 0..batch.num_rows() {
-                let values = extract_row(&batch, r)?;
-                let mut q = sqlx::query(&sql);
-                for v in &values {
-                    q = bind_one(q, v);
-                }
-                q.execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("INSERT row {r}"))?;
-                rows_loaded += 1;
-            }
+            rows_loaded = plain_apply(&mut tx, spec, target_table, &batch).await?;
         }
 
         // 5. Record in log.
@@ -454,7 +466,7 @@ impl DestinationLoader for PostgresLoader {
         Ok(LoadResult {
             rows_loaded,
             bytes_written: 0,
-            path: format!("{}.{}", spec.schema, spec.table),
+            path: format!("{}.{}", spec.schema, target_table),
         })
     }
 }
@@ -486,19 +498,57 @@ fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationS
     }
 }
 
+async fn plain_apply(
+    tx: &mut Transaction<'_, Postgres>,
+    spec: &PostgresDestinationSpec,
+    target_table: &str,
+    batch: &RecordBatch,
+) -> anyhow::Result<usize> {
+    let ddl = create_table_ddl(
+        &spec.schema,
+        target_table,
+        batch.schema().as_ref(),
+        &spec.pk_columns,
+    )?;
+    tx.execute(sqlx::query(&ddl))
+        .await
+        .context("create target table")?;
+
+    let sql = insert_sql(
+        &spec.schema,
+        target_table,
+        batch.schema().as_ref(),
+        &spec.pk_columns,
+    );
+    let mut rows_loaded = 0usize;
+    for r in 0..batch.num_rows() {
+        let values = extract_row(batch, r)?;
+        let mut q = sqlx::query(&sql);
+        for v in &values {
+            q = bind_one(q, v);
+        }
+        q.execute(&mut **tx)
+            .await
+            .with_context(|| format!("INSERT row {r}"))?;
+        rows_loaded += 1;
+    }
+    Ok(rows_loaded)
+}
+
 async fn cdc_apply(
     tx: &mut Transaction<'_, Postgres>,
     spec: &PostgresDestinationSpec,
+    target_table: &str,
     batch: &RecordBatch,
 ) -> anyhow::Result<usize> {
     let data_schema = cdc_data_schema(batch.schema().as_ref());
-    let ddl = create_table_ddl(&spec.schema, &spec.table, &data_schema, &spec.pk_columns)?;
+    let ddl = create_table_ddl(&spec.schema, target_table, &data_schema, &spec.pk_columns)?;
     tx.execute(sqlx::query(&ddl))
         .await
         .context("create target table (cdc)")?;
 
-    let upsert_sql = insert_sql(&spec.schema, &spec.table, &data_schema, &spec.pk_columns);
-    let del_sql = delete_sql(&spec.schema, &spec.table, &spec.pk_columns);
+    let upsert_sql = insert_sql(&spec.schema, target_table, &data_schema, &spec.pk_columns);
+    let del_sql = delete_sql(&spec.schema, target_table, &spec.pk_columns);
 
     let mut applied = 0usize;
     for r in 0..batch.num_rows() {
@@ -897,6 +947,73 @@ mod tests {
         assert_eq!(pks.len(), 2);
         assert!(matches!(pks[0], BoundValue::Text(Some(ref s)) if s == "eu"));
         assert!(matches!(pks[1], BoundValue::Int64(7)));
+    }
+
+    #[test]
+    fn resolve_target_table_uses_stream_name_when_present() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "fallback".into(),
+            pk_columns: vec![],
+        };
+        assert_eq!(
+            resolve_target_table(&spec, "public.users").unwrap(),
+            "public.users"
+        );
+    }
+
+    #[test]
+    fn resolve_target_table_falls_back_to_spec_table_when_stream_empty() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "fallback".into(),
+            pk_columns: vec![],
+        };
+        assert_eq!(resolve_target_table(&spec, "").unwrap(), "fallback");
+    }
+
+    #[test]
+    fn resolve_target_table_rejects_double_quote() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        };
+        let err = resolve_target_table(&spec, "evil\"name").unwrap_err();
+        assert!(format!("{err}").to_lowercase().contains("illegal"));
+    }
+
+    #[test]
+    fn resolve_target_table_rejects_control_chars() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        };
+        for bad in &["with\0nul", "with\nnewline", "with\rcr"] {
+            let err = resolve_target_table(&spec, bad).unwrap_err();
+            assert!(
+                format!("{err}").to_lowercase().contains("illegal"),
+                "expected illegal-char rejection for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_target_table_errors_when_both_empty() {
+        let spec = PostgresDestinationSpec {
+            connection_url: "postgres://x".into(),
+            schema: "public".into(),
+            table: "".into(),
+            pk_columns: vec![],
+        };
+        let err = resolve_target_table(&spec, "").unwrap_err();
+        let msg = format!("{err}").to_lowercase();
+        assert!(msg.contains("table") && msg.contains("empty"), "got: {msg}");
     }
 
     #[tokio::test]
