@@ -573,6 +573,23 @@ impl DestinationLoader for PostgresLoader {
         batch: RecordBatch,
     ) -> anyhow::Result<LoadResult> {
         let spec = postgres_spec(dest)?;
+
+        // Fail-fast config validation BEFORE opening a connection — CDC + empty
+        // pk_columns is a misconfiguration; no point hitting the DB. Also
+        // makes this code path unit-testable without a live PG.
+        if batch.num_rows() > 0
+            && is_cdc_batch(batch.schema().as_ref())
+            && spec.pk_columns.is_empty()
+        {
+            bail!(
+                "CDC batch arrived at postgres loader but pk_columns is empty; \
+                 CDC ops require a primary key for upsert/delete routing"
+            );
+        }
+        // Same for stream_name — validate early so a bad name surfaces without
+        // a wasted connection attempt.
+        let _ = resolve_target_table(spec, &load_id.stream_name)?;
+
         let pool = Self::connect(spec).await?;
         let mut tx: Transaction<'_, Postgres> = pool.begin().await.context("begin tx")?;
 
@@ -615,12 +632,7 @@ impl DestinationLoader for PostgresLoader {
         let mut rows_loaded = 0usize;
 
         if batch.num_rows() > 0 && is_cdc_batch(batch.schema().as_ref()) {
-            if spec.pk_columns.is_empty() {
-                bail!(
-                    "CDC batch arrived at postgres loader but pk_columns is empty; \
-                     CDC ops require a primary key for upsert/delete routing"
-                );
-            }
+            // pk_columns emptiness already validated at the top of load().
             rows_loaded = cdc_apply(&mut tx, spec, target_table, &batch).await?;
         } else if batch.num_rows() > 0 {
             rows_loaded = plain_apply(&mut tx, spec, target_table, &batch).await?;

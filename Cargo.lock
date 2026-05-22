@@ -3097,6 +3097,7 @@ dependencies = [
  "common-types",
  "dirs 5.0.1",
  "loader-sdk",
+ "metering",
  "mysql_async",
  "parquet",
  "reqwest",
@@ -3510,6 +3511,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad38eb12aea514a0466ea40a80fd8cc83637065948eb4a426e4aa46261175227"
 dependencies = [
  "rustix 1.1.4",
+]
+
+[[package]]
+name = "metering"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "common-types",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -8434,6 +8452,7 @@ dependencies = [
  "futures",
  "futures-util",
  "loader-sdk",
+ "metering",
  "metrics",
  "metrics-exporter-prometheus",
  "mysql_async",
