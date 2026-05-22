@@ -207,10 +207,23 @@ impl WasmCdcPipelineWorkflow {
                 continue;
             }
 
-            // Per-batch stream_name override (multi-table CDC) falls
-            // back to the pipeline-level stream_name when the connector
-            // didn't set one.
-            let batch_stream = read_out
+            // CRITICAL: load_batch.stream_name and commit_cursor.stream_name
+            // are SEMANTICALLY DIFFERENT despite sharing a name:
+            //   - For the LOADER (phase-2-4c), stream_name picks the per-batch
+            //     target TABLE inside spec.schema. Empty = use spec.table.
+            //   - For the CATALOG, stream_name is a CURSOR TRACKING KEY scoped
+            //     to (pipeline, stream).
+            // Until phase-2-4c, both were the same. For WASM CDC, input.stream_name
+            // is the connector identifier ("postgres-cdc-rs") — a meaningful cursor
+            // key but a NONSENSICAL table name. Falling back to it for the loader
+            // caused single-table WASM CDC pipelines to write to a table named
+            // after the connector, not spec.table. Discovered via pg_loader_real_e2e.
+            //
+            // Fix: only set the loader's stream_name when the connector
+            // EXPLICITLY emits one (multi-table CDC case). Cursor key keeps
+            // the existing semantics.
+            let load_stream = read_out.stream_name.clone().unwrap_or_default();
+            let cursor_stream = read_out
                 .stream_name
                 .clone()
                 .unwrap_or_else(|| input.stream_name.clone());
@@ -228,7 +241,7 @@ impl WasmCdcPipelineWorkflow {
                     dead_letter_threshold,
                     rows_rejected_so_far: rows_rejected_so_far as usize,
                     rows_total_so_far: rows_total_so_far as usize,
-                    stream_name: batch_stream.clone(),
+                    stream_name: load_stream,
                 },
                 opts_long(),
             )
@@ -240,7 +253,7 @@ impl WasmCdcPipelineWorkflow {
                     pipeline_id: input.pipeline_id,
                     tenant_id: input.tenant_id,
                     run_id: input.run_id,
-                    stream_name: batch_stream,
+                    stream_name: cursor_stream,
                     cursor: read_out.new_cursor.clone(),
                 },
                 opts_short(),

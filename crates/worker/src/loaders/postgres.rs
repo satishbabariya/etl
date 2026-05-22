@@ -92,10 +92,12 @@ pub(crate) fn is_cdc_batch(schema: &Schema) -> bool {
 }
 
 fn is_cdc_metadata_col(name: &str) -> bool {
-    name == common_types::cdc::COL_OP
-        || name == common_types::cdc::COL_LSN
-        || name == common_types::cdc::COL_COMMIT_TS
-        || name == common_types::cdc::COL_TXID
+    // Platform convention: every CDC-metadata column starts with "_cdc."
+    // Connectors emit different subsets (postgres-cdc-rs uses _cdc.op +
+    // _cdc.position; phase-2-4b's constants list op/lsn/commit_ts/txid)
+    // and any future connector adding a new _cdc.* column should NOT leak
+    // it into the destination. Match the prefix, not a fixed list.
+    name.starts_with("_cdc.")
 }
 
 pub(crate) fn cdc_data_schema(schema: &Schema) -> Schema {
@@ -1087,6 +1089,21 @@ mod tests {
             ("name", DataType::Utf8, true),
         ])));
         assert!(!is_cdc_batch(&schema));
+    }
+
+    #[test]
+    fn cdc_data_schema_drops_any_cdc_prefix_column() {
+        // Regression: real WASM connectors (postgres-cdc-rs) emit
+        // `_cdc.position` which isn't in the 4-constant list. The strip
+        // filter must catch any `_cdc.*` prefix, not just known names.
+        let schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            ("_cdc.position", DataType::Utf8, false),       // not in cdc.rs constants
+            ("_cdc.something_new", DataType::Utf8, false),  // future-proof
+        ]));
+        let stripped = cdc_data_schema(&schema);
+        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(names, vec!["id"], "every _cdc.* column must be stripped");
     }
 
     #[test]

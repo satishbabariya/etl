@@ -246,9 +246,11 @@ impl PipelineRunWorkflow {
                 break;
             }
 
-            // Per-batch stream override (multi-table CDC); falls back
-            // to the pipeline-level stream_name.
-            let batch_stream = read_out
+            // See WasmCdcPipelineWorkflow for the same fix + rationale:
+            // load_batch.stream_name = TARGET TABLE (empty → use spec.table);
+            // commit_cursor.stream_name = CURSOR KEY (uses pipeline-level fallback).
+            let load_stream = read_out.stream_name.clone().unwrap_or_default();
+            let cursor_stream = read_out
                 .stream_name
                 .clone()
                 .unwrap_or_else(|| stream_name.clone());
@@ -266,7 +268,7 @@ impl PipelineRunWorkflow {
                     dead_letter_threshold,
                     rows_rejected_so_far: rows_rejected_so_far as usize,
                     rows_total_so_far: rows_total_so_far as usize,
-                    stream_name: batch_stream.clone(),
+                    stream_name: load_stream,
                 },
                 opts_long(),
             )
@@ -278,7 +280,7 @@ impl PipelineRunWorkflow {
                     pipeline_id,
                     tenant_id,
                     run_id,
-                    stream_name: batch_stream,
+                    stream_name: cursor_stream,
                     cursor: read_out.new_cursor.clone(),
                 },
                 opts_short(),
