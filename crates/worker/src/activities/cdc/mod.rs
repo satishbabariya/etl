@@ -333,4 +333,50 @@ impl CdcActivities {
         }
         Ok(())
     }
+
+    #[activity]
+    pub async fn advance_slot(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: AdvanceSlotInput,
+    ) -> Result<AdvanceSlotOutput, ActivityError> {
+        tracing::info!(
+            slot = %input.slot_name,
+            target_lsn = %input.target_lsn,
+            "cdc: advance_slot entering"
+        );
+        let resolve_ctx = crate::secrets::auditing::ResolveContext {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
+            principal_id: (!input.principal_id.is_nil())
+                .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+            jti: (!input.jti.is_nil()).then_some(input.jti),
+        };
+        let resolved = crate::secrets::resolve_connection_audited(
+            self.secrets.as_ref(),
+            &input.source_conn,
+            resolve_ctx,
+        )
+        .await
+        .map_err(retryable)?;
+        let confirmed = slot::advance_slot(
+            resolved.expect_url(),
+            &input.slot_name,
+            &input.target_lsn,
+        )
+        .await
+        .map_err(retryable)?;
+        let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let tid = TenantId::from_uuid_unchecked(input.tenant_id);
+        let ctx = common_types::ids::TenantContext::new(tid);
+        self.catalog
+            .cdc_update_confirmed_flush(ctx, pid, &confirmed)
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        tracing::info!(
+            slot = %input.slot_name,
+            confirmed_flush_lsn = %confirmed,
+            "cdc: advance_slot complete"
+        );
+        Ok(AdvanceSlotOutput { confirmed_flush_lsn: confirmed })
+    }
 }
