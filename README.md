@@ -3,7 +3,7 @@
 [![lib-tests](https://github.com/satishbabariya/etl/actions/workflows/lib-tests.yml/badge.svg?branch=main)](https://github.com/satishbabariya/etl/actions/workflows/lib-tests.yml)
 [![e2e-tests](https://github.com/satishbabariya/etl/actions/workflows/e2e-tests.yml/badge.svg?branch=main)](https://github.com/satishbabariya/etl/actions/workflows/e2e-tests.yml)
 
-Rust + Temporal + WebAssembly ETL platform targeting the Fivetran ingestion market. Full architecture across 23 RFCs in `docs/rfc/`, roadmap in `docs/superpowers/specs/2026-04-22-implementation-roadmap-design.md`, current phase plan in `docs/superpowers/plans/2026-04-22-phase-1-2-first-pipeline.md`.
+Rust + Temporal + WebAssembly ETL platform targeting the Fivetran ingestion market. Full architecture across 23 RFCs in `docs/rfc/`, roadmap in `docs/superpowers/specs/2026-04-22-implementation-roadmap-design.md`, phase plans in `docs/superpowers/plans/`.
 
 ## Prerequisites
 
@@ -109,7 +109,11 @@ DATABASE_URL=postgres://etl:etl@localhost:5432/etl_catalog \
 
 ## Phase
 
-Currently: **Phase II.3.i — CI harness with e2e enablement (complete)** on top of II.3.h. GitHub Actions runs `cargo test --workspace --lib` on every push and PR via `lib-tests.yml`. On every push to `main`, `e2e-tests.yml` brings up the docker-compose stack (Postgres + Temporal + Vault) and runs a curated 4-test e2e subset: `mysql_cdc_wasm_e2e`, `postgres_cdc_wasm_e2e`, `wasm_connector`, `mysql_cdc_e2e`. The auth keystore parallel-test flake (`ETL_MASTER_KEY` env-var contention between keystore.rs and jwt.rs tests) is fixed via `serial_test`. `make stack` / `make lib-tests` / `make e2e` mirror the CI flow locally. Multi-table CDC (II.3.g) is the next big phase — wants its own brainstorm decomposition. Then real **Phase II.4** (Helm + Terraform + `platform install`) and **II.5** (customer dashboards + lineage + read-only UI).
+Currently: **Postgres destination loader complete (II.3 loader track, phases 2-4a → 2-4d)** — base DB→DB loader, CDC-aware i/u/s/d routing, multi-table routing by `LoadId.stream_name`, and destination-side schema evolution (additive + destructive DDL), all validated by a real-world pg→pg e2e (PR #51) that runs both the cursor-mode `PipelineRunWorkflow` path and the CDC path. Alongside it: **phase 2-3k** added the `advance_slot` activity so Postgres CDC replication slots are advanced after `commit_cursor` (bounded WAL retention), and **phase 2-6a** landed the metering foundation (`crates/metering`: `MeteringEvent`/`MeteringSink`, RLS-scoped `metering_events` table, `read_batch`/`load_batch` emit Rows/Bytes Read/Written — closes the RFC-17 gap at MVP level).
+
+CI: `lib-tests.yml` runs `cargo test --workspace --lib` on every push/PR; `e2e-tests.yml` runs a curated e2e subset against the docker-compose stack (Postgres + Temporal + Vault) on pushes to `main`. `make stack` / `make lib-tests` / `make e2e` mirror CI locally.
+
+Next up: **Phase II.4** self-hosted packaging (Helm + Terraform + `platform install`), **II.5** (customer dashboards + lineage + read-only UI), and deferred metering follow-ups (queued durable sink, `pipeline_id` on `ReadBatchInput`, ComputeMs/WasmFuel emission). Snowflake and BigQuery loaders remain open on the II.3 loader track.
 
 ## Auth (Phase II.2.b + II.2.c)
 
