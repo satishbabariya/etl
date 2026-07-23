@@ -44,15 +44,17 @@ jobs:
       - name: Build workspace binaries
         run: cargo build --workspace --locked
 
-      # --no-run only compiles the test binary (4 of 34 integration
-      # tests). Building --all-targets would also link the other 30
-      # ignored test binaries and overflows ubuntu-latest's ~14 GB disk.
+      # --no-run only compiles the curated test binaries (5 of the
+      # integration tests). Building --all-targets would also link the
+      # other ~30 ignored test binaries and overflows ubuntu-latest's
+      # ~14 GB disk.
       - name: Pre-compile curated e2e test binaries
         run: |
           cargo test -p integration-tests --test mysql_cdc_wasm_e2e --no-run --locked
           cargo test -p integration-tests --test postgres_cdc_wasm_e2e --no-run --locked
           cargo test -p integration-tests --test wasm_connector --no-run --locked
           cargo test -p integration-tests --test mysql_cdc_e2e --no-run --locked
+          cargo test -p integration-tests --test pg_loader_real_e2e --no-run --locked
 
       # --test-threads=1: tests in mysql_cdc_e2e share catalog state
       # (truncate_all_for_tests + create_pipeline) and stomp on each
@@ -69,6 +71,13 @@ jobs:
 
       - name: e2e — mysql_cdc (native)
         run: cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture --test-threads=1
+
+      # Full-stack loader e2e: WASM PG CDC → PostgresLoader and native PG
+      # cursor → PostgresLoader, both through Temporal. Shares the catalog
+      # (truncate_all_for_tests), so it must stay single-threaded and run
+      # after the other catalog-touching binaries.
+      - name: e2e — pg_loader_real (full stack)
+        run: cargo test -p integration-tests --test pg_loader_real_e2e -- --ignored --nocapture --test-threads=1
 
       - name: docker compose logs (on failure)
         if: failure()

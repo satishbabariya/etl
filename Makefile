@@ -21,3 +21,4 @@ e2e: stack build
 	cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
 	cargo test -p integration-tests --test wasm_connector -- --ignored --nocapture --test-threads=1
 	cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture --test-threads=1
+	cargo test -p integration-tests --test pg_loader_real_e2e -- --ignored --nocapture --test-threads=1
