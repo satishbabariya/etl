@@ -2,3 +2,4 @@
 pub mod cdc_parquet;
 pub mod parquet_local;
 pub mod postgres;
+pub mod snowflake;

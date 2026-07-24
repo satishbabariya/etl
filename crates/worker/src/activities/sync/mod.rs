@@ -25,6 +25,7 @@ fn loader_name(dest: &common_types::pipeline_spec::DestinationSpec) -> &'static 
     match dest {
         common_types::pipeline_spec::DestinationSpec::LocalParquet(_) => "local_parquet",
         common_types::pipeline_spec::DestinationSpec::Postgres(_) => "postgres",
+        common_types::pipeline_spec::DestinationSpec::Snowflake(_) => "snowflake",
     }
 }
 use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
@@ -295,6 +296,10 @@ impl SyncActivities {
                     .load(&input.destination, load_id.clone(), batch)
                     .await
             }
+            // Wired for real in phase-2-5a-8 once SnowflakeLoader lands.
+            common_types::pipeline_spec::DestinationSpec::Snowflake(_) => {
+                Err(anyhow::anyhow!("snowflake loader dispatch lands in phase-2-5a-8"))
+            }
         }
         .map_err(to_retryable)?;
         metrics::counter!(
@@ -338,7 +343,8 @@ impl SyncActivities {
                         p.push(format!("batch-{:05}.parquet", input.batch_seq));
                         p
                     }
-                    common_types::pipeline_spec::DestinationSpec::Postgres(_) => {
+                    common_types::pipeline_spec::DestinationSpec::Postgres(_)
+                    | common_types::pipeline_spec::DestinationSpec::Snowflake(_) => {
                         unreachable!("guarded by dl_supported");
                     }
                 };
