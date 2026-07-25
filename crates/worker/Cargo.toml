@@ -60,6 +60,12 @@ zeroize = { workspace = true }
 vaultrs = { workspace = true }
 audit = { workspace = true }
 
+jsonwebtoken = { workspace = true }
+rsa = { workspace = true }
+sha2 = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"
 wat = "1"
+rand = "0.8"
+wiremock = "0.6"
