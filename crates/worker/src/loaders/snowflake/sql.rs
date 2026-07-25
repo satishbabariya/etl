@@ -139,6 +139,85 @@ pub fn sql_literal(col: &dyn Array, row: usize) -> anyhow::Result<String> {
     })
 }
 
+pub const LOG_TABLE: &str = "_ETL_LOADED_BATCHES";
+
+pub fn qualified(db: &str, schema: &str, table: &str) -> anyhow::Result<String> {
+    Ok(format!(
+        "{}.{}.{}",
+        quote_ident(db)?,
+        quote_ident(schema)?,
+        quote_ident(table)?
+    ))
+}
+
+pub fn ensure_log_table_ddl(db: &str, schema: &str) -> anyhow::Result<String> {
+    Ok(format!(
+        "CREATE TABLE IF NOT EXISTS {} (\
+         TENANT_ID TEXT NOT NULL, PIPELINE_ID TEXT NOT NULL, \
+         RUN_ID TEXT NOT NULL, STREAM_NAME TEXT NOT NULL, \
+         BATCH_SEQ BIGINT NOT NULL, ROWS_LOADED BIGINT NOT NULL, \
+         LOADED_AT TIMESTAMP_TZ NOT NULL DEFAULT CURRENT_TIMESTAMP(), \
+         PRIMARY KEY (TENANT_ID, PIPELINE_ID, RUN_ID, STREAM_NAME, BATCH_SEQ))",
+        qualified(db, schema, LOG_TABLE)?
+    ))
+}
+
+pub fn ensure_target_table_ddl(
+    db: &str,
+    schema: &str,
+    table: &str,
+    arrow_schema: &arrow::datatypes::Schema,
+) -> anyhow::Result<String> {
+    let cols: Vec<String> = arrow_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            Ok(format!(
+                "{} {}",
+                quote_ident(f.name())?,
+                snowflake_type_for(f.data_type())?
+            ))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    Ok(format!(
+        "CREATE TABLE IF NOT EXISTS {} ({})",
+        qualified(db, schema, table)?,
+        cols.join(", ")
+    ))
+}
+
+pub fn check_loaded_sql(db: &str, schema: &str, id: &loader_sdk::LoadId) -> anyhow::Result<String> {
+    Ok(format!(
+        "SELECT ROWS_LOADED FROM {} WHERE TENANT_ID = '{}' AND PIPELINE_ID = '{}' \
+         AND RUN_ID = '{}' AND STREAM_NAME = {} AND BATCH_SEQ = {}",
+        qualified(db, schema, LOG_TABLE)?,
+        id.tenant_id.as_uuid(),
+        id.pipeline_id.as_uuid(),
+        id.run_id.as_uuid(),
+        escape_str(&id.stream_name),
+        id.batch_seq,
+    ))
+}
+
+pub fn log_insert_sql(
+    db: &str,
+    schema: &str,
+    id: &loader_sdk::LoadId,
+    rows: usize,
+) -> anyhow::Result<String> {
+    Ok(format!(
+        "INSERT INTO {} (TENANT_ID, PIPELINE_ID, RUN_ID, STREAM_NAME, BATCH_SEQ, ROWS_LOADED) \
+         VALUES ('{}', '{}', '{}', {}, {}, {})",
+        qualified(db, schema, LOG_TABLE)?,
+        id.tenant_id.as_uuid(),
+        id.pipeline_id.as_uuid(),
+        id.run_id.as_uuid(),
+        escape_str(&id.stream_name),
+        id.batch_seq,
+        rows,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +227,50 @@ mod tests {
     };
     use arrow::datatypes::{DataType, TimeUnit};
     use std::sync::Arc;
+
+    fn load_id() -> loader_sdk::LoadId {
+        loader_sdk::LoadId {
+            tenant_id: common_types::ids::TenantId::from_uuid_unchecked(uuid::Uuid::nil()),
+            pipeline_id: common_types::ids::PipelineId::from_uuid_unchecked(uuid::Uuid::nil()),
+            run_id: common_types::ids::RunId::from_uuid_unchecked(uuid::Uuid::nil()),
+            batch_seq: 7,
+            stream_name: "public.items".into(),
+        }
+    }
+
+    #[test]
+    fn log_table_ddl_shape() {
+        let ddl = ensure_log_table_ddl("DB", "RAW").unwrap();
+        assert!(
+            ddl.starts_with("CREATE TABLE IF NOT EXISTS \"DB\".\"RAW\".\"_ETL_LOADED_BATCHES\""),
+            "got {ddl}"
+        );
+        assert!(ddl.contains("BATCH_SEQ"));
+    }
+
+    #[test]
+    fn target_ddl_from_arrow_schema() {
+        let schema = arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+            arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]);
+        let ddl = ensure_target_table_ddl("DB", "RAW", "customers", &schema).unwrap();
+        assert_eq!(
+            ddl,
+            "CREATE TABLE IF NOT EXISTS \"DB\".\"RAW\".\"customers\" (\"id\" BIGINT, \"name\" TEXT)"
+        );
+    }
+
+    #[test]
+    fn check_and_log_sql_carry_full_load_id() {
+        let id = load_id();
+        let check = check_loaded_sql("DB", "RAW", &id).unwrap();
+        assert!(check.contains("BATCH_SEQ = 7"), "got {check}");
+        assert!(check.contains("STREAM_NAME = 'public.items'"), "got {check}");
+        let ins = log_insert_sql("DB", "RAW", &id, 42).unwrap();
+        assert!(ins.contains("42"), "got {ins}");
+        assert!(ins.contains(&uuid::Uuid::nil().to_string()), "got {ins}");
+    }
 
     #[test]
     fn idents_quoted_and_validated() {
