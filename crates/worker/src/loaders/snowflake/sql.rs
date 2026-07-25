@@ -218,6 +218,87 @@ pub fn log_insert_sql(
     ))
 }
 
+fn rendered_rows(batch: &arrow::record_batch::RecordBatch) -> anyhow::Result<Vec<String>> {
+    (0..batch.num_rows())
+        .map(|row| {
+            let vals: Vec<String> = batch
+                .columns()
+                .iter()
+                .map(|c| sql_literal(c.as_ref(), row))
+                .collect::<anyhow::Result<_>>()?;
+            Ok(format!("({})", vals.join(", ")))
+        })
+        .collect()
+}
+
+fn quoted_columns(batch: &arrow::record_batch::RecordBatch) -> anyhow::Result<Vec<String>> {
+    batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| quote_ident(f.name()))
+        .collect()
+}
+
+pub fn append_insert_sql(
+    db: &str,
+    schema: &str,
+    table: &str,
+    batch: &arrow::record_batch::RecordBatch,
+) -> anyhow::Result<String> {
+    let cols = quoted_columns(batch)?;
+    let rows = rendered_rows(batch)?;
+    Ok(format!(
+        "INSERT INTO {} ({}) VALUES {}",
+        qualified(db, schema, table)?,
+        cols.join(", "),
+        rows.join(", ")
+    ))
+}
+
+pub fn merge_upsert_sql(
+    db: &str,
+    schema: &str,
+    table: &str,
+    batch: &arrow::record_batch::RecordBatch,
+    pk_columns: &[String],
+) -> anyhow::Result<String> {
+    let schema_ref = batch.schema();
+    let names: Vec<&str> = schema_ref.fields().iter().map(|f| f.name().as_str()).collect();
+    for pk in pk_columns {
+        anyhow::ensure!(names.contains(&pk.as_str()), "pk column {pk:?} not in batch");
+    }
+    let cols = quoted_columns(batch)?;
+    let rows = rendered_rows(batch)?;
+    let on: Vec<String> = pk_columns
+        .iter()
+        .map(|pk| Ok(format!("t.{q} = s.{q}", q = quote_ident(pk)?)))
+        .collect::<anyhow::Result<_>>()?;
+    let non_pk: Vec<String> = schema_ref
+        .fields()
+        .iter()
+        .filter(|f| !pk_columns.iter().any(|pk| pk == f.name()))
+        .map(|f| Ok(format!("t.{q} = s.{q}", q = quote_ident(f.name())?)))
+        .collect::<anyhow::Result<_>>()?;
+    let insert_vals: Vec<String> = cols.iter().map(|c| format!("s.{c}")).collect();
+    let matched = if non_pk.is_empty() {
+        String::new()
+    } else {
+        format!(" WHEN MATCHED THEN UPDATE SET {}", non_pk.join(", "))
+    };
+    Ok(format!(
+        "MERGE INTO {} AS t USING (SELECT * FROM VALUES {} AS v({})) AS s ON {}{} \
+         WHEN NOT MATCHED THEN INSERT ({}) VALUES ({})",
+        qualified(db, schema, table)?,
+        rows.join(", "),
+        cols.join(", "),
+        on.join(" AND "),
+        matched,
+        cols.join(", "),
+        insert_vals.join(", "),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +351,66 @@ mod tests {
         let ins = log_insert_sql("DB", "RAW", &id, 42).unwrap();
         assert!(ins.contains("42"), "got {ins}");
         assert!(ins.contains(&uuid::Uuid::nil().to_string()), "got {ins}");
+    }
+
+    fn two_row_batch() -> arrow::record_batch::RecordBatch {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+            arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]));
+        arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn append_insert_renders_all_rows() {
+        let sql = append_insert_sql("DB", "RAW", "t", &two_row_batch()).unwrap();
+        assert_eq!(
+            sql,
+            "INSERT INTO \"DB\".\"RAW\".\"t\" (\"id\", \"name\") VALUES (1, 'a'), (2, NULL)"
+        );
+    }
+
+    #[test]
+    fn merge_upsert_shape() {
+        let sql = merge_upsert_sql("DB", "RAW", "t", &two_row_batch(), &["id".into()]).unwrap();
+        assert!(
+            sql.starts_with(
+                "MERGE INTO \"DB\".\"RAW\".\"t\" AS t USING (SELECT * FROM VALUES (1, 'a'), (2, NULL) AS v(\"id\", \"name\")) AS s ON t.\"id\" = s.\"id\""
+            ),
+            "got: {sql}"
+        );
+        assert!(sql.contains("WHEN MATCHED THEN UPDATE SET t.\"name\" = s.\"name\""), "got {sql}");
+        assert!(
+            sql.contains("WHEN NOT MATCHED THEN INSERT (\"id\", \"name\") VALUES (s.\"id\", s.\"name\")"),
+            "got {sql}"
+        );
+    }
+
+    #[test]
+    fn merge_all_pk_columns_skips_update_clause() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![1]))],
+        )
+        .unwrap();
+        let sql = merge_upsert_sql("DB", "RAW", "t", &batch, &["id".into()]).unwrap();
+        assert!(!sql.contains("WHEN MATCHED THEN UPDATE"), "got {sql}");
+        assert!(sql.contains("WHEN NOT MATCHED THEN INSERT"), "got {sql}");
+    }
+
+    #[test]
+    fn merge_missing_pk_errors() {
+        assert!(merge_upsert_sql("DB", "RAW", "t", &two_row_batch(), &["nope".into()]).is_err());
     }
 
     #[test]
