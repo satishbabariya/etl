@@ -83,4 +83,3 @@ pub async fn resolve_connection_audited(
         "ConnectionConfig has neither `url` nor `url_secret` populated"
     ))
 }
-

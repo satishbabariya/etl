@@ -25,7 +25,10 @@ impl FileSecrets {
     }
 
     pub fn with_path(path: PathBuf) -> Self {
-        Self { path, cache: RwLock::new(HashMap::new()) }
+        Self {
+            path,
+            cache: RwLock::new(HashMap::new()),
+        }
     }
 
     fn load(&self) -> Result<HashMap<String, String>> {

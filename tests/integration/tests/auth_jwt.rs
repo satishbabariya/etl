@@ -20,7 +20,9 @@ fn workspace_root() -> PathBuf {
     p
 }
 
-async fn spawn_issuer(port: u16) -> anyhow::Result<(tokio::process::Child, tempfile::TempDir, String)> {
+async fn spawn_issuer(
+    port: u16,
+) -> anyhow::Result<(tokio::process::Child, tempfile::TempDir, String)> {
     let keys = tempfile::tempdir()?;
     Command::new(cargo_bin("etl-auth"))
         .args(["--keys-dir", keys.path().to_str().unwrap(), "init-issuer"])
@@ -80,8 +82,15 @@ async fn login_then_whoami_returns_principal() -> anyhow::Result<()> {
         .await?;
     Command::new(cargo_bin("platform"))
         .args([
-            "auth", "create-principal", "--tenant", "ack",
-            "alice", "--password", "pw", "--role", "operator",
+            "auth",
+            "create-principal",
+            "--tenant",
+            "ack",
+            "alice",
+            "--password",
+            "pw",
+            "--role",
+            "operator",
         ])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
@@ -142,8 +151,15 @@ async fn login_with_wrong_password_rejects() -> anyhow::Result<()> {
         .await?;
     Command::new(cargo_bin("platform"))
         .args([
-            "auth", "create-principal", "--tenant", "ack2",
-            "bob", "--password", "right", "--role", "viewer",
+            "auth",
+            "create-principal",
+            "--tenant",
+            "ack2",
+            "bob",
+            "--password",
+            "right",
+            "--role",
+            "viewer",
         ])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")

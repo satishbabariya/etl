@@ -111,10 +111,15 @@ async fn rows_in(pool: &sqlx::PgPool, schema: &str) -> Vec<(i64, Option<String>)
 
 #[tokio::test]
 async fn cdc_inserts_create_rows() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
     let batch = batch_of(&[(1, Some("a"), "i"), (2, Some("b"), "i")]);
-    PostgresLoader.load(&s, load_id(0), batch).await.expect("load");
+    PostgresLoader
+        .load(&s, load_id(0), batch)
+        .await
+        .expect("load");
 
     let rows = rows_in(&pool, &schema).await;
     assert_eq!(rows, vec![(1, Some("a".into())), (2, Some("b".into()))]);
@@ -123,7 +128,9 @@ async fn cdc_inserts_create_rows() {
 
 #[tokio::test]
 async fn cdc_updates_overwrite_rows() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     PostgresLoader
@@ -141,7 +148,9 @@ async fn cdc_updates_overwrite_rows() {
 
 #[tokio::test]
 async fn cdc_deletes_remove_rows() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     PostgresLoader
@@ -163,7 +172,9 @@ async fn cdc_deletes_remove_rows() {
 
 #[tokio::test]
 async fn cdc_mixed_batch_applies_in_order() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     // Seed.
@@ -198,7 +209,9 @@ async fn cdc_mixed_batch_applies_in_order() {
 
 #[tokio::test]
 async fn cdc_snapshot_then_streaming_converges() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     // Snapshot phase — `s` rows treated like upserts.
@@ -233,7 +246,9 @@ async fn cdc_snapshot_then_streaming_converges() {
 
 #[tokio::test]
 async fn cdc_retry_with_same_load_id_is_noop() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
     let lid = load_id(0);
 
@@ -254,7 +269,9 @@ async fn cdc_retry_with_same_load_id_is_noop() {
 
 #[tokio::test]
 async fn cdc_destination_table_has_no_metadata_columns() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
     PostgresLoader
         .load(&s, load_id(0), batch_of(&[(1, Some("a"), "i")]))

@@ -6,11 +6,8 @@ use catalog::Catalog;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn spawn_slot_lag_poller<F>(
-    catalog: Arc<Catalog>,
-    source_url_resolver: F,
-    interval: Duration,
-) where
+pub fn spawn_slot_lag_poller<F>(catalog: Arc<Catalog>, source_url_resolver: F, interval: Duration)
+where
     F: Fn(uuid::Uuid) -> Option<String> + Send + Sync + 'static,
 {
     tokio::spawn(async move {
@@ -47,7 +44,9 @@ pub fn spawn_slot_lag_poller<F>(
             };
             let _ = tx.commit().await;
             for (pipeline_id, slot_name, tenant_id) in rows {
-                let Some(url) = source_url_resolver(pipeline_id) else { continue };
+                let Some(url) = source_url_resolver(pipeline_id) else {
+                    continue;
+                };
                 match crate::connectors::postgres::cdc::slot::slot_lag_bytes(&url, &slot_name).await
                 {
                     Ok(lag) => {

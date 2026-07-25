@@ -10,10 +10,7 @@ pub struct Tenant {
     pub created_at: DateTime<Utc>,
 }
 
-pub async fn create(
-    conn: &mut sqlx::PgConnection,
-    name: &str,
-) -> sqlx::Result<TenantId> {
+pub async fn create(conn: &mut sqlx::PgConnection, name: &str) -> sqlx::Result<TenantId> {
     let id = TenantId::new();
     sqlx::query("INSERT INTO tenants (tenant_id, name) VALUES ($1, $2)")
         .bind(id.as_uuid())
@@ -23,10 +20,7 @@ pub async fn create(
     Ok(id)
 }
 
-pub async fn get(
-    conn: &mut sqlx::PgConnection,
-    id: TenantId,
-) -> sqlx::Result<Option<Tenant>> {
+pub async fn get(conn: &mut sqlx::PgConnection, id: TenantId) -> sqlx::Result<Option<Tenant>> {
     let row: Option<(uuid::Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
         "SELECT tenant_id, name, status, created_at FROM tenants WHERE tenant_id = $1",
     )
@@ -45,12 +39,11 @@ pub async fn get_by_name(
     conn: &mut sqlx::PgConnection,
     name: &str,
 ) -> sqlx::Result<Option<Tenant>> {
-    let row: Option<(uuid::Uuid, String, String, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT tenant_id, name, status, created_at FROM tenants WHERE name = $1",
-    )
-    .bind(name)
-    .fetch_optional(&mut *conn)
-    .await?;
+    let row: Option<(uuid::Uuid, String, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT tenant_id, name, status, created_at FROM tenants WHERE name = $1")
+            .bind(name)
+            .fetch_optional(&mut *conn)
+            .await?;
     Ok(row.map(|(u, name, status, created_at)| Tenant {
         tenant_id: TenantId::from_uuid_unchecked(u),
         name,
@@ -76,10 +69,7 @@ pub async fn list(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<Tenant>> {
         .collect())
 }
 
-pub async fn delete(
-    conn: &mut sqlx::PgConnection,
-    id: TenantId,
-) -> sqlx::Result<()> {
+pub async fn delete(conn: &mut sqlx::PgConnection, id: TenantId) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM tenants WHERE tenant_id = $1")
         .bind(id.as_uuid())
         .execute(&mut *conn)

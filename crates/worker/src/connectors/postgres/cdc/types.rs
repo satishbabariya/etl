@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use arrow::datatypes::{DataType, TimeUnit};
-use chrono::{NaiveDate, NaiveDateTime, Timelike, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 
 /// Internal scalar mapping to the Arrow types we support in v2 CDC
 /// streaming columns. Producers (`parse_pg_text`) emit these; consumers
@@ -34,19 +34,19 @@ pub enum PgScalarValue {
 /// connectors actually exercise them.
 pub fn pg_oid_to_arrow_type(oid: u32) -> DataType {
     match oid {
-        16 => DataType::Boolean,                                              // bool
-        17 => DataType::Binary,                                               // bytea
-        20 => DataType::Int64,                                                // int8
-        21 | 23 => DataType::Int32,                                           // int2 / int4
-        25 | 1042 | 1043 => DataType::Utf8,                                   // text / bpchar / varchar
-        700 => DataType::Float32,                                             // float4
-        701 | 1700 => DataType::Float64,                                      // float8 / numeric
-        1082 => DataType::Date32,                                             // date
-        1083 => DataType::Time64(TimeUnit::Microsecond),                      // time
-        1114 => DataType::Timestamp(TimeUnit::Microsecond, None),             // timestamp
+        16 => DataType::Boolean,                                  // bool
+        17 => DataType::Binary,                                   // bytea
+        20 => DataType::Int64,                                    // int8
+        21 | 23 => DataType::Int32,                               // int2 / int4
+        25 | 1042 | 1043 => DataType::Utf8,                       // text / bpchar / varchar
+        700 => DataType::Float32,                                 // float4
+        701 | 1700 => DataType::Float64,                          // float8 / numeric
+        1082 => DataType::Date32,                                 // date
+        1083 => DataType::Time64(TimeUnit::Microsecond),          // time
+        1114 => DataType::Timestamp(TimeUnit::Microsecond, None), // timestamp
         1184 => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())), // timestamptz
-        114 | 3802 => DataType::Utf8,                                         // json / jsonb
-        2950 => DataType::Utf8,                                               // uuid
+        114 | 3802 => DataType::Utf8,                             // json / jsonb
+        2950 => DataType::Utf8,                                   // uuid
         _ => DataType::Utf8,
     }
 }
@@ -113,11 +113,11 @@ pub fn parse_pg_text(s: &str, target: &DataType) -> Result<Option<PgScalarValue>
             }
             let mut bytes = Vec::with_capacity(hex.len() / 2);
             for chunk in hex.as_bytes().chunks(2) {
-                let byte = u8::from_str_radix(
-                    std::str::from_utf8(chunk).context("BYTEA hex utf8")?,
-                    16,
-                )
-                .with_context(|| format!("parse BYTEA hex byte '{}'", String::from_utf8_lossy(chunk)))?;
+                let byte =
+                    u8::from_str_radix(std::str::from_utf8(chunk).context("BYTEA hex utf8")?, 16)
+                        .with_context(|| {
+                        format!("parse BYTEA hex byte '{}'", String::from_utf8_lossy(chunk))
+                    })?;
                 bytes.push(byte);
             }
             PgScalarValue::Binary(bytes)
@@ -202,8 +202,7 @@ pub async fn discover_pg_table_oids(
         let name: String = r.try_get("name").context("name")?;
         let type_oid: i64 = r.try_get("type_oid").context("type_oid")?;
         let is_nullable: bool = r.try_get("is_nullable").context("is_nullable")?;
-        let ordinal_position: i32 =
-            r.try_get("ordinal_position").context("ordinal_position")?;
+        let ordinal_position: i32 = r.try_get("ordinal_position").context("ordinal_position")?;
         out.push(PgColumnInfo {
             name,
             type_oid: type_oid as u32,
@@ -217,13 +216,10 @@ pub async fn discover_pg_table_oids(
 /// Build an Arrow `ArrayBuilder` for a v2 CDC data column type.
 /// Snapshot and stream both call this when constructing per-column
 /// builders for a typed `RecordBatch`.
-pub fn make_pg_builder(
-    dt: &DataType,
-) -> Result<Box<dyn arrow::array::ArrayBuilder>> {
+pub fn make_pg_builder(dt: &DataType) -> Result<Box<dyn arrow::array::ArrayBuilder>> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, StringBuilder, Time64MicrosecondBuilder,
-        TimestampMicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, StringBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder,
     };
     use std::sync::Arc;
     Ok(match dt {
@@ -255,9 +251,8 @@ pub fn append_pg_scalar(
     dt: &DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, StringBuilder, Time64MicrosecondBuilder,
-        TimestampMicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, StringBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder,
     };
     match (scalar, dt) {
         (None, DataType::Int32) => builder
@@ -355,13 +350,14 @@ pub fn append_pg_scalar(
             .downcast_mut::<TimestampMicrosecondBuilder>()
             .ok_or_else(|| anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
             .append_null(),
-        (Some(PgScalarValue::TimestampMicros(t)), DataType::Timestamp(TimeUnit::Microsecond, _)) => {
-            builder
-                .as_any_mut()
-                .downcast_mut::<TimestampMicrosecondBuilder>()
-                .ok_or_else(|| anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
-                .append_value(*t)
-        }
+        (
+            Some(PgScalarValue::TimestampMicros(t)),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => builder
+            .as_any_mut()
+            .downcast_mut::<TimestampMicrosecondBuilder>()
+            .ok_or_else(|| anyhow!("type mismatch: TimestampMicrosecondBuilder"))?
+            .append_value(*t),
         (Some(other_v), other_dt) => {
             anyhow::bail!("scalar/builder mismatch: {:?} into {:?}", other_v, other_dt)
         }
@@ -471,7 +467,10 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Microsecond, None),
         )
         .unwrap();
-        assert_eq!(v, Some(PgScalarValue::TimestampMicros(1_767_225_600_000_000)));
+        assert_eq!(
+            v,
+            Some(PgScalarValue::TimestampMicros(1_767_225_600_000_000))
+        );
     }
 
     #[test]
@@ -481,7 +480,10 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         )
         .unwrap();
-        assert_eq!(v, Some(PgScalarValue::TimestampMicros(1_767_225_600_000_000)));
+        assert_eq!(
+            v,
+            Some(PgScalarValue::TimestampMicros(1_767_225_600_000_000))
+        );
     }
 
     #[test]
@@ -510,10 +512,7 @@ mod tests {
     #[test]
     fn parse_bytea_rejects_escape_format() {
         let err = parse_pg_text("\\000\\001", &DataType::Binary).unwrap_err();
-        assert!(
-            err.to_string().contains("hex format"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("hex format"), "got: {err}");
     }
 
     #[test]
@@ -535,11 +534,7 @@ mod tests {
         // 12:30:45.123456 = (12*3600 + 30*60 + 45) * 1_000_000 + 123_456
         //                 = 45045 * 1_000_000 + 123_456
         //                 = 45_045_123_456
-        let v = parse_pg_text(
-            "12:30:45.123456",
-            &DataType::Time64(TimeUnit::Microsecond),
-        )
-        .unwrap();
+        let v = parse_pg_text("12:30:45.123456", &DataType::Time64(TimeUnit::Microsecond)).unwrap();
         assert_eq!(v, Some(PgScalarValue::Time64Micros(45_045_123_456)));
     }
 

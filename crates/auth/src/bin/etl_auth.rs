@@ -3,7 +3,13 @@ use auth::jwks::jwks_from_keystore;
 use auth::jwt::JwtIssuer;
 use auth::keystore::Keystore;
 use auth::refresh;
-use axum::{extract::State, http::StatusCode, response::Json, routing::{get, post}, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::Json,
+    routing::{get, post},
+    Router,
+};
 use catalog::{Catalog, NewRefreshToken};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -86,8 +92,7 @@ fn keys_dir(arg: Option<PathBuf>) -> PathBuf {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
     let cli = Cli::parse();
@@ -126,7 +131,17 @@ async fn main() -> Result<()> {
             audience,
             database_url,
             audit_retention_days,
-        } => serve(ks, bind, issuer_url, audience, database_url, audit_retention_days).await,
+        } => {
+            serve(
+                ks,
+                bind,
+                issuer_url,
+                audience,
+                database_url,
+                audit_retention_days,
+            )
+            .await
+        }
         Cmd::VerifyOnce { database_url } => {
             let cat = Catalog::connect(&database_url).await?;
             cat.migrate().await?;
@@ -177,8 +192,7 @@ async fn serve(
         audience,
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let job_handles =
-        auth::jobs::spawn_all(cat.clone(), audit_retention_days, shutdown_rx.clone());
+    let job_handles = auth::jobs::spawn_all(cat.clone(), audit_retention_days, shutdown_rx.clone());
     let app = Router::new()
         .route("/.well-known/jwks.json", get(jwks_endpoint))
         .route("/auth/login", post(login_endpoint))
@@ -214,8 +228,8 @@ async fn readyz_endpoint(State(s): State<AppState>) -> axum::http::StatusCode {
 }
 
 async fn jwks_endpoint(State(s): State<AppState>) -> Json<auth::jwks::JwkSet> {
-    let set = jwks_from_keystore(&s.keystore)
-        .unwrap_or_else(|_| auth::jwks::JwkSet { keys: vec![] });
+    let set =
+        jwks_from_keystore(&s.keystore).unwrap_or_else(|_| auth::jwks::JwkSet { keys: vec![] });
     Json(set)
 }
 
@@ -316,8 +330,8 @@ async fn login_endpoint(
         serde_json::json!({}),
     )
     .await;
-    let (secret, hash, exp) = refresh::mint()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (secret, hash, exp) =
+        refresh::mint().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let token_id = s
         .catalog
         .refresh_create(
@@ -374,7 +388,10 @@ async fn refresh_endpoint(
         .refresh_get(token_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::UNAUTHORIZED, "refresh token unknown or expired".into()))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "refresh token unknown or expired".into(),
+        ))?;
     if !refresh::verify(secret, &row.hash) {
         return Err((StatusCode::UNAUTHORIZED, "invalid refresh token".into()));
     }
@@ -393,8 +410,8 @@ async fn refresh_endpoint(
     let role: Role = serde_json::from_str(&format!("\"{}\"", p.role))
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "bad role".into()))?;
     let mut resp = issue_pair(&s, &p, role)?;
-    let (new_secret, new_hash, new_exp) = refresh::mint()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (new_secret, new_hash, new_exp) =
+        refresh::mint().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let new_id = s
         .catalog
         .refresh_create(

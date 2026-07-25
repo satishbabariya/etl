@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use common_types::connection_config::ConnectionConfig;
 use common_types::pipeline_spec::PostgresSourceSpec;
@@ -7,10 +7,7 @@ use std::sync::Arc;
 
 /// Introspect a Postgres table via `information_schema` and produce an
 /// Arrow schema. Phase I.2 supported types: bigint, text, timestamptz.
-pub async fn run(
-    conn: &ConnectionConfig,
-    spec: &PostgresSourceSpec,
-) -> anyhow::Result<SchemaRef> {
+pub async fn run(conn: &ConnectionConfig, spec: &PostgresSourceSpec) -> anyhow::Result<SchemaRef> {
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(conn.expect_url())
@@ -30,7 +27,11 @@ pub async fn run(
     .with_context(|| format!("introspecting {}.{}", spec.schema, spec.table))?;
 
     if rows.is_empty() {
-        bail!("table {}.{} not found or has no columns", spec.schema, spec.table);
+        bail!(
+            "table {}.{} not found or has no columns",
+            spec.schema,
+            spec.table
+        );
     }
 
     let mut fields = Vec::with_capacity(rows.len());
@@ -86,10 +87,19 @@ mod tests {
         .unwrap();
 
         let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(names, vec!["id", "name", "email", "created_at", "updated_at"]);
+        assert_eq!(
+            names,
+            vec!["id", "name", "email", "created_at", "updated_at"]
+        );
 
-        assert_eq!(schema.field_with_name("id").unwrap().data_type(), &DataType::Int64);
-        assert_eq!(schema.field_with_name("name").unwrap().data_type(), &DataType::Utf8);
+        assert_eq!(
+            schema.field_with_name("id").unwrap().data_type(),
+            &DataType::Int64
+        );
+        assert_eq!(
+            schema.field_with_name("name").unwrap().data_type(),
+            &DataType::Utf8
+        );
         assert!(!schema.field_with_name("name").unwrap().is_nullable());
         assert!(schema.field_with_name("email").unwrap().is_nullable());
     }

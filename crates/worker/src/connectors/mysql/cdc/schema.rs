@@ -84,12 +84,14 @@ pub async fn discover_columns(
     }
     Ok(rows
         .into_iter()
-        .map(|(column_name, data_type, is_nullable, ordinal_position)| InfoSchemaColumn {
-            column_name,
-            data_type,
-            is_nullable: is_nullable.eq_ignore_ascii_case("YES"),
-            ordinal_position,
-        })
+        .map(
+            |(column_name, data_type, is_nullable, ordinal_position)| InfoSchemaColumn {
+                column_name,
+                data_type,
+                is_nullable: is_nullable.eq_ignore_ascii_case("YES"),
+                ordinal_position,
+            },
+        )
         .collect())
 }
 
@@ -159,7 +161,14 @@ mod tests {
         let names: Vec<&str> = s.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(
             names,
-            vec!["id", "email", "created", "_cdc.op", "_cdc.lsn", "_cdc.commit_ts"]
+            vec![
+                "id",
+                "email",
+                "created",
+                "_cdc.op",
+                "_cdc.lsn",
+                "_cdc.commit_ts"
+            ]
         );
         // v2: typed data columns.
         assert_eq!(s.field(0).data_type(), &DataType::Int64);

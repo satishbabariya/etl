@@ -48,10 +48,7 @@ enum Cmd {
         file: String,
     },
     /// Print a catalog resource as YAML.
-    Get {
-        kind: String,
-        name: String,
-    },
+    Get { kind: String, name: String },
     /// Parse YAML and resolve references without writing to the catalog.
     Validate {
         #[arg(short, long)]
@@ -207,9 +204,7 @@ enum ConnectorCmd {
         out: Option<String>,
     },
     /// Build (wasm32-wasip2) and run host-side unit tests for a connector crate.
-    Test {
-        path: String,
-    },
+    Test { path: String },
     /// Build the connector and write to a local registry directory.
     Publish {
         path: String,
@@ -244,29 +239,44 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let tenant_override = cli.tenant.clone();
     match cli.cmd {
-        Cmd::Pipeline { cmd: PipelineCmd::Run { id } } => {
-            pipeline_run(id, tenant_override.as_deref()).await
-        }
-        Cmd::Pipeline { cmd: PipelineCmd::Status { id } } => status::run(id).await,
+        Cmd::Pipeline {
+            cmd: PipelineCmd::Run { id },
+        } => pipeline_run(id, tenant_override.as_deref()).await,
+        Cmd::Pipeline {
+            cmd: PipelineCmd::Status { id },
+        } => status::run(id).await,
         Cmd::Connector { cmd } => match cmd {
-            ConnectorCmd::Create { name, kind, lang, out } => {
-                connector_cmd::create(name, kind, lang, out).await
-            }
+            ConnectorCmd::Create {
+                name,
+                kind,
+                lang,
+                out,
+            } => connector_cmd::create(name, kind, lang, out).await,
             ConnectorCmd::Test { path } => connector_cmd::test(path).await,
-            ConnectorCmd::Publish { path, registry, version } => {
-                connector_cmd::publish(path, registry, version).await
-            }
-            ConnectorCmd::Build { path, name, version, out, kind } => {
-                connector_cmd::build(path, name, version, out, kind).await
-            }
+            ConnectorCmd::Publish {
+                path,
+                registry,
+                version,
+            } => connector_cmd::publish(path, registry, version).await,
+            ConnectorCmd::Build {
+                path,
+                name,
+                version,
+                out,
+                kind,
+            } => connector_cmd::build(path, name, version, out, kind).await,
         },
         Cmd::Apply { file } => apply_cmd(file, tenant_override.as_deref()).await,
         Cmd::Get { kind, name } => get_cmd(kind, name, tenant_override.as_deref()).await,
         Cmd::Validate { file } => validate_cmd(file).await,
         Cmd::Diff { file } => diff_cmd(file, tenant_override.as_deref()).await,
-        Cmd::Workflow { cmd: WorkflowCmd::Terminate { workflow_id, reason } } => {
-            terminate::terminate(workflow_id, reason).await
-        }
+        Cmd::Workflow {
+            cmd:
+                WorkflowCmd::Terminate {
+                    workflow_id,
+                    reason,
+                },
+        } => terminate::terminate(workflow_id, reason).await,
         Cmd::Tenant { cmd } => {
             // Tenant subcommands need Admin role except `list`. Revocation
             // check happens inside each tenant::* function via the catalog
@@ -289,9 +299,11 @@ async fn main() -> anyhow::Result<()> {
                 let key = key.unwrap_or_else(|| name.clone());
                 secret::create(name, backend, key).await
             }
-            SecretCmd::Put { name, value, register } => {
-                secret::put(name, value, register).await
-            }
+            SecretCmd::Put {
+                name,
+                value,
+                register,
+            } => secret::put(name, value, register).await,
             SecretCmd::List => secret::list().await,
             SecretCmd::Delete { name } => secret::delete(name).await,
         },
@@ -300,9 +312,12 @@ async fn main() -> anyhow::Result<()> {
             AuthCmd::Whoami => auth::whoami().await,
             AuthCmd::Refresh => auth::refresh_now().await,
             AuthCmd::Logout => auth::logout().await,
-            AuthCmd::CreatePrincipal { tenant, name, password, role } => {
-                auth::create_principal(tenant, name, password, role).await
-            }
+            AuthCmd::CreatePrincipal {
+                tenant,
+                name,
+                password,
+                role,
+            } => auth::create_principal(tenant, name, password, role).await,
         },
         Cmd::Audit { cmd } => match cmd {
             AuditCmd::Tail { limit } => audit_cmd::tail(tenant_override.clone(), limit).await,
@@ -484,8 +499,8 @@ async fn diff_cmd(file: String, tenant_override: Option<&str>) -> anyhow::Result
 // connector_build + read_toml_value moved to crates/cli/src/connector_cmd.rs
 
 async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::Result<()> {
-    let pipeline_id = parse_pipeline_id(&id_str)
-        .with_context(|| format!("parsing pipeline id '{}'", id_str))?;
+    let pipeline_id =
+        parse_pipeline_id(&id_str).with_context(|| format!("parsing pipeline id '{}'", id_str))?;
 
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
@@ -545,11 +560,7 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
     };
 
     let (cursor_column, cursor_kind, pk_columns) = match &spec.source {
-        SourceSpec::Postgres(p) => (
-            p.cursor_column.clone(),
-            p.cursor_kind,
-            p.pk_columns.clone(),
-        ),
+        SourceSpec::Postgres(p) => (p.cursor_column.clone(), p.cursor_kind, p.pk_columns.clone()),
         SourceSpec::Wasm(_) => (
             "_row_index".to_string(),
             common_types::cursor::CursorKind::Int64,
@@ -570,7 +581,9 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
     let evolution_policy = pipeline
         .spec
         .get("evolution_policy")
-        .and_then(|v| serde_json::from_value::<common_types::evolution::EvolutionPolicy>(v.clone()).ok())
+        .and_then(|v| {
+            serde_json::from_value::<common_types::evolution::EvolutionPolicy>(v.clone()).ok()
+        })
         .unwrap_or_default();
 
     let initial_cursor = catalog

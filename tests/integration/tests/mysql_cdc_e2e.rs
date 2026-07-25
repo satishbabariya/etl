@@ -9,9 +9,9 @@
 //!   6. Poll until parquet has 3 rows with _cdc.op = ['i', 'u', 'd'].
 
 use anyhow::Context;
+use arrow::array::Array;
 use catalog::{Catalog, NewConnection, NewPipeline};
 use mysql_async::prelude::*;
-use arrow::array::Array;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::json;
 use std::path::{Path, PathBuf};

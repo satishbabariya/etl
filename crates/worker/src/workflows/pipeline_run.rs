@@ -20,10 +20,10 @@ use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, Work
 use uuid::Uuid;
 
 use crate::activities::run_lifecycle::RunLifecycleActivities;
-use crate::activities::sync::SyncActivities;
 use crate::activities::sync::inputs::{
     CommitCursorInput, DiscoverInput, LoadBatchInput, ReadBatchInput,
 };
+use crate::activities::sync::SyncActivities;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PipelineRunInput {
@@ -72,9 +72,15 @@ pub struct PipelineRunWorkflow {
 fn retry_policy() -> temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
     use prost_wkt_types::Duration as PbDuration;
     temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
-        initial_interval: Some(PbDuration { seconds: 1, nanos: 0 }),
+        initial_interval: Some(PbDuration {
+            seconds: 1,
+            nanos: 0,
+        }),
         backoff_coefficient: 2.0,
-        maximum_interval: Some(PbDuration { seconds: 30, nanos: 0 }),
+        maximum_interval: Some(PbDuration {
+            seconds: 30,
+            nanos: 0,
+        }),
         maximum_attempts: 5,
         non_retryable_error_types: vec![],
     }

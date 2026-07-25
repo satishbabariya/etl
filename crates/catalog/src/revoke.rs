@@ -20,16 +20,12 @@ pub async fn insert(
     Ok(())
 }
 
-pub async fn is_revoked(
-    conn: &mut sqlx::PgConnection,
-    jti: Uuid,
-) -> sqlx::Result<bool> {
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT jti FROM revoked_tokens WHERE jti = $1 AND exp > now()",
-    )
-    .bind(jti)
-    .fetch_optional(&mut *conn)
-    .await?;
+pub async fn is_revoked(conn: &mut sqlx::PgConnection, jti: Uuid) -> sqlx::Result<bool> {
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT jti FROM revoked_tokens WHERE jti = $1 AND exp > now()")
+            .bind(jti)
+            .fetch_optional(&mut *conn)
+            .await?;
     Ok(row.is_some())
 }
 

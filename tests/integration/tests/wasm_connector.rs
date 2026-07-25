@@ -173,8 +173,14 @@ async fn csv_wasm_connector_end_to_end() -> anyhow::Result<()> {
     assert_eq!(total, 5, "CSV had 5 data rows; Parquet total must match");
 
     let ctx = catalog::TenantContext::new(tenant);
-    let state = cat.get_stream_state(ctx, pipe, "csv-source").await?.unwrap();
-    assert_eq!(state.cursor.as_ref().unwrap().value.parse::<i64>().unwrap(), 5);
+    let state = cat
+        .get_stream_state(ctx, pipe, "csv-source")
+        .await?
+        .unwrap();
+    assert_eq!(
+        state.cursor.as_ref().unwrap().value.parse::<i64>().unwrap(),
+        5
+    );
 
     assert!(
         elapsed < Duration::from_secs(30),

@@ -39,10 +39,7 @@ fn parse_backend(s: &str) -> SecretBackendKind {
     }
 }
 
-pub async fn create(
-    conn: &mut sqlx::PgConnection,
-    new: NewSecret,
-) -> sqlx::Result<SecretId> {
+pub async fn create(conn: &mut sqlx::PgConnection, new: NewSecret) -> sqlx::Result<SecretId> {
     let id = SecretId::new();
     sqlx::query(
         "INSERT INTO secrets (secret_id, tenant_id, name, backend, key) \
@@ -62,32 +59,46 @@ pub async fn get_by_name(
     conn: &mut sqlx::PgConnection,
     name: &str,
 ) -> sqlx::Result<Option<Secret>> {
-    let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            "SELECT secret_id, tenant_id, name, backend, key, created_at \
+    let row: Option<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        "SELECT secret_id, tenant_id, name, backend, key, created_at \
              FROM secrets WHERE name = $1",
-        )
-        .bind(name)
-        .fetch_optional(&mut *conn)
-        .await?;
-    Ok(row.map(|(sid, tid, name, backend, key, created_at)| Secret {
-        secret_id: SecretId::from_uuid_unchecked(sid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        name,
-        backend: parse_backend(&backend),
-        key,
-        created_at,
-    }))
+    )
+    .bind(name)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(
+        row.map(|(sid, tid, name, backend, key, created_at)| Secret {
+            secret_id: SecretId::from_uuid_unchecked(sid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            name,
+            backend: parse_backend(&backend),
+            key,
+            created_at,
+        }),
+    )
 }
 
 pub async fn list(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<Secret>> {
-    let rows: Vec<(uuid::Uuid, uuid::Uuid, String, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            "SELECT secret_id, tenant_id, name, backend, key, created_at \
+    let rows: Vec<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        "SELECT secret_id, tenant_id, name, backend, key, created_at \
              FROM secrets ORDER BY name",
-        )
-        .fetch_all(&mut *conn)
-        .await?;
+    )
+    .fetch_all(&mut *conn)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(sid, tid, name, backend, key, created_at)| Secret {
@@ -101,10 +112,7 @@ pub async fn list(conn: &mut sqlx::PgConnection) -> sqlx::Result<Vec<Secret>> {
         .collect())
 }
 
-pub async fn delete(
-    conn: &mut sqlx::PgConnection,
-    id: SecretId,
-) -> sqlx::Result<()> {
+pub async fn delete(conn: &mut sqlx::PgConnection, id: SecretId) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM secrets WHERE secret_id = $1")
         .bind(id.as_uuid())
         .execute(&mut *conn)

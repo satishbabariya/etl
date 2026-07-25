@@ -90,14 +90,27 @@ mod tests {
 
     #[test]
     fn billable_metric_serializes_as_snake_case() {
-        assert_eq!(serde_json::to_string(&BillableMetric::RowsRead).unwrap(), r#""rows_read""#);
-        assert_eq!(serde_json::to_string(&BillableMetric::BytesWritten).unwrap(), r#""bytes_written""#);
-        assert_eq!(serde_json::to_string(&BillableMetric::WasmFuelUsed).unwrap(), r#""wasm_fuel_used""#);
+        assert_eq!(
+            serde_json::to_string(&BillableMetric::RowsRead).unwrap(),
+            r#""rows_read""#
+        );
+        assert_eq!(
+            serde_json::to_string(&BillableMetric::BytesWritten).unwrap(),
+            r#""bytes_written""#
+        );
+        assert_eq!(
+            serde_json::to_string(&BillableMetric::WasmFuelUsed).unwrap(),
+            r#""wasm_fuel_used""#
+        );
     }
 
     #[test]
     fn metering_source_serde_roundtrip() {
-        for src in [MeteringSource::Read, MeteringSource::Load, MeteringSource::Transform] {
+        for src in [
+            MeteringSource::Read,
+            MeteringSource::Load,
+            MeteringSource::Transform,
+        ] {
             let s = serde_json::to_string(&src).unwrap();
             let back: MeteringSource = serde_json::from_str(&s).unwrap();
             assert_eq!(format!("{:?}", src), format!("{:?}", back));

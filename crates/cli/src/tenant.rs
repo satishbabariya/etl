@@ -102,13 +102,15 @@ pub async fn terminate(name: String) -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("tenant {} not found", name))?;
     admin.delete_tenant(t.tenant_id).await?;
-    println!("terminated tenant {} ({}) — catalog rows cascaded", name, t.tenant_id);
+    println!(
+        "terminated tenant {} ({}) — catalog rows cascaded",
+        name, t.tenant_id
+    );
 
     let base = std::env::var("ETL_DATA_DIR").unwrap_or_else(|_| "./data".into());
     let path = std::path::PathBuf::from(&base).join(t.tenant_id.as_uuid().to_string());
     if path.exists() {
-        std::fs::remove_dir_all(&path)
-            .with_context(|| format!("removing {}", path.display()))?;
+        std::fs::remove_dir_all(&path).with_context(|| format!("removing {}", path.display()))?;
         println!("removed {}", path.display());
     }
     deprecate_temporal_namespace(&t.tenant_id).await?;

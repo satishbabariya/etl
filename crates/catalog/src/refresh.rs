@@ -18,10 +18,7 @@ pub struct NewRefreshToken {
     pub expires_at: DateTime<Utc>,
 }
 
-pub async fn create(
-    conn: &mut sqlx::PgConnection,
-    new: NewRefreshToken,
-) -> sqlx::Result<Uuid> {
+pub async fn create(conn: &mut sqlx::PgConnection, new: NewRefreshToken) -> sqlx::Result<Uuid> {
     let id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO refresh_tokens (token_id, tenant_id, principal_id, hash, expires_at) \
@@ -57,10 +54,7 @@ pub async fn get(
     }))
 }
 
-pub async fn delete(
-    conn: &mut sqlx::PgConnection,
-    token_id: Uuid,
-) -> sqlx::Result<u64> {
+pub async fn delete(conn: &mut sqlx::PgConnection, token_id: Uuid) -> sqlx::Result<u64> {
     let r = sqlx::query("DELETE FROM refresh_tokens WHERE token_id = $1")
         .bind(token_id)
         .execute(&mut *conn)

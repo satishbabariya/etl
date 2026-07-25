@@ -83,6 +83,7 @@ pub struct MysqlCdcSourceSpec {
 pub enum DestinationSpec {
     LocalParquet(LocalParquetSpec),
     Postgres(PostgresDestinationSpec),
+    Snowflake(SnowflakeDestinationSpec),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,6 +102,28 @@ pub struct PostgresDestinationSpec {
     pub table: String,
     /// Upsert key columns. Empty ⇒ insert-only (append). Non-empty ⇒
     /// `INSERT ... ON CONFLICT (pk) DO UPDATE`.
+    #[serde(default)]
+    pub pk_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnowflakeDestinationSpec {
+    /// Account identifier (locator like `xy12345` or `org-account`).
+    pub account: String,
+    pub user: String,
+    /// Name of the env var holding the PKCS#8 PEM private key for
+    /// key-pair auth. Never key material itself (invariant #6:
+    /// secrets never enter the catalog).
+    pub private_key_env: String,
+    pub warehouse: String,
+    pub database: String,
+    /// Snowflake schema owning the target table + idempotency log.
+    pub schema: String,
+    /// Target table. Created on first non-empty load if absent.
+    pub table: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Upsert key columns. Empty ⇒ append (INSERT); non-empty ⇒ MERGE.
     #[serde(default)]
     pub pk_columns: Vec<String>,
 }
@@ -351,6 +374,39 @@ mod e2e_diag {
             assert_eq!(p.schema, "etl_dest");
             assert_eq!(p.table, "items");
             assert_eq!(p.pk_columns, vec!["id".to_string()]);
+        }
+    }
+
+    #[test]
+    fn snowflake_destination_spec_roundtrip() {
+        let s = DestinationSpec::Snowflake(SnowflakeDestinationSpec {
+            account: "xy12345".into(),
+            user: "ETL_LOADER".into(),
+            private_key_env: "SNOWFLAKE_PRIVATE_KEY".into(),
+            warehouse: "ETL_WH".into(),
+            database: "ANALYTICS".into(),
+            schema: "RAW".into(),
+            table: "customers".into(),
+            role: Some("ETL_ROLE".into()),
+            pk_columns: vec!["id".into()],
+        });
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"type\":\"snowflake\""));
+        let back: DestinationSpec = serde_json::from_str(&j).unwrap();
+        assert!(matches!(back, DestinationSpec::Snowflake(_)));
+    }
+
+    #[test]
+    fn snowflake_destination_spec_defaults() {
+        let j = r#"{"type":"snowflake","account":"xy12345","user":"U",
+            "private_key_env":"K","warehouse":"W","database":"D",
+            "schema":"S","table":"T"}"#;
+        let s: DestinationSpec = serde_json::from_str(j).unwrap();
+        if let DestinationSpec::Snowflake(sf) = s {
+            assert!(sf.pk_columns.is_empty());
+            assert!(sf.role.is_none());
+        } else {
+            panic!("expected snowflake variant");
         }
     }
 }

@@ -61,7 +61,12 @@ pub async fn read_window(
         .transpose()
         .unwrap_or(None);
     let is_empty = events.is_empty();
-    Ok(WindowOutput { events, relations, new_position, is_empty })
+    Ok(WindowOutput {
+        events,
+        relations,
+        new_position,
+        is_empty,
+    })
 }
 
 /// Convert a flush of `read_window` into a `RecordBatch`. Begin/Commit/
@@ -73,7 +78,9 @@ pub fn events_to_batch(
     rel_id_filter: u32,
     schema: arrow::datatypes::SchemaRef,
 ) -> anyhow::Result<arrow::record_batch::RecordBatch> {
-    use arrow::array::{ArrayBuilder, ArrayRef, Int64Builder, StringBuilder, TimestampMicrosecondBuilder};
+    use arrow::array::{
+        ArrayBuilder, ArrayRef, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
+    };
     use std::sync::Arc;
     let rel = relations
         .get(&rel_id_filter)
@@ -91,7 +98,11 @@ pub fn events_to_batch(
     let mut current_lsn: Option<u64> = None;
     for ev in events {
         match ev {
-            CdcEvent::Begin { xid, commit_ts_micros, .. } => {
+            CdcEvent::Begin {
+                xid,
+                commit_ts_micros,
+                ..
+            } => {
                 current_txid = Some(*xid);
                 current_commit_ts = Some(*commit_ts_micros);
             }
@@ -174,4 +185,3 @@ fn append_pg_row_partial(
     }
     Ok(())
 }
-

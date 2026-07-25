@@ -8,8 +8,8 @@ use std::sync::Arc;
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
-use crate::connectors::mysql::cdc::{position::GtidSet, schema, snapshot, stream};
 use crate::connectors::mysql::cdc::schema::InfoSchemaColumn;
+use crate::connectors::mysql::cdc::{position::GtidSet, schema, snapshot, stream};
 use crate::loaders::cdc_parquet::CdcParquetLoader;
 
 #[derive(Clone)]
@@ -40,8 +40,7 @@ async fn resolve_url(
             .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(principal_id)),
         jti: (!jti.is_nil()).then_some(jti),
     };
-    let resolved =
-        crate::secrets::resolve_connection_audited(secrets, conn, resolve_ctx).await?;
+    let resolved = crate::secrets::resolve_connection_audited(secrets, conn, resolve_ctx).await?;
     Ok(resolved.expect_url().to_string())
 }
 
@@ -155,9 +154,7 @@ impl MysqlCdcActivities {
             .map_err(into_activity_err)?;
         drop(conn);
         pool.disconnect().await.ok();
-        Ok(CaptureStartGtidOutput {
-            gtid_set: gtid_str,
-        })
+        Ok(CaptureStartGtidOutput { gtid_set: gtid_str })
     }
 
     #[activity]
@@ -289,8 +286,7 @@ impl MysqlCdcActivities {
                     input.table
                 ))
             })?;
-        let pk_dt = schema::map_mysql_type(&pk_meta.data_type)
-            .map_err(into_activity_err)?;
+        let pk_dt = schema::map_mysql_type(&pk_meta.data_type).map_err(into_activity_err)?;
         if !matches!(
             pk_dt,
             arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::Int64

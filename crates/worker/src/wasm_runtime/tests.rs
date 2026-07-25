@@ -2,8 +2,8 @@
 
 use super::engine::build_engine;
 use std::sync::Arc;
-use wasmtime::Store;
 use wasmtime::component::{Component, Linker};
+use wasmtime::Store;
 
 fn empty_host_state() -> super::HostState {
     super::HostState::new(super::Limits::default())

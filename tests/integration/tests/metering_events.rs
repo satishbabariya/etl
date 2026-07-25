@@ -6,8 +6,7 @@ use catalog::Catalog;
 use chrono::Utc;
 use common_types::ids::{PipelineId, RunId, TenantId};
 use metering::{
-    BillableMetric, BufferedSink, CatalogMeteringSink, MeteringEvent, MeteringSink,
-    MeteringSource,
+    BillableMetric, BufferedSink, CatalogMeteringSink, MeteringEvent, MeteringSink, MeteringSource,
 };
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -58,7 +57,9 @@ fn make_event(tid_uuid: Uuid, metric: BillableMetric, value: i64) -> MeteringEve
 
 #[tokio::test]
 async fn emit_writes_a_row_to_metering_events() {
-    let Some((_, pool)) = setup().await else { return };
+    let Some((_, pool)) = setup().await else {
+        return;
+    };
     let tid = seed_tenant(&pool, "tenant-a").await;
     let sink = CatalogMeteringSink::new(pool.clone());
 
@@ -66,20 +67,21 @@ async fn emit_writes_a_row_to_metering_events() {
         .await
         .expect("emit");
 
-    let count: i64 = sqlx::query(
-        "SELECT COUNT(*)::BIGINT FROM metering_events WHERE tenant_id = $1",
-    )
-    .bind(tid)
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
+    let count: i64 =
+        sqlx::query("SELECT COUNT(*)::BIGINT FROM metering_events WHERE tenant_id = $1")
+            .bind(tid)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
     assert_eq!(count, 1);
 }
 
 #[tokio::test]
 async fn multiple_emits_sum_to_correct_total() {
-    let Some((_, pool)) = setup().await else { return };
+    let Some((_, pool)) = setup().await else {
+        return;
+    };
     let tid = seed_tenant(&pool, "tenant-b").await;
     let sink = CatalogMeteringSink::new(pool.clone());
 
@@ -105,7 +107,9 @@ async fn multiple_emits_sum_to_correct_total() {
 async fn rls_tenant_cannot_see_other_tenants_events() {
     // RLS only applies to non-superuser roles. `etl` is the admin role
     // (BYPASSRLS); the RLS check must connect as `etl_app`.
-    let Some((_, admin_pool)) = setup().await else { return };
+    let Some((_, admin_pool)) = setup().await else {
+        return;
+    };
     let tid_a = seed_tenant(&admin_pool, "tenant-rls-a").await;
     let tid_b = seed_tenant(&admin_pool, "tenant-rls-b").await;
 
@@ -143,12 +147,17 @@ async fn rls_tenant_cannot_see_other_tenants_events() {
         .get(0);
     tx.rollback().await.unwrap();
 
-    assert_eq!(count, 1, "tenant A must see only its own event, not tenant B's");
+    assert_eq!(
+        count, 1,
+        "tenant A must see only its own event, not tenant B's"
+    );
 }
 
 #[tokio::test]
 async fn duplicate_event_id_is_silently_ignored() {
-    let Some((_, pool)) = setup().await else { return };
+    let Some((_, pool)) = setup().await else {
+        return;
+    };
     let tid = seed_tenant(&pool, "tenant-idem").await;
     let sink = CatalogMeteringSink::new(pool.clone());
 
@@ -156,14 +165,13 @@ async fn duplicate_event_id_is_silently_ignored() {
     sink.emit(&ev).await.expect("first emit");
     sink.emit(&ev).await.expect("second emit (duplicate)");
 
-    let count: i64 = sqlx::query(
-        "SELECT COUNT(*)::BIGINT FROM metering_events WHERE event_id = $1",
-    )
-    .bind(ev.event_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
+    let count: i64 =
+        sqlx::query("SELECT COUNT(*)::BIGINT FROM metering_events WHERE event_id = $1")
+            .bind(ev.event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
     assert_eq!(count, 1, "duplicate event_id must produce exactly one row");
 }
 

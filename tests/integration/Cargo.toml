@@ -23,6 +23,8 @@ chrono = { workspace = true }
 parquet = { workspace = true }
 arrow = { workspace = true }
 wiremock = "0.6"
+rsa = { workspace = true }
+rand = "0.8"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 mysql_async = { workspace = true }

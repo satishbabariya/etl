@@ -71,7 +71,12 @@ impl RemoteJwks {
                 }
             }
         }
-        let resp = self.client.get(&self.url).send().await?.error_for_status()?;
+        let resp = self
+            .client
+            .get(&self.url)
+            .send()
+            .await?
+            .error_for_status()?;
         let set: JwkSet = resp.json().await.context("parsing JWKS JSON")?;
         *self.cache.write().unwrap() = Some((set.clone(), Instant::now()));
         Ok(set)

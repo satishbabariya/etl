@@ -104,7 +104,11 @@ async fn stream_state_upsert_then_get() {
         .unwrap();
 
     let ctx = catalog::TenantContext::new(tenant);
-    assert!(cat.get_stream_state(ctx, pipe, "customers").await.unwrap().is_none());
+    assert!(cat
+        .get_stream_state(ctx, pipe, "customers")
+        .await
+        .unwrap()
+        .is_none());
 
     cat.upsert_stream_state(
         ctx,
@@ -119,7 +123,11 @@ async fn stream_state_upsert_then_get() {
     .await
     .unwrap();
 
-    let got = cat.get_stream_state(ctx, pipe, "customers").await.unwrap().unwrap();
+    let got = cat
+        .get_stream_state(ctx, pipe, "customers")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.cursor.as_ref().unwrap().value, "2026-04-22T11:00:00Z");
     assert_eq!(got.cursor.as_ref().unwrap().kind, CursorKind::TimestampTz);
 
@@ -135,7 +143,11 @@ async fn stream_state_upsert_then_get() {
     )
     .await
     .unwrap();
-    let got2 = cat.get_stream_state(ctx, pipe, "customers").await.unwrap().unwrap();
+    let got2 = cat
+        .get_stream_state(ctx, pipe, "customers")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got2.cursor.as_ref().unwrap().value, "2026-04-23T10:00:00Z");
 }
 
@@ -147,7 +159,11 @@ async fn default_workspace_is_idempotent() {
     let w1 = cat.ensure_default_workspace(ctx).await.unwrap();
     let w2 = cat.ensure_default_workspace(ctx).await.unwrap();
     assert_eq!(w1, w2);
-    let got = cat.get_workspace_by_name(ctx, "default").await.unwrap().unwrap();
+    let got = cat
+        .get_workspace_by_name(ctx, "default")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(got.workspace_id, w1);
 }
 
@@ -157,35 +173,47 @@ async fn ensure_stream_is_idempotent() {
     let t = cat.create_tenant("acme").await.unwrap();
     let src = cat
         .create_connection(NewConnection {
-            tenant_id: t, name: "src".into(),
+            tenant_id: t,
+            name: "src".into(),
             connector_ref: "postgres@0.1.0".into(),
             config: json!({}),
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     let p = cat
         .create_pipeline(NewPipeline {
-            tenant_id: t, name: "demo".into(),
-            source_conn_id: src, dest_conn_id: None, spec: json!({}),
+            tenant_id: t,
+            name: "demo".into(),
+            source_conn_id: src,
+            dest_conn_id: None,
+            spec: json!({}),
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     let s1 = cat
         .ensure_stream(catalog::stream::NewStream {
-            tenant_id: t, pipeline_id: p, name: "customers".into(),
+            tenant_id: t,
+            pipeline_id: p,
+            name: "customers".into(),
             sync_mode: "incremental".into(),
             cursor_config: json!({"column":"updated_at","kind":"timestamp_tz"}),
             pk_config: json!(["id"]),
             destination_table: None,
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     let s2 = cat
         .ensure_stream(catalog::stream::NewStream {
-            tenant_id: t, pipeline_id: p, name: "customers".into(),
+            tenant_id: t,
+            pipeline_id: p,
+            name: "customers".into(),
             sync_mode: "incremental".into(),
             cursor_config: json!({}),
             pk_config: json!([]),
             destination_table: None,
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     assert_eq!(s1, s2);
 }
 
@@ -196,37 +224,59 @@ async fn schema_insert_assigns_versions_sequentially() {
     let t = cat.create_tenant("acme").await.unwrap();
     let src = cat
         .create_connection(NewConnection {
-            tenant_id: t, name: "src".into(),
-            connector_ref: "postgres@0.1.0".into(), config: json!({}),
+            tenant_id: t,
+            name: "src".into(),
+            connector_ref: "postgres@0.1.0".into(),
+            config: json!({}),
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     let p = cat
         .create_pipeline(NewPipeline {
-            tenant_id: t, name: "demo".into(),
-            source_conn_id: src, dest_conn_id: None, spec: json!({}),
+            tenant_id: t,
+            name: "demo".into(),
+            source_conn_id: src,
+            dest_conn_id: None,
+            spec: json!({}),
         })
-        .await.unwrap();
+        .await
+        .unwrap();
     let s = cat
         .ensure_stream(catalog::stream::NewStream {
-            tenant_id: t, pipeline_id: p, name: "customers".into(),
+            tenant_id: t,
+            pipeline_id: p,
+            name: "customers".into(),
             sync_mode: "incremental".into(),
-            cursor_config: json!({}), pk_config: json!([]), destination_table: None,
+            cursor_config: json!({}),
+            pk_config: json!([]),
+            destination_table: None,
         })
-        .await.unwrap();
+        .await
+        .unwrap();
 
-    let s1 = cat.insert_schema(catalog::schema::NewSchema {
-        tenant_id: t, stream_id: s, parent_schema_id: None,
-        fingerprint: SchemaFingerprint::from_hex("aaaa".repeat(16)),
-        arrow_schema_json: json!({"fields":[]}),
-        change_summary: vec![],
-    }).await.unwrap();
+    let s1 = cat
+        .insert_schema(catalog::schema::NewSchema {
+            tenant_id: t,
+            stream_id: s,
+            parent_schema_id: None,
+            fingerprint: SchemaFingerprint::from_hex("aaaa".repeat(16)),
+            arrow_schema_json: json!({"fields":[]}),
+            change_summary: vec![],
+        })
+        .await
+        .unwrap();
 
-    let s2 = cat.insert_schema(catalog::schema::NewSchema {
-        tenant_id: t, stream_id: s, parent_schema_id: Some(s1),
-        fingerprint: SchemaFingerprint::from_hex("bbbb".repeat(16)),
-        arrow_schema_json: json!({"fields":[{"name":"x"}]}),
-        change_summary: vec![],
-    }).await.unwrap();
+    let s2 = cat
+        .insert_schema(catalog::schema::NewSchema {
+            tenant_id: t,
+            stream_id: s,
+            parent_schema_id: Some(s1),
+            fingerprint: SchemaFingerprint::from_hex("bbbb".repeat(16)),
+            arrow_schema_json: json!({"fields":[{"name":"x"}]}),
+            change_summary: vec![],
+        })
+        .await
+        .unwrap();
 
     let ctx = catalog::TenantContext::new(t);
     let latest = cat.get_latest_schema(ctx, s).await.unwrap().unwrap();

@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -87,6 +87,10 @@ pub fn derive_schema(
         .column_with_name(input_column)
         .ok_or_else(|| anyhow!("wasm_scalar: input_column '{input_column}' not found"))?;
     let mut fields: Vec<Field> = input.fields().iter().map(|f| (**f).clone()).collect();
-    fields.push(Field::new(output_column, DataType::Utf8, field.is_nullable()));
+    fields.push(Field::new(
+        output_column,
+        DataType::Utf8,
+        field.is_nullable(),
+    ));
     Ok(Schema::new(fields))
 }

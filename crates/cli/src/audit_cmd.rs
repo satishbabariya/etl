@@ -61,7 +61,9 @@ pub async fn prune(tenant_override: Option<String>, older_than_days: i64) -> Res
             return Ok(());
         }
     };
-    let n = cat.audit_prune_before(Some(ctx.tenant_id), cutoff_id + 1).await?;
+    let n = cat
+        .audit_prune_before(Some(ctx.tenant_id), cutoff_id + 1)
+        .await?;
     println!("pruned {n} audit row(s) older than {older_than_days} days");
     Ok(())
 }

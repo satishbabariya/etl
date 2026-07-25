@@ -68,7 +68,9 @@ fn spec(connection_url: &str, schema: &str, pk: Vec<String>) -> DestinationSpec 
 
 #[tokio::test]
 async fn append_only_load_writes_rows() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
     let load_id = LoadId {
         tenant_id: TenantId::new(),
@@ -77,7 +79,10 @@ async fn append_only_load_writes_rows() {
         batch_seq: 0,
         stream_name: String::new(),
     };
-    PostgresLoader.load(&s, load_id, tiny_batch()).await.expect("load");
+    PostgresLoader
+        .load(&s, load_id, tiny_batch())
+        .await
+        .expect("load");
 
     let count: i64 = sqlx::query(&format!(
         "SELECT COUNT(*)::BIGINT FROM \"{schema}\".\"customers\""
@@ -92,7 +97,9 @@ async fn append_only_load_writes_rows() {
 
 #[tokio::test]
 async fn second_load_with_same_load_id_is_noop() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
     let load_id = LoadId {
         tenant_id: TenantId::new(),
@@ -101,8 +108,14 @@ async fn second_load_with_same_load_id_is_noop() {
         batch_seq: 7,
         stream_name: String::new(),
     };
-    let r1 = PostgresLoader.load(&s, load_id.clone(), tiny_batch()).await.unwrap();
-    let r2 = PostgresLoader.load(&s, load_id, tiny_batch()).await.unwrap();
+    let r1 = PostgresLoader
+        .load(&s, load_id.clone(), tiny_batch())
+        .await
+        .unwrap();
+    let r2 = PostgresLoader
+        .load(&s, load_id, tiny_batch())
+        .await
+        .unwrap();
     assert_eq!(r1.rows_loaded, 3);
     assert_eq!(r2.rows_loaded, 0);
 
@@ -119,7 +132,9 @@ async fn second_load_with_same_load_id_is_noop() {
 
 #[tokio::test]
 async fn upsert_overwrites_on_pk_conflict() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec!["id".into()]);
 
     let arrow_schema = Arc::new(Schema::new(vec![

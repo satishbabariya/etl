@@ -95,7 +95,9 @@ fn base_batch(rows: &[(i64, Option<&str>, &str)]) -> RecordBatch {
     let names: Vec<Option<String>> = rows.iter().map(|r| r.1.map(str::to_string)).collect();
     let ops: Vec<String> = rows.iter().map(|r| r.2.to_string()).collect();
     let lsns: Vec<String> = (0..rows.len()).map(|i| format!("lsn-{i}")).collect();
-    let ts: Vec<i64> = (0..rows.len()).map(|i| 1_779_667_200_000_000 + i as i64).collect();
+    let ts: Vec<i64> = (0..rows.len())
+        .map(|i| 1_779_667_200_000_000 + i as i64)
+        .collect();
     RecordBatch::try_new(
         base_cdc_schema(),
         vec![
@@ -115,7 +117,9 @@ fn widened_batch(rows: &[(i64, Option<&str>, Option<f64>, &str)]) -> RecordBatch
     let scores: Vec<Option<f64>> = rows.iter().map(|r| r.2).collect();
     let ops: Vec<String> = rows.iter().map(|r| r.3.to_string()).collect();
     let lsns: Vec<String> = (0..rows.len()).map(|i| format!("lsn-{i}")).collect();
-    let ts: Vec<i64> = (0..rows.len()).map(|i| 1_779_667_200_000_000 + i as i64).collect();
+    let ts: Vec<i64> = (0..rows.len())
+        .map(|i| 1_779_667_200_000_000 + i as i64)
+        .collect();
     RecordBatch::try_new(
         widened_cdc_schema(),
         vec![
@@ -132,11 +136,17 @@ fn widened_batch(rows: &[(i64, Option<&str>, Option<f64>, &str)]) -> RecordBatch
 
 #[tokio::test]
 async fn additive_new_column_mid_stream_lands_correctly() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     PostgresLoader
-        .load(&s, load_id(0), base_batch(&[(1, Some("alice"), "i"), (2, Some("bob"), "i")]))
+        .load(
+            &s,
+            load_id(0),
+            base_batch(&[(1, Some("alice"), "i"), (2, Some("bob"), "i")]),
+        )
         .await
         .expect("batch 0");
 
@@ -184,11 +194,13 @@ async fn additive_new_column_mid_stream_lands_correctly() {
     .await
     .unwrap()
     .into_iter()
-    .map(|r| (
-        r.get::<i64, _>(0),
-        r.try_get::<String, _>(1).ok(),
-        r.try_get::<f64, _>(2).ok(),
-    ))
+    .map(|r| {
+        (
+            r.get::<i64, _>(0),
+            r.try_get::<String, _>(1).ok(),
+            r.try_get::<f64, _>(2).ok(),
+        )
+    })
     .collect();
 
     assert_eq!(rows[0], (1, Some("alice".into()), None));
@@ -200,7 +212,9 @@ async fn additive_new_column_mid_stream_lands_correctly() {
 
 #[tokio::test]
 async fn schema_change_only_batch_adds_column_and_does_not_insert_rows() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     PostgresLoader
@@ -234,7 +248,10 @@ async fn schema_change_only_batch_adds_column_and_does_not_insert_rows() {
     .await
     .unwrap()
     .get(0);
-    assert_eq!(count, 1, "no rows inserted from c-only batch (alice from seed only)");
+    assert_eq!(
+        count, 1,
+        "no rows inserted from c-only batch (alice from seed only)"
+    );
 
     drop_schema(&pool, &schema).await;
 }
@@ -258,7 +275,9 @@ fn dropped_name_batch(rows: &[(i64, &str)]) -> RecordBatch {
     let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
     let ops: Vec<String> = rows.iter().map(|r| r.1.to_string()).collect();
     let lsns: Vec<String> = (0..rows.len()).map(|i| format!("lsn-{i}")).collect();
-    let ts: Vec<i64> = (0..rows.len()).map(|i| 1_779_667_200_000_000 + i as i64).collect();
+    let ts: Vec<i64> = (0..rows.len())
+        .map(|i| 1_779_667_200_000_000 + i as i64)
+        .collect();
     RecordBatch::try_new(
         dropped_name_cdc_schema(),
         vec![
@@ -273,7 +292,9 @@ fn dropped_name_batch(rows: &[(i64, &str)]) -> RecordBatch {
 
 #[tokio::test]
 async fn destructive_drop_column_returns_error_and_leaves_destination_unchanged() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     PostgresLoader
@@ -291,7 +312,10 @@ async fn destructive_drop_column_returns_error_and_leaves_destination_unchanged(
         msg.contains("destructive") && msg.contains("operator"),
         "expected destructive-change error, got: {err}"
     );
-    assert!(msg.contains("name"), "error must name the dropped column, got: {err}");
+    assert!(
+        msg.contains("name"),
+        "error must name the dropped column, got: {err}"
+    );
 
     let cols: Vec<String> = sqlx::query(
         "SELECT column_name FROM information_schema.columns \
@@ -305,7 +329,11 @@ async fn destructive_drop_column_returns_error_and_leaves_destination_unchanged(
     .into_iter()
     .map(|r| r.get::<String, _>(0))
     .collect();
-    assert_eq!(cols, vec!["id", "name"], "destination must be unchanged after abort");
+    assert_eq!(
+        cols,
+        vec!["id", "name"],
+        "destination must be unchanged after abort"
+    );
 
     let count: i64 = sqlx::query(&format!(
         "SELECT COUNT(*)::BIGINT FROM \"{schema}\".\"events\""
@@ -321,7 +349,9 @@ async fn destructive_drop_column_returns_error_and_leaves_destination_unchanged(
 
 #[tokio::test]
 async fn destructive_type_narrowing_returns_error_and_leaves_destination_unchanged() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema);
 
     let bigint_schema = Arc::new(Schema::new(vec![
@@ -349,7 +379,10 @@ async fn destructive_type_narrowing_returns_error_and_leaves_destination_unchang
         ],
     )
     .unwrap();
-    PostgresLoader.load(&s, load_id(0), seed).await.expect("seed");
+    PostgresLoader
+        .load(&s, load_id(0), seed)
+        .await
+        .expect("seed");
 
     let narrow_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -377,14 +410,20 @@ async fn destructive_type_narrowing_returns_error_and_leaves_destination_unchang
     )
     .unwrap();
 
-    let err = PostgresLoader.load(&s, load_id(1), narrow).await.unwrap_err();
+    let err = PostgresLoader
+        .load(&s, load_id(1), narrow)
+        .await
+        .unwrap_err();
 
     let msg = format!("{err}").to_lowercase();
     assert!(
         msg.contains("destructive") && msg.contains("operator"),
         "expected destructive-change error, got: {err}"
     );
-    assert!(msg.contains("amount"), "error must name the narrowed column, got: {err}");
+    assert!(
+        msg.contains("amount"),
+        "error must name the narrowed column, got: {err}"
+    );
 
     drop_schema(&pool, &schema).await;
 }

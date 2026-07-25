@@ -75,7 +75,9 @@ async fn audit_retention_once(catalog: &Catalog, retention_days: i64) -> Result<
         .fetch_optional(catalog.pool())
         .await?;
         if let Some((id,)) = row {
-            let n = catalog.audit_prune_before(Some(t.tenant_id), id + 1).await?;
+            let n = catalog
+                .audit_prune_before(Some(t.tenant_id), id + 1)
+                .await?;
             if n > 0 {
                 tracing::info!(tenant = %t.name, pruned = n, "audit retention pruned");
             }

@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{
+    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding,
+};
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use std::path::{Path, PathBuf};
 
@@ -31,8 +33,7 @@ impl Keystore {
         let dir = self.root.join(&kid);
         std::fs::create_dir_all(&dir)?;
         let mut rng = rand::thread_rng();
-        let private = RsaPrivateKey::new(&mut rng, 2048)
-            .context("generating RSA-2048 keypair")?;
+        let private = RsaPrivateKey::new(&mut rng, 2048).context("generating RSA-2048 keypair")?;
         let public = RsaPublicKey::from(&private);
         let pkcs8 = private.to_pkcs8_pem(LineEnding::LF)?.to_string();
         let spki = public.to_public_key_pem(LineEnding::LF)?;
@@ -98,8 +99,8 @@ impl Keystore {
         let dir = self.root.join(kid);
         let enc = dir.join("private.enc");
         if enc.exists() {
-            let key = sealed::master_key_from_env()
-                .context("private.enc requires ETL_MASTER_KEY")?;
+            let key =
+                sealed::master_key_from_env().context("private.enc requires ETL_MASTER_KEY")?;
             let blob = std::fs::read(&enc)?;
             let pem = sealed::unseal(&blob, &key)?;
             return String::from_utf8(pem).context("decrypted private key is not UTF-8");
@@ -108,7 +109,9 @@ impl Keystore {
     }
 
     pub fn public_pem(&self, kid: &str) -> Result<String> {
-        Ok(std::fs::read_to_string(self.root.join(kid).join("public.pem"))?)
+        Ok(std::fs::read_to_string(
+            self.root.join(kid).join("public.pem"),
+        )?)
     }
 
     pub fn load_private(&self, kid: &str) -> Result<RsaPrivateKey> {

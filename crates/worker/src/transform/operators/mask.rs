@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use arrow::array::{Array, ArrayRef, StringArray, StringBuilder};
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -18,10 +18,12 @@ pub fn apply(
         .column(idx)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| anyhow!(
-            "mask Phase I.5: only Utf8 columns supported; '{column}' is {:?}",
-            field.data_type()
-        ))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "mask Phase I.5: only Utf8 columns supported; '{column}' is {:?}",
+                field.data_type()
+            )
+        })?;
 
     let masked: StringArray = match strategy {
         MaskStrategy::Hash => {
@@ -64,7 +66,11 @@ pub fn apply(
     let mut arrays: Vec<ArrayRef> = batch.columns().to_vec();
     arrays[idx] = Arc::new(masked);
 
-    let mut fields: Vec<Field> = input_schema.fields().iter().map(|f| (**f).clone()).collect();
+    let mut fields: Vec<Field> = input_schema
+        .fields()
+        .iter()
+        .map(|f| (**f).clone())
+        .collect();
     if matches!(strategy, MaskStrategy::Null) {
         fields[idx] = Field::new(column, fields[idx].data_type().clone(), true);
     }
@@ -141,8 +147,13 @@ mod tests {
 
     #[test]
     fn null_requires_nullable_column() {
-        let schema = Arc::new(Schema::new(vec![Field::new("email", DataType::Utf8, false)]));
-        let b = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["a@x"]))]).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "email",
+            DataType::Utf8,
+            false,
+        )]));
+        let b =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec!["a@x"]))]).unwrap();
         assert!(apply(b, "email", &MaskStrategy::Null).is_err());
     }
 }

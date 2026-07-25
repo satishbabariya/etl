@@ -15,10 +15,8 @@ pub struct TemporalConfig {
 impl TemporalConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
-            address: std::env::var("TEMPORAL_ADDRESS")
-                .unwrap_or_else(|_| "127.0.0.1:7233".into()),
-            namespace: std::env::var("TEMPORAL_NAMESPACE")
-                .unwrap_or_else(|_| "default".into()),
+            address: std::env::var("TEMPORAL_ADDRESS").unwrap_or_else(|_| "127.0.0.1:7233".into()),
+            namespace: std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into()),
             task_queue: std::env::var("TEMPORAL_TASK_QUEUE")
                 .unwrap_or_else(|_| "pipeline-default".into()),
         })

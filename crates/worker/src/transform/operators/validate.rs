@@ -31,7 +31,11 @@ pub fn apply(
     let rejected_mask = BooleanArray::from(pass.iter().map(|b| !b).collect::<Vec<_>>());
     let kept = filter_record_batch(&batch, &kept_mask)?;
     let rejected = filter_record_batch(&batch, &rejected_mask)?;
-    let rejected_opt = if rejected.num_rows() > 0 { Some(rejected) } else { None };
+    let rejected_opt = if rejected.num_rows() > 0 {
+        Some(rejected)
+    } else {
+        None
+    };
     Ok((kept, rejected_opt))
 }
 
@@ -51,7 +55,12 @@ mod tests {
             schema,
             vec![
                 Arc::new(Int64Array::from(vec![Some(1), None, Some(3), None])),
-                Arc::new(StringArray::from(vec![Some("A"), Some("B"), None, Some("D")])),
+                Arc::new(StringArray::from(vec![
+                    Some("A"),
+                    Some("B"),
+                    None,
+                    Some("D"),
+                ])),
             ],
         )
         .unwrap()
@@ -61,7 +70,9 @@ mod tests {
     fn not_null_id_splits_correctly() {
         let (kept, rejected) = apply(
             batch(),
-            &[ValidationRule::NotNull { column: "id".into() }],
+            &[ValidationRule::NotNull {
+                column: "id".into(),
+            }],
         )
         .unwrap();
         assert_eq!(kept.num_rows(), 2);
@@ -72,7 +83,9 @@ mod tests {
     fn name_has_one_rejection() {
         let (kept, rejected) = apply(
             batch(),
-            &[ValidationRule::NotNull { column: "name".into() }],
+            &[ValidationRule::NotNull {
+                column: "name".into(),
+            }],
         )
         .unwrap();
         assert_eq!(kept.num_rows(), 3);

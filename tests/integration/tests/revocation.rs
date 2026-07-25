@@ -73,8 +73,15 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
         .await?;
     Command::new(cargo_bin("platform"))
         .args([
-            "auth", "create-principal", "--tenant", "rev-tenant",
-            "carol", "--password", "pw", "--role", "operator",
+            "auth",
+            "create-principal",
+            "--tenant",
+            "rev-tenant",
+            "carol",
+            "--password",
+            "pw",
+            "--role",
+            "operator",
         ])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")

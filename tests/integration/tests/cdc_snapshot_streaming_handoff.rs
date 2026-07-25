@@ -242,7 +242,8 @@ async fn snapshot_then_streaming_handoff() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(10)).await;
     let s_after_second_run = read_ops(tmp.path()).iter().filter(|o| *o == "s").count();
     assert_eq!(
-        s_after_second_run, s_after_first_run,
+        s_after_second_run,
+        s_after_first_run,
         "second run added {} new 's' rows; expected 0 (snapshot should be skipped)",
         s_after_second_run as i64 - s_after_first_run as i64
     );

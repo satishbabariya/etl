@@ -83,7 +83,10 @@ mod tests {
 
     #[test]
     fn drop_column_is_breaking() {
-        assert!(!ChangeKind::DropColumn { name: "email".into() }.is_additive());
+        assert!(!ChangeKind::DropColumn {
+            name: "email".into()
+        }
+        .is_additive());
     }
 
     #[test]
@@ -98,6 +101,9 @@ mod tests {
 
     #[test]
     fn make_non_nullable_is_breaking() {
-        assert!(!ChangeKind::MakeNonNullable { name: "name".into() }.is_additive());
+        assert!(!ChangeKind::MakeNonNullable {
+            name: "name".into()
+        }
+        .is_additive());
     }
 }

@@ -21,9 +21,7 @@ pub async fn apply_one(
         Operator::Select { columns } => Ok((select::apply(batch, columns)?, None)),
         Operator::Filter { predicate } => Ok((filter::apply(batch, predicate)?, None)),
         Operator::Mask { column, strategy } => Ok((mask::apply(batch, column, strategy)?, None)),
-        Operator::AddColumn { name, value } => {
-            Ok((add_column::apply(batch, name, value)?, None))
-        }
+        Operator::AddColumn { name, value } => Ok((add_column::apply(batch, name, value)?, None)),
         Operator::Validate { rules } => validate::apply(batch, rules),
         Operator::WasmScalar {
             udf,

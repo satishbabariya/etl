@@ -24,10 +24,9 @@ impl RunLifecycleActivities {
     ) -> Result<(), ActivityError> {
         let rid = RunId::from_uuid_unchecked(input.run_id);
         let ctx = TenantContext::new(TenantId::from_uuid_unchecked(input.tenant_id));
-        self.catalog
-            .mark_run_running(ctx, rid)
-            .await
-            .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_running: {e}").into()))?;
+        self.catalog.mark_run_running(ctx, rid).await.map_err(|e| {
+            ActivityError::NonRetryable(anyhow::anyhow!("mark_running: {e}").into())
+        })?;
         tracing::info!(run_id = %input.run_id, "run started");
         metrics::counter!(
             crate::metrics::RUN_STARTED,
@@ -49,7 +48,9 @@ impl RunLifecycleActivities {
         self.catalog
             .mark_run_completed(ctx, rid)
             .await
-            .map_err(|e| ActivityError::NonRetryable(anyhow::anyhow!("mark_completed: {e}").into()))?;
+            .map_err(|e| {
+                ActivityError::NonRetryable(anyhow::anyhow!("mark_completed: {e}").into())
+            })?;
         tracing::info!(run_id = %input.run_id, "run completed");
         metrics::counter!(
             crate::metrics::RUN_COMPLETED,

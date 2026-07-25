@@ -5,11 +5,7 @@ use arrow::record_batch::RecordBatch;
 use common_types::transform::LiteralValue;
 use std::sync::Arc;
 
-pub fn apply(
-    batch: RecordBatch,
-    name: &str,
-    value: &LiteralValue,
-) -> anyhow::Result<RecordBatch> {
+pub fn apply(batch: RecordBatch, name: &str, value: &LiteralValue) -> anyhow::Result<RecordBatch> {
     if batch.schema().column_with_name(name).is_some() {
         bail!("add_column: column '{name}' already exists");
     }
@@ -37,7 +33,12 @@ pub fn apply(
             ));
         }
     };
-    let mut fields: Vec<Field> = batch.schema().fields().iter().map(|f| (**f).clone()).collect();
+    let mut fields: Vec<Field> = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| (**f).clone())
+        .collect();
     fields.push(new_field);
     let out_schema = Arc::new(Schema::new(fields));
     let mut arrays: Vec<ArrayRef> = batch.columns().to_vec();
@@ -45,11 +46,7 @@ pub fn apply(
     Ok(RecordBatch::try_new(out_schema, arrays)?)
 }
 
-pub fn derive_schema(
-    input: &Schema,
-    name: &str,
-    value: &LiteralValue,
-) -> anyhow::Result<Schema> {
+pub fn derive_schema(input: &Schema, name: &str, value: &LiteralValue) -> anyhow::Result<Schema> {
     if input.column_with_name(name).is_some() {
         bail!("add_column: column '{name}' already exists");
     }

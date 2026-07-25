@@ -154,7 +154,9 @@ mod tests {
 
     #[test]
     fn advance_slot_output_roundtrips_serde() {
-        let out = AdvanceSlotOutput { confirmed_flush_lsn: "0/1A2B3C4".into() };
+        let out = AdvanceSlotOutput {
+            confirmed_flush_lsn: "0/1A2B3C4".into(),
+        };
         let j = serde_json::to_string(&out).unwrap();
         let back: AdvanceSlotOutput = serde_json::from_str(&j).unwrap();
         assert_eq!(back.confirmed_flush_lsn, "0/1A2B3C4");

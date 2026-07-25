@@ -70,9 +70,7 @@ pub fn binlog_value_to_scalar(
                 .into();
             Ok(Some(ScalarValue::Utf8(parsed.to_string())))
         }
-        BinlogValue::JsonDiff(_) => Ok(Some(ScalarValue::Utf8(
-            "__partial_json_diff__".into(),
-        ))),
+        BinlogValue::JsonDiff(_) => Ok(Some(ScalarValue::Utf8("__partial_json_diff__".into()))),
     }
 }
 
@@ -82,20 +80,29 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
 
         (Value::Int(i), DataType::Int32) => {
             let v: i32 = (*i).try_into().map_err(|_| {
-                anyhow!("Int32 column overflow: source value {} doesn't fit in i32", i)
+                anyhow!(
+                    "Int32 column overflow: source value {} doesn't fit in i32",
+                    i
+                )
             })?;
             Ok(Some(ScalarValue::Int32(v)))
         }
         (Value::Int(i), DataType::Int64) => Ok(Some(ScalarValue::Int64(*i))),
         (Value::UInt(u), DataType::Int32) => {
             let v: i32 = (*u).try_into().map_err(|_| {
-                anyhow!("Int32 column overflow: source value {} doesn't fit in i32", u)
+                anyhow!(
+                    "Int32 column overflow: source value {} doesn't fit in i32",
+                    u
+                )
             })?;
             Ok(Some(ScalarValue::Int32(v)))
         }
         (Value::UInt(u), DataType::Int64) => {
             let v: i64 = (*u).try_into().map_err(|_| {
-                anyhow!("Int64 column overflow: source value {} doesn't fit in i64", u)
+                anyhow!(
+                    "Int64 column overflow: source value {} doesn't fit in i64",
+                    u
+                )
             })?;
             Ok(Some(ScalarValue::Int64(v)))
         }
@@ -106,13 +113,15 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
         // often returns DECIMAL as Bytes (string). Parse it.
         (Value::Bytes(b), DataType::Float64) => {
             let s = std::str::from_utf8(b).context("decimal bytes not UTF-8")?;
-            let f: f64 = s.parse().with_context(|| format!("parse decimal '{}'", s))?;
+            let f: f64 = s
+                .parse()
+                .with_context(|| format!("parse decimal '{}'", s))?;
             Ok(Some(ScalarValue::Float64(f)))
         }
 
-        (Value::Bytes(b), DataType::Utf8) => {
-            Ok(Some(ScalarValue::Utf8(String::from_utf8_lossy(b).into_owned())))
-        }
+        (Value::Bytes(b), DataType::Utf8) => Ok(Some(ScalarValue::Utf8(
+            String::from_utf8_lossy(b).into_owned(),
+        ))),
 
         (Value::Int(i), DataType::Boolean) => Ok(Some(ScalarValue::Boolean(*i != 0))),
         (Value::Bytes(b), DataType::Boolean) => {
@@ -120,9 +129,7 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
             Ok(Some(ScalarValue::Boolean(b.iter().any(|&x| x != 0))))
         }
 
-        (Value::Bytes(b), DataType::Binary) => {
-            Ok(Some(ScalarValue::Binary(b.clone())))
-        }
+        (Value::Bytes(b), DataType::Binary) => Ok(Some(ScalarValue::Binary(b.clone()))),
 
         (Value::Date(y, m, d, h, mi, s, us), DataType::Date32) => {
             let _ = (h, mi, s, us);
@@ -140,9 +147,7 @@ fn value_to_scalar(v: &Value, expected: &DataType) -> Result<Option<ScalarValue>
             let dt = NaiveDate::from_ymd_opt(*y as i32, *m as u32, *d as u32)
                 .with_context(|| format!("invalid date {}-{}-{}", y, m, d))?
                 .and_hms_micro_opt(*h as u32, *mi as u32, *s as u32, *us)
-                .with_context(|| {
-                    format!("invalid time {}:{}:{}.{}", h, mi, s, us)
-                })?;
+                .with_context(|| format!("invalid time {}:{}:{}.{}", h, mi, s, us))?;
             let micros = dt.and_utc().timestamp_micros();
             Ok(Some(ScalarValue::TimestampMicros(micros)))
         }
@@ -270,13 +275,11 @@ pub fn parse_mysql_text(s: &str, target: &DataType) -> Result<Option<ScalarValue
             }
             let mut bytes = Vec::with_capacity(s.len() / 2);
             for chunk in s.as_bytes().chunks(2) {
-                let byte = u8::from_str_radix(
-                    std::str::from_utf8(chunk).context("BINARY hex utf8")?,
-                    16,
-                )
-                .with_context(|| {
-                    format!("parse BINARY hex byte '{}'", String::from_utf8_lossy(chunk))
-                })?;
+                let byte =
+                    u8::from_str_radix(std::str::from_utf8(chunk).context("BINARY hex utf8")?, 16)
+                        .with_context(|| {
+                            format!("parse BINARY hex byte '{}'", String::from_utf8_lossy(chunk))
+                        })?;
                 bytes.push(byte);
             }
             ScalarValue::Binary(bytes)
@@ -478,21 +481,14 @@ mod tests {
     fn parse_text_time_with_micros() {
         // 12:30:45.123456 = (12*3600 + 30*60 + 45) * 1_000_000 + 123_456
         //                 = 45_045_123_456
-        let v = parse_mysql_text(
-            "12:30:45.123456",
-            &DataType::Time64(TimeUnit::Microsecond),
-        )
-        .unwrap();
+        let v =
+            parse_mysql_text("12:30:45.123456", &DataType::Time64(TimeUnit::Microsecond)).unwrap();
         assert_eq!(v, Some(ScalarValue::Time64Micros(45_045_123_456)));
     }
 
     #[test]
     fn parse_text_time_without_fraction() {
-        let v = parse_mysql_text(
-            "00:00:01",
-            &DataType::Time64(TimeUnit::Microsecond),
-        )
-        .unwrap();
+        let v = parse_mysql_text("00:00:01", &DataType::Time64(TimeUnit::Microsecond)).unwrap();
         assert_eq!(v, Some(ScalarValue::Time64Micros(1_000_000)));
     }
 }

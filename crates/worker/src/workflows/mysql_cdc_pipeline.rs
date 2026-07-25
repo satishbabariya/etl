@@ -41,9 +41,15 @@ pub struct MysqlCdcPipelineWorkflow {
 fn retry_policy() -> temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
     use prost_wkt_types::Duration as PbDuration;
     temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
-        initial_interval: Some(PbDuration { seconds: 1, nanos: 0 }),
+        initial_interval: Some(PbDuration {
+            seconds: 1,
+            nanos: 0,
+        }),
         backoff_coefficient: 2.0,
-        maximum_interval: Some(PbDuration { seconds: 30, nanos: 0 }),
+        maximum_interval: Some(PbDuration {
+            seconds: 30,
+            nanos: 0,
+        }),
         maximum_attempts: 5,
         non_retryable_error_types: vec![],
     }
@@ -99,10 +105,9 @@ impl MysqlCdcPipelineWorkflow {
         let my = match &input.spec.source {
             SourceSpec::MysqlCdc(m) => m.clone(),
             _ => {
-                return Err(anyhow::anyhow!(
-                    "MysqlCdcPipelineWorkflow requires MysqlCdc source"
+                return Err(
+                    anyhow::anyhow!("MysqlCdcPipelineWorkflow requires MysqlCdc source").into(),
                 )
-                .into())
             }
         };
         let dest = input.spec.destination.clone();
@@ -192,9 +197,7 @@ impl MysqlCdcPipelineWorkflow {
         ) && !snap_state.completed
         {
             let pk_col = my.pk_column.clone().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "MysqlCdcSourceSpec.pk_column required for snapshot mode"
-                )
+                anyhow::anyhow!("MysqlCdcSourceSpec.pk_column required for snapshot mode")
             })?;
             let mut snap_seq: u32 = 0;
             let mut last_pk: Option<i64> = snap_state.last_pk;

@@ -60,13 +60,15 @@ pub async fn get(
     .bind(id.as_uuid())
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(cid, tid, name, connector_ref, config, c, u)| Connection {
-        connection_id: ConnectionId::from_uuid_unchecked(cid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        name,
-        connector_ref,
-        config,
-        created_at: c,
-        updated_at: u,
-    }))
+    Ok(
+        row.map(|(cid, tid, name, connector_ref, config, c, u)| Connection {
+            connection_id: ConnectionId::from_uuid_unchecked(cid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            name,
+            connector_ref,
+            config,
+            created_at: c,
+            updated_at: u,
+        }),
+    )
 }

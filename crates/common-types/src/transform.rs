@@ -24,11 +24,23 @@ fn default_dead_letter_threshold() -> f64 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Operator {
-    Select { columns: Vec<String> },
-    Filter { predicate: String },
-    Mask { column: String, strategy: MaskStrategy },
-    AddColumn { name: String, value: LiteralValue },
-    Validate { rules: Vec<ValidationRule> },
+    Select {
+        columns: Vec<String>,
+    },
+    Filter {
+        predicate: String,
+    },
+    Mask {
+        column: String,
+        strategy: MaskStrategy,
+    },
+    AddColumn {
+        name: String,
+        value: LiteralValue,
+    },
+    Validate {
+        rules: Vec<ValidationRule>,
+    },
     WasmScalar {
         udf: String,
         input_column: String,
@@ -84,7 +96,9 @@ mod tests {
 
     #[test]
     fn operator_roundtrips_filter() {
-        let op = Operator::Filter { predicate: "email IS NOT NULL".into() };
+        let op = Operator::Filter {
+            predicate: "email IS NOT NULL".into(),
+        };
         let j = serde_json::to_string(&op).unwrap();
         assert!(j.contains("\"type\":\"filter\""));
         let back: Operator = serde_json::from_str(&j).unwrap();

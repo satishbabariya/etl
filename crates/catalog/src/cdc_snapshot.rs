@@ -11,10 +11,7 @@ pub struct CdcSnapshotState {
 
 /// Insert or update snapshot state for a pipeline. Used after each
 /// snapshot chunk to checkpoint progress and once at completion.
-pub async fn upsert(
-    conn: &mut sqlx::PgConnection,
-    state: &CdcSnapshotState,
-) -> sqlx::Result<()> {
+pub async fn upsert(conn: &mut sqlx::PgConnection, state: &CdcSnapshotState) -> sqlx::Result<()> {
     sqlx::query(
         "INSERT INTO cdc_snapshots(pipeline_id, tenant_id, last_pk, completed, captured_position, updated_at) \
          VALUES ($1,$2,$3,$4,$5, now()) \
@@ -47,13 +44,15 @@ pub async fn get(
     .bind(pipeline_id.as_uuid())
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(pid, tid, last_pk, completed, cp)| CdcSnapshotState {
-        pipeline_id: PipelineId::from_uuid_unchecked(pid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        last_pk,
-        completed,
-        captured_position: cp,
-    }))
+    Ok(
+        row.map(|(pid, tid, last_pk, completed, cp)| CdcSnapshotState {
+            pipeline_id: PipelineId::from_uuid_unchecked(pid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            last_pk,
+            completed,
+            captured_position: cp,
+        }),
+    )
 }
 
 /// Mark snapshot complete; idempotent.

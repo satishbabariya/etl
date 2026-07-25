@@ -16,11 +16,17 @@ pub struct ConnectionConfig {
 
 impl ConnectionConfig {
     pub fn from_url(url: impl Into<String>) -> Self {
-        Self { url: Some(url.into()), url_secret: None }
+        Self {
+            url: Some(url.into()),
+            url_secret: None,
+        }
     }
 
     pub fn from_secret(r: SecretRef) -> Self {
-        Self { url: None, url_secret: Some(r) }
+        Self {
+            url: None,
+            url_secret: Some(r),
+        }
     }
 
     /// Borrow the plaintext URL after resolution. Panics if neither `url`

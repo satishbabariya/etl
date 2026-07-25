@@ -1,7 +1,7 @@
 //! WasmSourceConnector: a `SourceConnector` implementation that dispatches
 //! to a WASM Component Model guest.
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -12,10 +12,10 @@ use connector_sdk::{ReadOutcome, SourceConnector};
 use std::sync::Arc;
 use wasmtime::Store;
 
-use super::HostState;
-use super::bindings::SourceConnector as SourceConnectorBindings;
 use super::bindings::platform::connector::types as wit_types;
+use super::bindings::SourceConnector as SourceConnectorBindings;
 use super::runtime::WasmSourceRuntime;
+use super::HostState;
 
 pub struct WasmSourceConnector {
     runtime: Arc<WasmSourceRuntime>,
@@ -33,12 +33,12 @@ impl WasmSourceConnector {
     fn wasm_source_json(source: &SourceSpec) -> anyhow::Result<String> {
         match source {
             SourceSpec::Wasm(spec) => Ok(serde_json::to_string(&spec.config)?),
-            SourceSpec::Postgres(_) => bail!(
-                "WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::Postgres"
-            ),
-            SourceSpec::MysqlCdc(_) => bail!(
-                "WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::MysqlCdc"
-            ),
+            SourceSpec::Postgres(_) => {
+                bail!("WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::Postgres")
+            }
+            SourceSpec::MysqlCdc(_) => {
+                bail!("WasmSourceConnector only handles SourceSpec::Wasm; got SourceSpec::MysqlCdc")
+            }
         }
     }
 

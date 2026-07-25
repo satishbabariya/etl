@@ -114,7 +114,13 @@ impl JwtIssuer {
                 };
                 Ok(encode(&Header::new(Algorithm::HS256), &claims, key)?)
             }
-            Self::Rs256 { key, kid, ttl, iss, aud } => {
+            Self::Rs256 {
+                key,
+                kid,
+                ttl,
+                iss,
+                aud,
+            } => {
                 let mut header = Header::new(Algorithm::RS256);
                 header.kid = Some(kid.clone());
                 let claims = Claims {
@@ -189,8 +195,8 @@ impl JwtVerifier {
     }
 
     pub async fn verify(&self, token: &str) -> Result<Principal, AuthError> {
-        let header = decode_header(token)
-            .map_err(|e| AuthError::InvalidJwt(format!("header: {e}")))?;
+        let header =
+            decode_header(token).map_err(|e| AuthError::InvalidJwt(format!("header: {e}")))?;
 
         let (key, alg) = match &self.source {
             VerifierKeySource::Hs256(secret) => {
@@ -238,8 +244,8 @@ impl JwtVerifier {
             .tenant_id
             .parse::<TenantId>()
             .map_err(|e| AuthError::BadTenant(format!("{e:?}")))?;
-        let jti = Uuid::parse_str(&data.claims.jti)
-            .map_err(|e| AuthError::BadJti(format!("{e:?}")))?;
+        let jti =
+            Uuid::parse_str(&data.claims.jti).map_err(|e| AuthError::BadJti(format!("{e:?}")))?;
         Ok(Principal {
             principal_id,
             tenant_id,
@@ -293,14 +299,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ks = Keystore::open(dir.path().to_path_buf());
         let kid = ks.init().unwrap();
-        let issuer = JwtIssuer::rs256_pem(
-            &ks.private_pem(&kid).unwrap(),
-            &kid,
-            3600,
-            "i",
-            "good-aud",
-        )
-        .unwrap();
+        let issuer =
+            JwtIssuer::rs256_pem(&ks.private_pem(&kid).unwrap(), &kid, 3600, "i", "good-aud")
+                .unwrap();
         let (pid, tid) = fake();
         let token = issuer.issue(pid, tid, Role::Viewer).unwrap();
         let set = jwks_from_keystore(&ks).unwrap();
@@ -310,7 +311,10 @@ mod tests {
             .await
             .unwrap_err();
         let msg = format!("{err}").to_lowercase();
-        assert!(msg.contains("audience") || msg.contains("aud"), "got: {msg}");
+        assert!(
+            msg.contains("audience") || msg.contains("aud"),
+            "got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -330,7 +334,10 @@ mod tests {
         let (pid, tid) = fake();
         let token = issuer.issue(pid, tid, Role::Admin).unwrap();
         let set = jwks_from_keystore(&ks).unwrap();
-        let err = JwtVerifier::jwks_inline(set).verify(&token).await.unwrap_err();
+        let err = JwtVerifier::jwks_inline(set)
+            .verify(&token)
+            .await
+            .unwrap_err();
         assert!(matches!(err, AuthError::UnknownKid(_)));
     }
 
@@ -344,8 +351,8 @@ mod tests {
         );
         let (pid, tid) = fake();
         let token = issuer.issue(pid, tid, Role::Operator).unwrap();
-        let v = JwtVerifier::hs256(b"dev-secret-dev-secret-dev-secret")
-            .with_audience("etl-platform");
+        let v =
+            JwtVerifier::hs256(b"dev-secret-dev-secret-dev-secret").with_audience("etl-platform");
         let p = v.verify(&token).await.unwrap();
         assert_eq!(p.principal_id, pid);
     }

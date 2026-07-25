@@ -162,10 +162,7 @@ impl Guest for Component {
 
 /// Materialize `SOURCE_TEMPLATE` into a new directory at `target_dir`,
 /// substituting `{{NAME}}` for the supplied connector name.
-pub fn materialize_source_template(
-    target_dir: &std::path::Path,
-    name: &str,
-) -> anyhow::Result<()> {
+pub fn materialize_source_template(target_dir: &std::path::Path, name: &str) -> anyhow::Result<()> {
     use std::fs;
     if target_dir.exists() {
         anyhow::bail!("{} already exists", target_dir.display());
@@ -174,18 +171,17 @@ pub fn materialize_source_template(
     let body = SOURCE_TEMPLATE.replace("{{NAME}}", name);
     let mut current_path: Option<std::path::PathBuf> = None;
     let mut current_buf = String::new();
-    let flush =
-        |path: Option<&std::path::Path>, buf: &str| -> anyhow::Result<()> {
-            if let Some(p) = path {
-                let abs = target_dir.join(p);
-                if let Some(parent) = abs.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let content = buf.trim_end_matches('\n').to_string() + "\n";
-                fs::write(abs, content)?;
+    let flush = |path: Option<&std::path::Path>, buf: &str| -> anyhow::Result<()> {
+        if let Some(p) = path {
+            let abs = target_dir.join(p);
+            if let Some(parent) = abs.parent() {
+                fs::create_dir_all(parent)?;
             }
-            Ok(())
-        };
+            let content = buf.trim_end_matches('\n').to_string() + "\n";
+            fs::write(abs, content)?;
+        }
+        Ok(())
+    };
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("===FILE: ") {
             let path = rest.trim_end_matches("===");

@@ -96,7 +96,11 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         .current_dir(workspace_root())
         .output()
         .await?;
-    for (name, role) in [("v_user", "viewer"), ("o_user", "operator"), ("a_user", "admin")] {
+    for (name, role) in [
+        ("v_user", "viewer"),
+        ("o_user", "operator"),
+        ("a_user", "admin"),
+    ] {
         let out = Command::new(cargo_bin("platform"))
             .args([
                 "auth",
@@ -154,7 +158,10 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         .current_dir(workspace_root())
         .output()
         .await?;
-    assert!(!create.status.success(), "operator should not create tenants");
+    assert!(
+        !create.status.success(),
+        "operator should not create tenants"
+    );
 
     login("a_user", "pw", &issuer).await;
     let create = Command::new(cargo_bin("platform"))

@@ -6,8 +6,8 @@ use anyhow::Context;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use catalog::Catalog;
 use common_types::connection_config::ConnectionConfig;
 use common_types::ids::{PipelineId, RunId};
@@ -20,11 +20,13 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use crate::connectors::dispatch::build_source_connector;
 use crate::loaders::parquet_local::LocalParquetLoader;
 use crate::loaders::postgres::PostgresLoader;
+use crate::loaders::snowflake::SnowflakeLoader;
 
 fn loader_name(dest: &common_types::pipeline_spec::DestinationSpec) -> &'static str {
     match dest {
         common_types::pipeline_spec::DestinationSpec::LocalParquet(_) => "local_parquet",
         common_types::pipeline_spec::DestinationSpec::Postgres(_) => "postgres",
+        common_types::pipeline_spec::DestinationSpec::Snowflake(_) => "snowflake",
     }
 }
 use crate::wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime};
@@ -53,8 +55,8 @@ fn encode_batch(batch: &RecordBatch) -> anyhow::Result<String> {
     let mut buf = Vec::new();
     let schema = batch.schema();
     {
-        let mut w = StreamWriter::try_new(&mut buf, schema.as_ref())
-            .context("StreamWriter::try_new")?;
+        let mut w =
+            StreamWriter::try_new(&mut buf, schema.as_ref()).context("StreamWriter::try_new")?;
         if batch.num_rows() > 0 {
             w.write(batch).context("StreamWriter::write")?;
         }
@@ -105,11 +107,9 @@ impl SyncActivities {
         // Phase I.5: if a transform is configured, record the DERIVED schema.
         let final_schema: arrow::datatypes::SchemaRef = match &input.transform {
             Some(spec) if !spec.operators.is_empty() => {
-                let derived = crate::transform::derive_schema(
-                    discovered_schema.as_ref(),
-                    &spec.operators,
-                )
-                .map_err(to_retryable)?;
+                let derived =
+                    crate::transform::derive_schema(discovered_schema.as_ref(), &spec.operators)
+                        .map_err(to_retryable)?;
                 std::sync::Arc::new(derived)
             }
             _ => discovered_schema,
@@ -146,7 +146,12 @@ impl SyncActivities {
         .await
         .map_err(to_retryable)?;
 
-        let columns = resolved.schema.fields().iter().map(|f| f.name().clone()).collect();
+        let columns = resolved
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         Ok(DiscoverOutput {
             columns,
             schema_id: resolved.schema_id.as_uuid(),
@@ -177,24 +182,16 @@ impl SyncActivities {
         .await
         .map_err(to_retryable)?;
         let outcome = connector
-            .read_batch(
-                &resolved,
-                &input.source,
-                input.cursor,
-                input.batch_size,
-            )
+            .read_batch(&resolved, &input.source, input.cursor, input.batch_size)
             .await
             .map_err(to_retryable)?;
 
         let (kept_batch, rejected_batch) = match &input.transform {
             Some(spec) if !spec.operators.is_empty() => {
-                let tx = crate::transform::apply(
-                    outcome.batch,
-                    &spec.operators,
-                    &self.scalar_runtime,
-                )
-                .await
-                .map_err(to_retryable)?;
+                let tx =
+                    crate::transform::apply(outcome.batch, &spec.operators, &self.scalar_runtime)
+                        .await
+                        .map_err(to_retryable)?;
                 tracing::info!(
                     per_operator = ?tx.per_operator,
                     rows_kept = tx.kept.num_rows(),
@@ -295,6 +292,11 @@ impl SyncActivities {
                     .load(&input.destination, load_id.clone(), batch)
                     .await
             }
+            common_types::pipeline_spec::DestinationSpec::Snowflake(_) => {
+                SnowflakeLoader
+                    .load(&input.destination, load_id.clone(), batch)
+                    .await
+            }
         }
         .map_err(to_retryable)?;
         metrics::counter!(
@@ -323,44 +325,45 @@ impl SyncActivities {
             }
         }
         if dl_supported {
-        if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
-            let rej = decode_batch(rej_b64).map_err(to_retryable)?;
-            if rej.num_rows() > 0 {
-                let dest_path = match &input.destination {
-                    common_types::pipeline_spec::DestinationSpec::LocalParquet(s) => {
-                        let mut p = std::path::PathBuf::from(&s.base_path);
-                        p.push(load_id.tenant_id.as_uuid().to_string());
-                        p.push(load_id.pipeline_id.as_uuid().to_string());
-                        p.push("dead-letter");
-                        p.push(load_id.run_id.as_uuid().to_string());
-                        std::fs::create_dir_all(&p)
-                            .map_err(|e| to_retryable(anyhow::anyhow!("create dir: {e}")))?;
-                        p.push(format!("batch-{:05}.parquet", input.batch_seq));
-                        p
-                    }
-                    common_types::pipeline_spec::DestinationSpec::Postgres(_) => {
-                        unreachable!("guarded by dl_supported");
-                    }
-                };
-                let file = std::fs::File::create(&dest_path)
-                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter create: {e}")))?;
-                let props = parquet::file::properties::WriterProperties::builder().build();
-                let mut writer =
-                    parquet::arrow::ArrowWriter::try_new(file, rej.schema(), Some(props))
-                        .map_err(|e| to_retryable(anyhow::anyhow!("ArrowWriter: {e}")))?;
-                writer
-                    .write(&rej)
-                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter write: {e}")))?;
-                writer
-                    .close()
-                    .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter close: {e}")))?;
-                tracing::info!(
-                    path = %dest_path.display(),
-                    rows = rej.num_rows(),
-                    "dead-letter batch written"
-                );
+            if let Some(rej_b64) = input.rejected_ipc_b64.as_deref() {
+                let rej = decode_batch(rej_b64).map_err(to_retryable)?;
+                if rej.num_rows() > 0 {
+                    let dest_path = match &input.destination {
+                        common_types::pipeline_spec::DestinationSpec::LocalParquet(s) => {
+                            let mut p = std::path::PathBuf::from(&s.base_path);
+                            p.push(load_id.tenant_id.as_uuid().to_string());
+                            p.push(load_id.pipeline_id.as_uuid().to_string());
+                            p.push("dead-letter");
+                            p.push(load_id.run_id.as_uuid().to_string());
+                            std::fs::create_dir_all(&p)
+                                .map_err(|e| to_retryable(anyhow::anyhow!("create dir: {e}")))?;
+                            p.push(format!("batch-{:05}.parquet", input.batch_seq));
+                            p
+                        }
+                        common_types::pipeline_spec::DestinationSpec::Postgres(_)
+                        | common_types::pipeline_spec::DestinationSpec::Snowflake(_) => {
+                            unreachable!("guarded by dl_supported");
+                        }
+                    };
+                    let file = std::fs::File::create(&dest_path)
+                        .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter create: {e}")))?;
+                    let props = parquet::file::properties::WriterProperties::builder().build();
+                    let mut writer =
+                        parquet::arrow::ArrowWriter::try_new(file, rej.schema(), Some(props))
+                            .map_err(|e| to_retryable(anyhow::anyhow!("ArrowWriter: {e}")))?;
+                    writer
+                        .write(&rej)
+                        .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter write: {e}")))?;
+                    writer
+                        .close()
+                        .map_err(|e| to_retryable(anyhow::anyhow!("dead-letter close: {e}")))?;
+                    tracing::info!(
+                        path = %dest_path.display(),
+                        rows = rej.num_rows(),
+                        "dead-letter batch written"
+                    );
+                }
             }
-        }
         }
 
         // Threshold check (cumulative).
@@ -383,7 +386,9 @@ impl SyncActivities {
         // Metering: emit RowsWritten + BytesWritten (best-effort).
         {
             let tid = common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id);
-            let pid = Some(common_types::ids::PipelineId::from_uuid_unchecked(input.pipeline_id));
+            let pid = Some(common_types::ids::PipelineId::from_uuid_unchecked(
+                input.pipeline_id,
+            ));
             let rid = Some(common_types::ids::RunId::from_uuid_unchecked(input.run_id));
             let rows_ev = metering::MeteringEvent::new(
                 tid.clone(),
@@ -455,10 +460,26 @@ mod dispatch_tests {
 
     #[test]
     fn pick_loader_returns_local_parquet_for_parquet_spec() {
-        let spec = DestinationSpec::LocalParquet(
-            common_types::pipeline_spec::LocalParquetSpec { base_path: "/tmp".into() },
-        );
+        let spec = DestinationSpec::LocalParquet(common_types::pipeline_spec::LocalParquetSpec {
+            base_path: "/tmp".into(),
+        });
         assert_eq!(loader_name(&spec), "local_parquet");
     }
-}
 
+    #[test]
+    fn pick_loader_returns_snowflake_for_snowflake_spec() {
+        let spec =
+            DestinationSpec::Snowflake(common_types::pipeline_spec::SnowflakeDestinationSpec {
+                account: "a".into(),
+                user: "u".into(),
+                private_key_env: "K".into(),
+                warehouse: "w".into(),
+                database: "d".into(),
+                schema: "s".into(),
+                table: "t".into(),
+                role: None,
+                pk_columns: vec![],
+            });
+        assert_eq!(loader_name(&spec), "snowflake");
+    }
+}

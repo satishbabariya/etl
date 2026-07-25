@@ -45,17 +45,14 @@ async fn corrupting_payload_fails_verify_chain() -> anyhow::Result<()> {
         .output()
         .await?;
 
-    let id: (i64,) = sqlx::query_as(
-        "SELECT audit_id FROM audit_log ORDER BY audit_id DESC OFFSET 1 LIMIT 1",
-    )
-    .fetch_one(cat.pool())
-    .await?;
-    sqlx::query(
-        "UPDATE audit_log SET payload = '{\"tampered\": true}'::jsonb WHERE audit_id = $1",
-    )
-    .bind(id.0)
-    .execute(cat.pool())
-    .await?;
+    let id: (i64,) =
+        sqlx::query_as("SELECT audit_id FROM audit_log ORDER BY audit_id DESC OFFSET 1 LIMIT 1")
+            .fetch_one(cat.pool())
+            .await?;
+    sqlx::query("UPDATE audit_log SET payload = '{\"tampered\": true}'::jsonb WHERE audit_id = $1")
+        .bind(id.0)
+        .execute(cat.pool())
+        .await?;
 
     let verify = Command::new(cargo_bin("platform"))
         .args(["audit", "verify-chain"])

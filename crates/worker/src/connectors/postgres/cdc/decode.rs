@@ -20,17 +20,36 @@ pub struct ColumnInfo {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CdcEvent {
-    Begin { final_lsn: u64, commit_ts_micros: i64, xid: u32 },
-    Commit { commit_lsn: u64, end_lsn: u64, commit_ts_micros: i64 },
+    Begin {
+        final_lsn: u64,
+        commit_ts_micros: i64,
+        xid: u32,
+    },
+    Commit {
+        commit_lsn: u64,
+        end_lsn: u64,
+        commit_ts_micros: i64,
+    },
     Relation(RelationInfo),
-    Insert { rel_id: u32, row: Vec<Option<String>> },
-    Update { rel_id: u32, row: Vec<Option<String>> },
-    Delete { rel_id: u32, key: Vec<Option<String>> },
+    Insert {
+        rel_id: u32,
+        row: Vec<Option<String>>,
+    },
+    Update {
+        rel_id: u32,
+        row: Vec<Option<String>>,
+    },
+    Delete {
+        rel_id: u32,
+        key: Vec<Option<String>>,
+    },
     /// TRUNCATE on one or more relations. Phase I.6 emits no Arrow rows
     /// for truncates — the LSN advances past the message and downstream
     /// pipelines see the absence of rows. A future phase can fold this
     /// into the Parquet stream as a `_cdc.op = 't'` marker.
-    Truncate { rel_ids: Vec<u32> },
+    Truncate {
+        rel_ids: Vec<u32>,
+    },
     /// Logical-replication housekeeping messages we don't act on:
     /// pgoutput tags `M` (logical message), `Y` (type info), `O`
     /// (origin). Decoded as a no-op so the slot's LSN can advance past
@@ -70,7 +89,11 @@ fn decode_begin(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
     let final_lsn = rdr.read_u64::<BigEndian>()?;
     let commit_ts = rdr.read_i64::<BigEndian>()?;
     let xid = rdr.read_u32::<BigEndian>()?;
-    Ok(CdcEvent::Begin { final_lsn, commit_ts_micros: commit_ts, xid })
+    Ok(CdcEvent::Begin {
+        final_lsn,
+        commit_ts_micros: commit_ts,
+        xid,
+    })
 }
 
 fn decode_commit(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
@@ -78,11 +101,17 @@ fn decode_commit(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
     let commit_lsn = rdr.read_u64::<BigEndian>()?;
     let end_lsn = rdr.read_u64::<BigEndian>()?;
     let commit_ts = rdr.read_i64::<BigEndian>()?;
-    Ok(CdcEvent::Commit { commit_lsn, end_lsn, commit_ts_micros: commit_ts })
+    Ok(CdcEvent::Commit {
+        commit_lsn,
+        end_lsn,
+        commit_ts_micros: commit_ts,
+    })
 }
 
 fn read_cstr(rdr: &mut &[u8]) -> anyhow::Result<String> {
-    let nul = rdr.iter().position(|&b| b == 0)
+    let nul = rdr
+        .iter()
+        .position(|&b| b == 0)
         .ok_or_else(|| anyhow!("cstring missing NUL"))?;
     let s = std::str::from_utf8(&rdr[..nul])?.to_owned();
     *rdr = &rdr[nul + 1..];
@@ -107,7 +136,12 @@ fn decode_relation(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
             is_key: (flags & 0x01) != 0,
         });
     }
-    Ok(CdcEvent::Relation(RelationInfo { rel_id, namespace, name, columns }))
+    Ok(CdcEvent::Relation(RelationInfo {
+        rel_id,
+        namespace,
+        name,
+        columns,
+    }))
 }
 
 fn decode_tuple(rdr: &mut &[u8]) -> anyhow::Result<Vec<Option<String>>> {
@@ -167,13 +201,14 @@ mod tests {
     #[test]
     fn decodes_begin() {
         let body = [
-            b'B',
-            0,0,0,0,0,0,0,1,
-            0,0,0,0,0,0,0,2,
-            0,0,0,3,
+            b'B', 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 3,
         ];
         match decode_message(&body).unwrap() {
-            CdcEvent::Begin { final_lsn, commit_ts_micros, xid } => {
+            CdcEvent::Begin {
+                final_lsn,
+                commit_ts_micros,
+                xid,
+            } => {
                 assert_eq!(final_lsn, 1);
                 assert_eq!(commit_ts_micros, 2);
                 assert_eq!(xid, 3);
@@ -185,13 +220,7 @@ mod tests {
     #[test]
     fn decodes_insert_single_text_col() {
         let body = [
-            b'I',
-            0,0,0,7,
-            b'N',
-            0,1,
-            b't',
-            0,0,0,3,
-            b'a', b'b', b'c',
+            b'I', 0, 0, 0, 7, b'N', 0, 1, b't', 0, 0, 0, 3, b'a', b'b', b'c',
         ];
         match decode_message(&body).unwrap() {
             CdcEvent::Insert { rel_id, row } => {
@@ -204,15 +233,7 @@ mod tests {
 
     #[test]
     fn decodes_delete_with_key() {
-        let body = [
-            b'D',
-            0,0,0,7,
-            b'K',
-            0,1,
-            b't',
-            0,0,0,1,
-            b'9',
-        ];
+        let body = [b'D', 0, 0, 0, 7, b'K', 0, 1, b't', 0, 0, 0, 1, b'9'];
         match decode_message(&body).unwrap() {
             CdcEvent::Delete { rel_id, key } => {
                 assert_eq!(rel_id, 7);
@@ -225,9 +246,8 @@ mod tests {
     #[test]
     fn decodes_truncate() {
         let body = [
-            b'T',
-            0, 0, 0, 2, // n_rels = 2
-            0,          // flags
+            b'T', 0, 0, 0, 2, // n_rels = 2
+            0, // flags
             0, 0, 0, 7, // rel_id 7
             0, 0, 0, 9, // rel_id 9
         ];
@@ -247,14 +267,7 @@ mod tests {
 
     #[test]
     fn null_and_toast_unchanged_decode_as_none() {
-        let body = [
-            b'I',
-            0,0,0,7,
-            b'N',
-            0,2,
-            b'n',
-            b'u',
-        ];
+        let body = [b'I', 0, 0, 0, 7, b'N', 0, 2, b'n', b'u'];
         match decode_message(&body).unwrap() {
             CdcEvent::Insert { row, .. } => assert_eq!(row, vec![None, None]),
             _ => panic!(),

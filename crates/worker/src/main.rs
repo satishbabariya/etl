@@ -13,8 +13,7 @@ use worker::{
     temporal::{make_client, make_runtime, TemporalConfig},
     wasm_runtime::{WasmScalarRuntime, WasmSourceRuntime},
     workflows::{
-        CdcPipelineWorkflow, MysqlCdcPipelineWorkflow, PipelineRunWorkflow,
-        WasmCdcPipelineWorkflow,
+        CdcPipelineWorkflow, MysqlCdcPipelineWorkflow, PipelineRunWorkflow, WasmCdcPipelineWorkflow,
     },
 };
 
@@ -115,8 +114,9 @@ async fn main() -> anyhow::Result<()> {
                 let cfg = row?.0;
                 let conn: common_types::connection_config::ConnectionConfig =
                     serde_json::from_value(cfg).ok()?;
-                let resolved =
-                    worker::secrets::resolve_connection(secrets.as_ref(), &conn).await.ok()?;
+                let resolved = worker::secrets::resolve_connection(secrets.as_ref(), &conn)
+                    .await
+                    .ok()?;
                 Some(resolved.expect_url().to_string())
             })
         })
@@ -208,21 +208,23 @@ async fn main() -> anyhow::Result<()> {
         tenants.iter().map(|t| t.tenant_id).collect();
     let nil_tenant = common_types::ids::TenantId::from_uuid_unchecked(uuid::Uuid::nil());
 
-    local.run_until(async move {
-        for t in &tenants {
-            spawn_one(t.tenant_id);
-        }
-        spawn_one(nil_tenant);
-        initial_ids.push(nil_tenant);
+    local
+        .run_until(async move {
+            for t in &tenants {
+                spawn_one(t.tenant_id);
+            }
+            spawn_one(nil_tenant);
+            initial_ids.push(nil_tenant);
 
-        tokio::task::spawn_local(worker::tenant_watcher::run(
-            catalog.clone(),
-            initial_ids,
-            Box::new(spawn_one),
-        ));
+            tokio::task::spawn_local(worker::tenant_watcher::run(
+                catalog.clone(),
+                initial_ids,
+                Box::new(spawn_one),
+            ));
 
-        // Park: workers run on the LocalSet; this future never completes.
-        futures::future::pending::<()>().await
-    }).await;
+            // Park: workers run on the LocalSet; this future never completes.
+            futures::future::pending::<()>().await
+        })
+        .await;
     Ok(())
 }

@@ -1,7 +1,10 @@
 pub mod inputs;
 
 use arrow::datatypes::DataType;
-use catalog::{cdc::{CdcSlot, SlotState}, Catalog};
+use catalog::{
+    cdc::{CdcSlot, SlotState},
+    Catalog,
+};
 use common_types::ids::{PipelineId, TenantId};
 use inputs::*;
 use metrics;
@@ -97,8 +100,9 @@ impl CdcActivities {
             &input.source_conn,
             crate::secrets::auditing::ResolveContext {
                 tenant_id: common_types::ids::TenantId::from_uuid_unchecked(input.tenant_id),
-                principal_id: (!input.principal_id.is_nil())
-                    .then(|| common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)),
+                principal_id: (!input.principal_id.is_nil()).then(|| {
+                    common_types::ids::PrincipalId::from_uuid_unchecked(input.principal_id)
+                }),
                 jti: (!input.jti.is_nil()).then_some(input.jti),
             },
         )
@@ -143,7 +147,7 @@ impl CdcActivities {
             "op" => "s",
             "tenant_id" => input.tenant_id.to_string(),
         )
-            .increment(chunk.batch.num_rows() as u64);
+        .increment(chunk.batch.num_rows() as u64);
         if chunk.batch.num_rows() > 0 {
             CdcParquetLoader
                 .write(
@@ -167,9 +171,8 @@ impl CdcActivities {
             completed: false,
             captured_position: input.consistent_point.clone(),
         };
-        let snap_ctx = common_types::ids::TenantContext::new(
-            TenantId::from_uuid_unchecked(input.tenant_id),
-        );
+        let snap_ctx =
+            common_types::ids::TenantContext::new(TenantId::from_uuid_unchecked(input.tenant_id));
         self.catalog
             .cdc_snapshot_upsert(snap_ctx, &snap_state)
             .await
@@ -251,7 +254,10 @@ impl CdcActivities {
         .await
         .map_err(retryable)?;
         if out.is_empty {
-            return Ok(ReadWindowOutput { rows: 0, new_lsn: None });
+            return Ok(ReadWindowOutput {
+                rows: 0,
+                new_lsn: None,
+            });
         }
         let rel_id_opt = out
             .relations
@@ -262,7 +268,12 @@ impl CdcActivities {
             Some(r) => r,
             // No Relation message seen yet (can happen if the slot only emitted
             // Begin/Commit with no data rows for our table this window).
-            None => return Ok(ReadWindowOutput { rows: 0, new_lsn: None }),
+            None => {
+                return Ok(ReadWindowOutput {
+                    rows: 0,
+                    new_lsn: None,
+                })
+            }
         };
         let rel = out.relations.get(&rel_id).unwrap();
         let cols: Vec<(&str, DataType)> = rel
@@ -276,9 +287,8 @@ impl CdcActivities {
             })
             .collect();
         let schema = snapshot::cdc_schema_for(&cols);
-        let batch =
-            stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
-                .map_err(retryable)?;
+        let batch = stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
+            .map_err(retryable)?;
         let rows = batch.num_rows();
         for ev in &out.events {
             let op = match ev {
@@ -358,13 +368,10 @@ impl CdcActivities {
         )
         .await
         .map_err(retryable)?;
-        let confirmed = slot::advance_slot(
-            resolved.expect_url(),
-            &input.slot_name,
-            &input.target_lsn,
-        )
-        .await
-        .map_err(retryable)?;
+        let confirmed =
+            slot::advance_slot(resolved.expect_url(), &input.slot_name, &input.target_lsn)
+                .await
+                .map_err(retryable)?;
         let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
         let tid = TenantId::from_uuid_unchecked(input.tenant_id);
         let ctx = common_types::ids::TenantContext::new(tid);
@@ -377,6 +384,8 @@ impl CdcActivities {
             confirmed_flush_lsn = %confirmed,
             "cdc: advance_slot complete"
         );
-        Ok(AdvanceSlotOutput { confirmed_flush_lsn: confirmed })
+        Ok(AdvanceSlotOutput {
+            confirmed_flush_lsn: confirmed,
+        })
     }
 }

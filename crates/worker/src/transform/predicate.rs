@@ -4,7 +4,7 @@
 //!                 | <col> = <literal>
 //!                 | <col> IN ( <literal-list> )
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use arrow::array::{Array, BooleanArray, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 

@@ -130,7 +130,9 @@ async fn count(pool: &sqlx::PgPool, schema: &str, table: &str) -> i64 {
 
 #[tokio::test]
 async fn multi_table_append_lands_in_distinct_tables() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
 
     PostgresLoader
@@ -153,7 +155,9 @@ async fn multi_table_append_lands_in_distinct_tables() {
 
 #[tokio::test]
 async fn multi_table_cdc_routes_per_stream() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec!["id".into()]);
 
     // Two streams, each with a mixed CDC batch.
@@ -199,7 +203,9 @@ async fn multi_table_cdc_routes_per_stream() {
 
 #[tokio::test]
 async fn multi_table_idempotency_keys_include_stream_name() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
 
     // Same (run, batch_seq) but different stream_name — must NOT collide
@@ -233,15 +239,13 @@ async fn multi_table_idempotency_keys_include_stream_name() {
 async fn multi_table_stream_with_dot_in_name() {
     // The connector convention is `<src_schema>.<table>` (e.g. "public.users").
     // The PG loader should accept the literal dot as part of the table name.
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
 
     PostgresLoader
-        .load(
-            &s,
-            lid("public.users", 0),
-            plain_batch(&[(1, Some("a"))]),
-        )
+        .load(&s, lid("public.users", 0), plain_batch(&[(1, Some("a"))]))
         .await
         .unwrap();
 
@@ -251,15 +255,13 @@ async fn multi_table_stream_with_dot_in_name() {
 
 #[tokio::test]
 async fn multi_table_rejects_quote_char_in_stream_name() {
-    let Some((pool, schema)) = fresh_schema().await else { return };
+    let Some((pool, schema)) = fresh_schema().await else {
+        return;
+    };
     let s = spec(&test_url(), &schema, vec![]);
 
     let err = PostgresLoader
-        .load(
-            &s,
-            lid("bad\"name", 0),
-            plain_batch(&[(1, Some("a"))]),
-        )
+        .load(&s, lid("bad\"name", 0), plain_batch(&[(1, Some("a"))]))
         .await
         .unwrap_err();
     assert!(format!("{err}").to_lowercase().contains("illegal"));

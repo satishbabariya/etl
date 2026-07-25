@@ -154,8 +154,7 @@ pub async fn read_chunk(
         }
     }
 
-    let mut cols: Vec<ArrayRef> =
-        col_builders.into_iter().map(|mut b| b.finish()).collect();
+    let mut cols: Vec<ArrayRef> = col_builders.into_iter().map(|mut b| b.finish()).collect();
     cols.push(Arc::new(op_b.finish()));
     cols.push(Arc::new(lsn_b.finish()));
     // _cdc.commit_ts has UTC timezone in the schema; finish-with-timezone
@@ -172,12 +171,10 @@ pub async fn read_chunk(
     })
 }
 
-fn make_snapshot_builder(
-    dt: &arrow::datatypes::DataType,
-) -> Result<Box<dyn ArrayBuilder>> {
+fn make_snapshot_builder(dt: &arrow::datatypes::DataType) -> Result<Box<dyn ArrayBuilder>> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::{DataType, TimeUnit};
     Ok(match dt {
@@ -207,8 +204,8 @@ fn append_snapshot_scalar(
     dt: &arrow::datatypes::DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::{DataType, TimeUnit};
     match (scalar, dt) {
@@ -355,10 +352,8 @@ mod tests {
     #[test]
     fn build_sql_without_last_pk() {
         use arrow::datatypes::DataType;
-        let cols: Vec<(&str, &DataType)> = vec![
-            ("id", &DataType::Int64),
-            ("amount", &DataType::Utf8),
-        ];
+        let cols: Vec<(&str, &DataType)> =
+            vec![("id", &DataType::Int64), ("amount", &DataType::Utf8)];
         let s = build_chunk_sql("shop", "orders", "id", &cols, false, 100);
         assert!(!s.contains("WHERE"));
         assert!(s.contains("ORDER BY `id`"));

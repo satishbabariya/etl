@@ -38,32 +38,38 @@ pub async fn verify_chain(
             Vec<u8>,
             Vec<u8>,
         )> = match tenant_id {
-            Some(tid) => sqlx::query_as(
-                "SELECT audit_id, tenant_id, principal_id, jti, action, target, payload, \
+            Some(tid) => {
+                sqlx::query_as(
+                    "SELECT audit_id, tenant_id, principal_id, jti, action, target, payload, \
                         occurred_at, prev_hash, hash \
                  FROM audit_log \
                  WHERE tenant_id = $1 AND audit_id > $2 \
                  ORDER BY audit_id ASC \
                  LIMIT 1000",
-            )
-            .bind(tid.as_uuid())
-            .bind(last_id)
-            .fetch_all(pool)
-            .await?,
-            None => sqlx::query_as(
-                "SELECT audit_id, tenant_id, principal_id, jti, action, target, payload, \
+                )
+                .bind(tid.as_uuid())
+                .bind(last_id)
+                .fetch_all(pool)
+                .await?
+            }
+            None => {
+                sqlx::query_as(
+                    "SELECT audit_id, tenant_id, principal_id, jti, action, target, payload, \
                         occurred_at, prev_hash, hash \
                  FROM audit_log \
                  WHERE tenant_id IS NULL AND audit_id > $1 \
                  ORDER BY audit_id ASC \
                  LIMIT 1000",
-            )
-            .bind(last_id)
-            .fetch_all(pool)
-            .await?,
+                )
+                .bind(last_id)
+                .fetch_all(pool)
+                .await?
+            }
         };
         if rows.is_empty() {
-            return Ok(VerifyResult::Ok { rows_checked: count });
+            return Ok(VerifyResult::Ok {
+                rows_checked: count,
+            });
         }
         for (id, tid, pid, jti, action, target, payload, ts, db_prev, db_hash) in rows {
             if db_prev != prev.as_slice() {
@@ -100,19 +106,23 @@ pub async fn verify_and_checkpoint(
     if let VerifyResult::Ok { rows_checked } = &result {
         if *rows_checked > 0 {
             let last: Option<(i64, Vec<u8>)> = match tenant_id {
-                Some(tid) => sqlx::query_as(
-                    "SELECT audit_id, hash FROM audit_log \
+                Some(tid) => {
+                    sqlx::query_as(
+                        "SELECT audit_id, hash FROM audit_log \
                      WHERE tenant_id = $1 ORDER BY audit_id DESC LIMIT 1",
-                )
-                .bind(tid.as_uuid())
-                .fetch_optional(pool)
-                .await?,
-                None => sqlx::query_as(
-                    "SELECT audit_id, hash FROM audit_log \
+                    )
+                    .bind(tid.as_uuid())
+                    .fetch_optional(pool)
+                    .await?
+                }
+                None => {
+                    sqlx::query_as(
+                        "SELECT audit_id, hash FROM audit_log \
                      WHERE tenant_id IS NULL ORDER BY audit_id DESC LIMIT 1",
-                )
-                .fetch_optional(pool)
-                .await?,
+                    )
+                    .fetch_optional(pool)
+                    .await?
+                }
             };
             if let Some((id, h)) = last {
                 let mut hash = [0u8; 32];

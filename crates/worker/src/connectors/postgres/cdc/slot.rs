@@ -14,21 +14,21 @@ pub async fn ensure_publication(
     table: &str,
 ) -> anyhow::Result<()> {
     let mut c = PgConnection::connect(conn_url).await?;
-    let exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM pg_publication WHERE pubname = $1)",
-    )
-    .bind(publication)
-    .fetch_one(&mut c)
-    .await?;
+    let exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pg_publication WHERE pubname = $1)")
+            .bind(publication)
+            .fetch_one(&mut c)
+            .await?;
     if !exists.0 {
         // table is expected as "schema.table"; split + quote parts.
         let (schema, tbl) = table
             .split_once('.')
             .ok_or_else(|| anyhow::anyhow!("table must be schema.table, got {table}"))?;
-        let stmt = format!(
-            "CREATE PUBLICATION \"{publication}\" FOR TABLE \"{schema}\".\"{tbl}\""
-        );
-        sqlx::query(&stmt).execute(&mut c).await.context("CREATE PUBLICATION")?;
+        let stmt = format!("CREATE PUBLICATION \"{publication}\" FOR TABLE \"{schema}\".\"{tbl}\"");
+        sqlx::query(&stmt)
+            .execute(&mut c)
+            .await
+            .context("CREATE PUBLICATION")?;
     }
     Ok(())
 }
@@ -93,11 +93,7 @@ pub async fn slot_lag_bytes(conn_url: &str, slot: &str) -> anyhow::Result<i64> {
 ///
 /// Idempotent: `pg_replication_slot_advance` is a no-op when
 /// `target_lsn` ≤ the current `confirmed_flush_lsn` (PG 11+).
-pub async fn advance_slot(
-    conn_url: &str,
-    slot: &str,
-    target_lsn: &str,
-) -> anyhow::Result<String> {
+pub async fn advance_slot(conn_url: &str, slot: &str, target_lsn: &str) -> anyhow::Result<String> {
     let mut c = PgConnection::connect(conn_url).await?;
     sqlx::query("SELECT pg_replication_slot_advance($1, $2::pg_lsn)")
         .bind(slot)

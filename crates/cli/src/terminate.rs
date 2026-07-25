@@ -8,7 +8,9 @@ pub async fn terminate(workflow_id: String, reason: Option<String>) -> anyhow::R
     let client = make_client(&cfg).await?;
     let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.clone());
     let mut opts = WorkflowTerminateOptions::default();
-    opts.reason = reason.clone().unwrap_or_else(|| "platform-cli-terminate".into());
+    opts.reason = reason
+        .clone()
+        .unwrap_or_else(|| "platform-cli-terminate".into());
     handle
         .terminate(opts)
         .await
@@ -26,7 +28,8 @@ pub async fn terminate(workflow_id: String, reason: Option<String>) -> anyhow::R
     .await?;
     if let Some((rid, tid)) = row {
         let rid = common_types::ids::RunId::from_uuid_unchecked(rid);
-        let ctx = catalog::TenantContext::new(common_types::ids::TenantId::from_uuid_unchecked(tid));
+        let ctx =
+            catalog::TenantContext::new(common_types::ids::TenantId::from_uuid_unchecked(tid));
         catalog
             .mark_run_failed(ctx, rid, &reason.unwrap_or_else(|| "terminated".into()))
             .await?;

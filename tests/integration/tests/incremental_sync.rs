@@ -51,7 +51,14 @@ INSERT INTO customers (id, name, email, created_at, updated_at) VALUES
 "#;
     let mut child = Command::new("docker")
         .args([
-            "exec", "-i", "etl-postgres", "psql", "-U", "etl", "-d", "etl_source_demo",
+            "exec",
+            "-i",
+            "etl-postgres",
+            "psql",
+            "-U",
+            "etl",
+            "-d",
+            "etl_source_demo",
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
@@ -211,7 +218,12 @@ async fn incremental_sync_picks_up_only_new_rows() -> anyhow::Result<()> {
     let ctx = catalog::TenantContext::new(tenant);
     let state = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     assert!(
-        state.cursor.as_ref().unwrap().value.starts_with("2026-04-22T11:00"),
+        state
+            .cursor
+            .as_ref()
+            .unwrap()
+            .value
+            .starts_with("2026-04-22T11:00"),
         "cursor: {:?}",
         state.cursor
     );
@@ -221,11 +233,19 @@ async fn incremental_sync_picks_up_only_new_rows() -> anyhow::Result<()> {
     run_cli(pipe).await?;
     wait_for_last_run_status(&cat, RunStatus::Completed, Duration::from_secs(60)).await?;
     let run2_total = count_rows_in_dir(&data);
-    assert_eq!(run2_total, 15, "after run 2 total should be 15 (10 + 5 new)");
+    assert_eq!(
+        run2_total, 15,
+        "after run 2 total should be 15 (10 + 5 new)"
+    );
 
     let state2 = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     assert!(
-        state2.cursor.as_ref().unwrap().value.starts_with("2026-04-23T13:00"),
+        state2
+            .cursor
+            .as_ref()
+            .unwrap()
+            .value
+            .starts_with("2026-04-23T13:00"),
         "cursor: {:?}",
         state2.cursor
     );
