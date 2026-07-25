@@ -4,10 +4,10 @@
 //! every row tenant-scoped, async CRUD via sqlx. Subsequent phases add
 //! workspaces, streams, schemas, transformations, audit.
 
-mod db;
 pub mod cdc;
 pub mod cdc_snapshot;
 pub mod connection;
+mod db;
 pub mod pipeline;
 pub mod run;
 pub mod schema;
@@ -78,12 +78,9 @@ impl Catalog {
             .await?;
         if let Some(c) = ctx {
             if let Some(pid) = c.principal_id {
-                sqlx::query(&format!(
-                    "SET LOCAL app.principal_id = '{}'",
-                    pid.as_uuid()
-                ))
-                .execute(&mut *tx)
-                .await?;
+                sqlx::query(&format!("SET LOCAL app.principal_id = '{}'", pid.as_uuid()))
+                    .execute(&mut *tx)
+                    .await?;
             }
             if let Some(role) = c.role {
                 let token = match role {
@@ -130,11 +127,7 @@ impl Catalog {
         tx.commit().await?;
         Ok(())
     }
-    pub async fn tenant_set_status(
-        &self,
-        tenant_id: TenantId,
-        status: &str,
-    ) -> sqlx::Result<u64> {
+    pub async fn tenant_set_status(&self, tenant_id: TenantId, status: &str) -> sqlx::Result<u64> {
         if status != "active" && status != "suspended" {
             return Err(sqlx::Error::Protocol(format!(
                 "invalid status '{status}' (expected active|suspended)"
@@ -189,20 +182,14 @@ impl Catalog {
     /// Admin-mode lookup: bypasses RLS to fetch a pipeline regardless
     /// of tenant. Used by the superuser-mode CLI when the caller
     /// doesn't yet know the tenant.
-    pub async fn get_pipeline_admin(
-        &self,
-        id: PipelineId,
-    ) -> sqlx::Result<Option<Pipeline>> {
+    pub async fn get_pipeline_admin(&self, id: PipelineId) -> sqlx::Result<Option<Pipeline>> {
         let mut tx = self.begin_with_tenant(None).await?;
         let r = pipeline::get(&mut tx, id).await?;
         tx.commit().await?;
         Ok(r)
     }
 
-    pub async fn get_connection_admin(
-        &self,
-        id: ConnectionId,
-    ) -> sqlx::Result<Option<Connection>> {
+    pub async fn get_connection_admin(&self, id: ConnectionId) -> sqlx::Result<Option<Connection>> {
         let mut tx = self.begin_with_tenant(None).await?;
         let r = connection::get(&mut tx, id).await?;
         tx.commit().await?;
@@ -269,17 +256,21 @@ impl Catalog {
         last_run_id: Option<RunId>,
     ) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
-        stream_state::upsert(&mut tx, ctx.tenant_id, pipeline_id, stream_name, cursor, last_run_id)
-            .await?;
+        stream_state::upsert(
+            &mut tx,
+            ctx.tenant_id,
+            pipeline_id,
+            stream_name,
+            cursor,
+            last_run_id,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
 
     // Workspaces
-    pub async fn ensure_default_workspace(
-        &self,
-        ctx: TenantContext,
-    ) -> sqlx::Result<WorkspaceId> {
+    pub async fn ensure_default_workspace(&self, ctx: TenantContext) -> sqlx::Result<WorkspaceId> {
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
         let r = workspace::ensure_default(&mut tx, ctx.tenant_id).await?;
         tx.commit().await?;
@@ -297,10 +288,7 @@ impl Catalog {
     }
 
     // Streams
-    pub async fn ensure_stream(
-        &self,
-        new: stream::NewStream,
-    ) -> sqlx::Result<StreamId> {
+    pub async fn ensure_stream(&self, new: stream::NewStream) -> sqlx::Result<StreamId> {
         let ctx = TenantContext::new(new.tenant_id);
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
         let r = stream::ensure(&mut tx, new).await?;
@@ -433,20 +421,13 @@ impl Catalog {
         tx.commit().await?;
         Ok(r)
     }
-    pub async fn secret_list(
-        &self,
-        ctx: TenantContext,
-    ) -> sqlx::Result<Vec<secret::Secret>> {
+    pub async fn secret_list(&self, ctx: TenantContext) -> sqlx::Result<Vec<secret::Secret>> {
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
         let r = secret::list(&mut tx).await?;
         tx.commit().await?;
         Ok(r)
     }
-    pub async fn secret_delete(
-        &self,
-        ctx: TenantContext,
-        id: SecretId,
-    ) -> sqlx::Result<()> {
+    pub async fn secret_delete(&self, ctx: TenantContext, id: SecretId) -> sqlx::Result<()> {
         let mut tx = self.begin_with_tenant(Some(ctx)).await?;
         secret::delete(&mut tx, id).await?;
         tx.commit().await?;
@@ -506,10 +487,7 @@ impl Catalog {
         refresh::get(&mut conn, token_id).await
     }
 
-    pub async fn refresh_delete(
-        &self,
-        token_id: uuid::Uuid,
-    ) -> sqlx::Result<u64> {
+    pub async fn refresh_delete(&self, token_id: uuid::Uuid) -> sqlx::Result<u64> {
         let mut conn = self.pool.acquire().await?;
         refresh::delete(&mut conn, token_id).await
     }
@@ -528,10 +506,7 @@ impl Catalog {
         Ok(())
     }
 
-    pub async fn revoke_is_revoked(
-        &self,
-        jti: uuid::Uuid,
-    ) -> sqlx::Result<bool> {
+    pub async fn revoke_is_revoked(&self, jti: uuid::Uuid) -> sqlx::Result<bool> {
         let mut conn = self.pool.acquire().await?;
         revoke::is_revoked(&mut conn, jti).await
     }

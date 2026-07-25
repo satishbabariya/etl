@@ -77,7 +77,9 @@ async fn stripe_connector_full_flow() -> anyhow::Result<()> {
         "publish: {}",
         String::from_utf8_lossy(&publish.stderr)
     );
-    assert!(registry.join("stripe-source@0.1.0/component.cwasm").exists());
+    assert!(registry
+        .join("stripe-source@0.1.0/component.cwasm")
+        .exists());
 
     let connections_yaml = format!(
         r#"apiVersion: platform.etl/v0

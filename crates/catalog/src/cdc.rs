@@ -48,7 +48,10 @@ pub async fn upsert(conn: &mut sqlx::PgConnection, slot: &CdcSlot) -> sqlx::Resu
     Ok(())
 }
 
-pub async fn get(conn: &mut sqlx::PgConnection, pipeline_id: PipelineId) -> sqlx::Result<Option<CdcSlot>> {
+pub async fn get(
+    conn: &mut sqlx::PgConnection,
+    pipeline_id: PipelineId,
+) -> sqlx::Result<Option<CdcSlot>> {
     let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, Option<String>, String)> = sqlx::query_as(
         "SELECT pipeline_id, tenant_id, slot_name, publication_name, consistent_point, confirmed_flush, state \
          FROM cdc_slots WHERE pipeline_id = $1",
@@ -77,12 +80,10 @@ pub async fn update_confirmed_flush(
     pipeline_id: PipelineId,
     lsn: &str,
 ) -> sqlx::Result<()> {
-    sqlx::query(
-        "UPDATE cdc_slots SET confirmed_flush=$1, updated_at=now() WHERE pipeline_id=$2",
-    )
-    .bind(lsn)
-    .bind(pipeline_id.as_uuid())
-    .execute(&mut *conn)
-    .await?;
+    sqlx::query("UPDATE cdc_slots SET confirmed_flush=$1, updated_at=now() WHERE pipeline_id=$2")
+        .bind(lsn)
+        .bind(pipeline_id.as_uuid())
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }

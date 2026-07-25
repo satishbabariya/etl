@@ -144,11 +144,7 @@ fn read_ids_under(dir: &Path) -> Vec<Option<i64>> {
         for batch in reader {
             let b = batch.unwrap();
             let idx = b.schema().index_of("id").unwrap();
-            let arr = b
-                .column(idx)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap();
+            let arr = b.column(idx).as_any().downcast_ref::<Int64Array>().unwrap();
             for i in 0..b.num_rows() {
                 out.push(if arr.is_null(i) {
                     None
@@ -246,14 +242,21 @@ async fn validate_dead_letter_under_threshold_completes() -> anyhow::Result<()> 
                 let idx = b.schema().index_of("id").unwrap();
                 let arr = b.column(idx).as_any().downcast_ref::<Int64Array>().unwrap();
                 for i in 0..b.num_rows() {
-                    v.push(if arr.is_null(i) { None } else { Some(arr.value(i)) });
+                    v.push(if arr.is_null(i) {
+                        None
+                    } else {
+                        Some(arr.value(i))
+                    });
                 }
             }
             v
         })
         .collect();
     assert_eq!(kept.len(), 3, "kept rows = {kept:?}");
-    assert!(kept.iter().all(|v| v.is_some()), "kept had null id: {kept:?}");
+    assert!(
+        kept.iter().all(|v| v.is_some()),
+        "kept had null id: {kept:?}"
+    );
 
     // Dead-letter rows: one with null id.
     let mut dl = tmp.path().to_path_buf();

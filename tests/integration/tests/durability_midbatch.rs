@@ -174,7 +174,12 @@ async fn sync_survives_worker_kill_midbatch() -> anyhow::Result<()> {
     let state = cat.get_stream_state(ctx, pipe, "customers").await?.unwrap();
     // Row id=100 → 2026-04-20 00:00 + 100 minutes = 2026-04-20 01:40 UTC.
     assert!(
-        state.cursor.as_ref().unwrap().value.starts_with("2026-04-20T01:40"),
+        state
+            .cursor
+            .as_ref()
+            .unwrap()
+            .value
+            .starts_with("2026-04-20T01:40"),
         "cursor: {:?}",
         state.cursor
     );

@@ -16,7 +16,10 @@ pub fn quote_ident(name: &str) -> anyhow::Result<String> {
     if name.is_empty() {
         bail!("empty identifier");
     }
-    if name.chars().any(|c| c == '"' || c == '\0' || c.is_control()) {
+    if name
+        .chars()
+        .any(|c| c == '"' || c == '\0' || c.is_control())
+    {
         bail!("invalid character in identifier {name:?}");
     }
     Ok(format!("\"{name}\""))
@@ -264,9 +267,16 @@ pub fn merge_upsert_sql(
     pk_columns: &[String],
 ) -> anyhow::Result<String> {
     let schema_ref = batch.schema();
-    let names: Vec<&str> = schema_ref.fields().iter().map(|f| f.name().as_str()).collect();
+    let names: Vec<&str> = schema_ref
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
     for pk in pk_columns {
-        anyhow::ensure!(names.contains(&pk.as_str()), "pk column {pk:?} not in batch");
+        anyhow::ensure!(
+            names.contains(&pk.as_str()),
+            "pk column {pk:?} not in batch"
+        );
     }
     let cols = quoted_columns(batch)?;
     let rows = rendered_rows(batch)?;
@@ -303,8 +313,7 @@ pub fn merge_upsert_sql(
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Int64Array, StringArray,
-        TimestampMicrosecondArray,
+        ArrayRef, BinaryArray, BooleanArray, Int64Array, StringArray, TimestampMicrosecondArray,
     };
     use arrow::datatypes::{DataType, TimeUnit};
     use std::sync::Arc;
@@ -347,7 +356,10 @@ mod tests {
         let id = load_id();
         let check = check_loaded_sql("DB", "RAW", &id).unwrap();
         assert!(check.contains("BATCH_SEQ = 7"), "got {check}");
-        assert!(check.contains("STREAM_NAME = 'public.items'"), "got {check}");
+        assert!(
+            check.contains("STREAM_NAME = 'public.items'"),
+            "got {check}"
+        );
         let ins = log_insert_sql("DB", "RAW", &id, 42).unwrap();
         assert!(ins.contains("42"), "got {ins}");
         assert!(ins.contains(&uuid::Uuid::nil().to_string()), "got {ins}");
@@ -386,9 +398,14 @@ mod tests {
             ),
             "got: {sql}"
         );
-        assert!(sql.contains("WHEN MATCHED THEN UPDATE SET t.\"name\" = s.\"name\""), "got {sql}");
         assert!(
-            sql.contains("WHEN NOT MATCHED THEN INSERT (\"id\", \"name\") VALUES (s.\"id\", s.\"name\")"),
+            sql.contains("WHEN MATCHED THEN UPDATE SET t.\"name\" = s.\"name\""),
+            "got {sql}"
+        );
+        assert!(
+            sql.contains(
+                "WHEN NOT MATCHED THEN INSERT (\"id\", \"name\") VALUES (s.\"id\", s.\"name\")"
+            ),
             "got {sql}"
         );
     }
@@ -464,8 +481,7 @@ mod tests {
         );
 
         let ts: ArrayRef = Arc::new(
-            TimestampMicrosecondArray::from(vec![1_650_000_000_000_000i64])
-                .with_timezone("UTC"),
+            TimestampMicrosecondArray::from(vec![1_650_000_000_000_000i64]).with_timezone("UTC"),
         );
         let lit = sql_literal(ts.as_ref(), 0).unwrap();
         assert!(lit.ends_with("::TIMESTAMP_TZ"), "got {lit}");

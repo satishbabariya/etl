@@ -73,11 +73,8 @@ pub async fn read_window(
     let mut ops: Vec<(RowOp, GtidSet, Option<i64>)> = Vec::new();
 
     while ops.len() < max_events {
-        let next = match tokio::time::timeout(
-            Duration::from_secs(idle_timeout_secs),
-            stream.next(),
-        )
-        .await
+        let next = match tokio::time::timeout(Duration::from_secs(idle_timeout_secs), stream.next())
+            .await
         {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => return Err(anyhow!("binlog stream error: {e}")),
@@ -103,8 +100,8 @@ pub async fn read_window(
                 if let Some((uuid, gno)) = current_uuid_gno.take() {
                     let mut single = GtidSet::empty();
                     let s = format!("{}:{}", uuid, gno);
-                    let parsed = GtidSet::parse(&s)
-                        .with_context(|| format!("re-parse own GTID '{}'", s))?;
+                    let parsed =
+                        GtidSet::parse(&s).with_context(|| format!("re-parse own GTID '{}'", s))?;
                     single.union_with(&parsed);
                     new_gtid.union_with(&single);
                 }
@@ -120,7 +117,14 @@ pub async fn read_window(
                     Some(t) => t,
                     None => continue, // not our table
                 };
-                drain_rows(&rd, tme, &mut ops, &new_gtid, current_commit_ts, &data_types)?;
+                drain_rows(
+                    &rd,
+                    tme,
+                    &mut ops,
+                    &new_gtid,
+                    current_commit_ts,
+                    &data_types,
+                )?;
             }
             EventData::HeartbeatEvent => {}
             _ => {}
@@ -175,8 +179,8 @@ fn gtid_set_to_sids<'a>(set: &GtidSet) -> Result<Vec<mysql_async::Sid<'a>>> {
         let (uuid_str, ranges) = segment
             .split_once(':')
             .ok_or_else(|| anyhow!("malformed GTID segment: {segment}"))?;
-        let uuid = uuid::Uuid::parse_str(uuid_str)
-            .with_context(|| format!("parse uuid '{uuid_str}'"))?;
+        let uuid =
+            uuid::Uuid::parse_str(uuid_str).with_context(|| format!("parse uuid '{uuid_str}'"))?;
         let mut intervals: Vec<GnoInterval> = Vec::new();
         for r in ranges.split(':') {
             let (lo, hi) = match r.split_once('-') {
@@ -339,8 +343,8 @@ fn build_record_batch(
 
 fn make_builder(dt: &DataType) -> Result<Box<dyn ArrayBuilder>> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::TimeUnit;
     Ok(match dt {
@@ -373,8 +377,8 @@ fn append_scalar(
     dt: &DataType,
 ) -> Result<()> {
     use arrow::array::{
-        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-        Int32Builder, Int64Builder, Time64MicrosecondBuilder,
+        BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int32Builder,
+        Int64Builder, Time64MicrosecondBuilder,
     };
     use arrow::datatypes::TimeUnit;
     match (scalar, dt) {

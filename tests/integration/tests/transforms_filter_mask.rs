@@ -202,7 +202,11 @@ async fn filter_then_mask_end_to_end() -> anyhow::Result<()> {
     wait_for_last_run_completed(&cat, Duration::from_secs(60)).await?;
 
     let (names, emails) = read_all_rows(tmp.path());
-    assert_eq!(names.len(), 8, "expected 8 rows after filter; got {names:?}");
+    assert_eq!(
+        names.len(),
+        8,
+        "expected 8 rows after filter; got {names:?}"
+    );
     assert!(
         !names.contains(&"Bob".into()) && !names.contains(&"Frank".into()),
         "filter leaked null-email rows: {names:?}"

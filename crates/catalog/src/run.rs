@@ -80,12 +80,10 @@ pub async fn mark_running(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Res
 }
 
 pub async fn mark_completed(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Result<()> {
-    sqlx::query(
-        "UPDATE runs SET status = 'completed', completed_at = NOW() WHERE run_id = $1",
-    )
-    .bind(id.as_uuid())
-    .execute(&mut *conn)
-    .await?;
+    sqlx::query("UPDATE runs SET status = 'completed', completed_at = NOW() WHERE run_id = $1")
+        .bind(id.as_uuid())
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -119,15 +117,17 @@ pub async fn get(conn: &mut sqlx::PgConnection, id: RunId) -> sqlx::Result<Optio
     .bind(id.as_uuid())
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(rid, tid, pid, status, trigger, wf, started_at, completed_at, error)| Run {
-        run_id: RunId::from_uuid_unchecked(rid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        pipeline_id: PipelineId::from_uuid_unchecked(pid),
-        status: RunStatus::parse(&status).expect("DB check constraint enforces valid values"),
-        trigger,
-        temporal_workflow_id: wf,
-        started_at,
-        completed_at,
-        error,
-    }))
+    Ok(row.map(
+        |(rid, tid, pid, status, trigger, wf, started_at, completed_at, error)| Run {
+            run_id: RunId::from_uuid_unchecked(rid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            pipeline_id: PipelineId::from_uuid_unchecked(pid),
+            status: RunStatus::parse(&status).expect("DB check constraint enforces valid values"),
+            trigger,
+            temporal_workflow_id: wf,
+            started_at,
+            completed_at,
+            error,
+        },
+    ))
 }

@@ -72,8 +72,15 @@ async fn refresh_can_be_used_once_replay_rejects() -> anyhow::Result<()> {
         .await?;
     Command::new(cargo_bin("platform"))
         .args([
-            "auth", "create-principal", "--tenant", "rot-tenant",
-            "bob", "--password", "pw", "--role", "viewer",
+            "auth",
+            "create-principal",
+            "--tenant",
+            "rot-tenant",
+            "bob",
+            "--password",
+            "pw",
+            "--role",
+            "viewer",
         ])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")

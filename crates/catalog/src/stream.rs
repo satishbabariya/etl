@@ -81,19 +81,21 @@ pub async fn get_by_name(
     .bind(name)
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(sid, tid, pid, name, mode, cur, pk, dest, cs, c, u)| Stream {
-        stream_id: StreamId::from_uuid_unchecked(sid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        pipeline_id: PipelineId::from_uuid_unchecked(pid),
-        name,
-        sync_mode: mode,
-        cursor_config: cur,
-        pk_config: pk,
-        destination_table: dest,
-        current_schema_id: cs.map(SchemaId::from_uuid_unchecked),
-        created_at: c,
-        updated_at: u,
-    }))
+    Ok(row.map(
+        |(sid, tid, pid, name, mode, cur, pk, dest, cs, c, u)| Stream {
+            stream_id: StreamId::from_uuid_unchecked(sid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            pipeline_id: PipelineId::from_uuid_unchecked(pid),
+            name,
+            sync_mode: mode,
+            cursor_config: cur,
+            pk_config: pk,
+            destination_table: dest,
+            current_schema_id: cs.map(SchemaId::from_uuid_unchecked),
+            created_at: c,
+            updated_at: u,
+        },
+    ))
 }
 
 pub async fn set_current_schema(

@@ -74,8 +74,15 @@ async fn issuer_login_jwks_round_trip() -> anyhow::Result<()> {
         .await?;
     Command::new(cargo_bin("platform"))
         .args([
-            "auth", "create-principal", "--tenant", "oidc-tenant",
-            "alice", "--password", "pw", "--role", "operator",
+            "auth",
+            "create-principal",
+            "--tenant",
+            "oidc-tenant",
+            "alice",
+            "--password",
+            "pw",
+            "--role",
+            "operator",
         ])
         .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")

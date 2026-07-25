@@ -39,10 +39,7 @@ pub fn verify_password(plaintext: &str, hashed: &str) -> bool {
         .is_ok()
 }
 
-pub async fn create(
-    conn: &mut sqlx::PgConnection,
-    new: NewPrincipal,
-) -> sqlx::Result<PrincipalId> {
+pub async fn create(conn: &mut sqlx::PgConnection, new: NewPrincipal) -> sqlx::Result<PrincipalId> {
     let id = PrincipalId::new();
     let hash = hash_password(&new.password).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
     sqlx::query(
@@ -63,14 +60,20 @@ pub async fn get_by_name(
     conn: &mut sqlx::PgConnection,
     name: &str,
 ) -> sqlx::Result<Option<(Principal, String)>> {
-    let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            "SELECT principal_id, tenant_id, name, password_hash, role, created_at \
+    let row: Option<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        "SELECT principal_id, tenant_id, name, password_hash, role, created_at \
              FROM principals WHERE name = $1",
-        )
-        .bind(name)
-        .fetch_optional(&mut *conn)
-        .await?;
+    )
+    .bind(name)
+    .fetch_optional(&mut *conn)
+    .await?;
     Ok(row.map(|(pid, tid, n, hash, role, ts)| {
         (
             Principal {
@@ -89,14 +92,20 @@ pub async fn get_by_id(
     conn: &mut sqlx::PgConnection,
     id: PrincipalId,
 ) -> sqlx::Result<Option<(Principal, String)>> {
-    let row: Option<(uuid::Uuid, uuid::Uuid, String, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            "SELECT principal_id, tenant_id, name, password_hash, role, created_at \
+    let row: Option<(
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        "SELECT principal_id, tenant_id, name, password_hash, role, created_at \
              FROM principals WHERE principal_id = $1",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *conn)
-        .await?;
+    )
+    .bind(id.as_uuid())
+    .fetch_optional(&mut *conn)
+    .await?;
     Ok(row.map(|(pid, tid, n, hash, role, ts)| {
         (
             Principal {

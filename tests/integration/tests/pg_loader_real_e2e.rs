@@ -139,7 +139,10 @@ async fn perform_iud(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn rows_in_dest(url: &str, schema: &str) -> anyhow::Result<Vec<(i64, Option<String>, Option<bool>)>> {
+async fn rows_in_dest(
+    url: &str,
+    schema: &str,
+) -> anyhow::Result<Vec<(i64, Option<String>, Option<bool>)>> {
     let mut conn = sqlx::PgConnection::connect(url).await?;
     let rows = sqlx::query(&format!(
         "SELECT id, name, active FROM \"{schema}\".\"items\" ORDER BY id"
@@ -302,7 +305,9 @@ async fn pg_loader_full_stack_cdc_e2e() -> anyhow::Result<()> {
             worker.kill().await.ok();
             anyhow::bail!("timed out waiting for destination convergence; saw: {last_rows:?}");
         }
-        last_rows = rows_in_dest(&dest_url, dest_schema).await.unwrap_or_default();
+        last_rows = rows_in_dest(&dest_url, dest_schema)
+            .await
+            .unwrap_or_default();
         // Convergence: 3 rows total (1 deleted), row 2 updated to 'TWO', row 4 present.
         let has_2_updated = last_rows
             .iter()
@@ -321,7 +326,11 @@ async fn pg_loader_full_stack_cdc_e2e() -> anyhow::Result<()> {
     eprintln!("destination rows: {last_rows:?}");
 
     // ── Functional assertions ─────────────────────────────────────────────
-    assert_eq!(last_rows.len(), 3, "expected 3 rows after IUD; got {last_rows:?}");
+    assert_eq!(
+        last_rows.len(),
+        3,
+        "expected 3 rows after IUD; got {last_rows:?}"
+    );
     assert_eq!(
         last_rows[0],
         (2, Some("TWO".into()), Some(false)),
@@ -353,8 +362,14 @@ async fn pg_loader_full_stack_cdc_e2e() -> anyhow::Result<()> {
     // ── Metering assertion: events landed in catalog ──────────────────────
     let (reads, writes) = count_metering(&catalog_url(), tenant.as_uuid()).await?;
     eprintln!("metering: reads={reads}, writes={writes}");
-    assert!(reads > 0, "expected at least one rows_read/bytes_read event");
-    assert!(writes > 0, "expected at least one rows_written/bytes_written event");
+    assert!(
+        reads > 0,
+        "expected at least one rows_read/bytes_read event"
+    );
+    assert!(
+        writes > 0,
+        "expected at least one rows_written/bytes_written event"
+    );
 
     Ok(())
 }
@@ -370,7 +385,9 @@ async fn pg_loader_full_stack_cdc_e2e() -> anyhow::Result<()> {
 
 async fn seed_cursor_source(url: &str) -> anyhow::Result<()> {
     let mut conn = sqlx::PgConnection::connect(url).await?;
-    let _ = sqlx::query("DROP TABLE IF EXISTS customers").execute(&mut conn).await;
+    let _ = sqlx::query("DROP TABLE IF EXISTS customers")
+        .execute(&mut conn)
+        .await;
     sqlx::query(
         "CREATE TABLE customers (
             id BIGINT PRIMARY KEY,
@@ -534,7 +551,11 @@ async fn pg_loader_full_stack_cursor_mode_e2e() -> anyhow::Result<()> {
         .current_dir(workspace_root())
         .output()
         .await?;
-    assert!(out.status.success(), "run 1 failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "run 1 failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     wait_for_last_run_completed(&catalog_url(), Duration::from_secs(60)).await?;
 
     let rows1 = customers_in_dest(&dest_url, dest_schema).await?;
@@ -557,7 +578,11 @@ async fn pg_loader_full_stack_cursor_mode_e2e() -> anyhow::Result<()> {
         .current_dir(workspace_root())
         .output()
         .await?;
-    assert!(out.status.success(), "run 2 failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "run 2 failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     wait_for_last_run_completed(&catalog_url(), Duration::from_secs(60)).await?;
 
     let rows2 = customers_in_dest(&dest_url, dest_schema).await?;

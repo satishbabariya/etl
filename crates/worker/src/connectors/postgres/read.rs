@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arrow::array::{
     ArrayBuilder, ArrayRef, Int64Builder, StringBuilder, TimestampMicrosecondBuilder,
 };
@@ -54,7 +54,10 @@ pub async fn run(
         query = bind_cursor(query, c)?;
     }
 
-    let rows = query.fetch_all(&pool).await.context("executing read_batch")?;
+    let rows = query
+        .fetch_all(&pool)
+        .await
+        .context("executing read_batch")?;
     let row_count = rows.len();
 
     let batch = rows_to_recordbatch(&schema, &rows)?;
@@ -91,7 +94,10 @@ fn bind_cursor<'a>(
             q.bind(v)
         }
         CursorKind::Lsn | CursorKind::Gtid | CursorKind::SnapshotPk => {
-            anyhow::bail!("CDC-only cursor kinds not valid for plain read: {:?}", cursor.kind)
+            anyhow::bail!(
+                "CDC-only cursor kinds not valid for plain read: {:?}",
+                cursor.kind
+            )
         }
     })
 }
@@ -147,10 +153,9 @@ fn make_builder(dtype: &DataType, capacity: usize) -> anyhow::Result<Box<dyn Arr
     Ok(match dtype {
         DataType::Int64 => Box::new(Int64Builder::with_capacity(capacity)),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, capacity * 16)),
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some(_)) => Box::new(
-            TimestampMicrosecondBuilder::with_capacity(capacity)
-                .with_timezone("+00:00"),
-        ),
+        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some(_)) => {
+            Box::new(TimestampMicrosecondBuilder::with_capacity(capacity).with_timezone("+00:00"))
+        }
         other => bail!("no Arrow builder wired for {other:?} in Phase I.2"),
     })
 }
@@ -227,7 +232,11 @@ mod tests {
         let out = run(&conn, &spec(), None, 3).await.unwrap();
         assert_eq!(out.batch.num_rows(), 3);
         assert!(!out.is_final);
-        assert!(out.new_cursor.unwrap().value.starts_with("2026-04-20T12:00"));
+        assert!(out
+            .new_cursor
+            .unwrap()
+            .value
+            .starts_with("2026-04-20T12:00"));
     }
 
     #[tokio::test]
@@ -235,7 +244,9 @@ mod tests {
     async fn cursor_advance_reads_subsequent_rows() {
         let conn = ConnectionConfig::from_url(test_url());
         let first = run(&conn, &spec(), None, 3).await.unwrap();
-        let second = run(&conn, &spec(), first.new_cursor.clone(), 3).await.unwrap();
+        let second = run(&conn, &spec(), first.new_cursor.clone(), 3)
+            .await
+            .unwrap();
         assert_eq!(second.batch.num_rows(), 3);
         let id_col = second
             .batch

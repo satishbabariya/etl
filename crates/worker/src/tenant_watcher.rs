@@ -8,15 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub type SpawnFn = Box<
-    dyn Fn(common_types::ids::TenantId) -> tokio::task::JoinHandle<()> + Send + Sync,
->;
+pub type SpawnFn =
+    Box<dyn Fn(common_types::ids::TenantId) -> tokio::task::JoinHandle<()> + Send + Sync>;
 
-pub async fn run(
-    catalog: Arc<Catalog>,
-    initial: Vec<common_types::ids::TenantId>,
-    spawn: SpawnFn,
-) {
+pub async fn run(catalog: Arc<Catalog>, initial: Vec<common_types::ids::TenantId>, spawn: SpawnFn) {
     let known = Arc::new(Mutex::new(initial.into_iter().collect::<HashSet<_>>()));
     let mut tick = tokio::time::interval(Duration::from_secs(30));
     tick.tick().await; // skip the immediate first tick

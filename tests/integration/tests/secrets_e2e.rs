@@ -71,12 +71,11 @@ async fn apply_with_url_secret_writes_no_plaintext_to_catalog() -> anyhow::Resul
 
     // 3) Read the connection row directly and assert the JSON has no
     //    plaintext URL substring AND `url_secret` is an object (resolved).
-    let row: (serde_json::Value,) = sqlx::query_as(
-        "SELECT config FROM connections WHERE name = 'source-demo-secret'",
-    )
-    .fetch_one(cat.pool())
-    .await
-    .context("loading connection row")?;
+    let row: (serde_json::Value,) =
+        sqlx::query_as("SELECT config FROM connections WHERE name = 'source-demo-secret'")
+            .fetch_one(cat.pool())
+            .await
+            .context("loading connection row")?;
     let config = row.0;
 
     let raw = serde_json::to_string(&config)?;
@@ -106,7 +105,10 @@ async fn apply_with_url_secret_writes_no_plaintext_to_catalog() -> anyhow::Resul
     );
 
     // url field should be absent (we never set it for url_secret pipelines).
-    assert!(config.get("url").is_none(), "legacy url field should be absent");
+    assert!(
+        config.get("url").is_none(),
+        "legacy url field should be absent"
+    );
 
     Ok(())
 }

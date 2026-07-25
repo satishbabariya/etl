@@ -1,6 +1,6 @@
 //! Parse YAML resource files and apply them to the catalog idempotently.
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use catalog::Catalog;
 use common_types::dsl::{
     ConnectionSpec, Metadata, PipelineDslSpec, ResourceEnvelope, ResourceKind,
@@ -45,8 +45,8 @@ pub fn load_path(path: &Path) -> anyhow::Result<Vec<ParsedFile>> {
 }
 
 fn parse_file(path: &Path) -> anyhow::Result<ParsedFile> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut resources = Vec::new();
     for doc in serde_yaml::Deserializer::from_str(&text) {
         let env: ResourceEnvelope = serde::Deserialize::deserialize(doc)
@@ -85,12 +85,16 @@ pub async fn apply(
             match env.kind {
                 ResourceKind::Connection => {
                     let spec: ConnectionSpec = serde_json::from_value(env.spec.clone())
-                        .with_context(|| format!("parsing Connection spec for {}", env.metadata.name))?;
+                        .with_context(|| {
+                            format!("parsing Connection spec for {}", env.metadata.name)
+                        })?;
                     connections.insert(env.metadata.name.clone(), spec);
                 }
                 ResourceKind::Pipeline => {
                     let spec: PipelineDslSpec = serde_json::from_value(env.spec.clone())
-                        .with_context(|| format!("parsing Pipeline spec for {}", env.metadata.name))?;
+                        .with_context(|| {
+                            format!("parsing Pipeline spec for {}", env.metadata.name)
+                        })?;
                     pipelines.insert(env.metadata.name.clone(), (env.metadata.clone(), spec));
                 }
             }
@@ -258,9 +262,19 @@ async fn upsert_pipeline(
 
 #[derive(Debug, Clone)]
 pub enum DiffRow {
-    Create { kind: ResourceKind, name: String },
-    Update { kind: ResourceKind, name: String, fields: Vec<String> },
-    Unchanged { kind: ResourceKind, name: String },
+    Create {
+        kind: ResourceKind,
+        name: String,
+    },
+    Update {
+        kind: ResourceKind,
+        name: String,
+        fields: Vec<String>,
+    },
+    Unchanged {
+        kind: ResourceKind,
+        name: String,
+    },
 }
 
 pub async fn diff(
@@ -289,8 +303,12 @@ pub async fn diff(
                         }),
                         Some((_id, cur_ref, cur_cfg)) => {
                             let mut fields = Vec::new();
-                            if cur_ref != spec.connector_ref { fields.push("connector_ref".into()); }
-                            if cur_cfg != spec.config { fields.push("config".into()); }
+                            if cur_ref != spec.connector_ref {
+                                fields.push("connector_ref".into());
+                            }
+                            if cur_cfg != spec.config {
+                                fields.push("config".into());
+                            }
                             if fields.is_empty() {
                                 out.push(DiffRow::Unchanged {
                                     kind: ResourceKind::Connection,
@@ -370,7 +388,12 @@ async fn resolve_url_secret(
         .secret_get_by_name(ctx.clone(), &name)
         .await
         .context("secret_get_by_name")?
-        .ok_or_else(|| anyhow::anyhow!("url_secret '{}' not registered — run 'platform secret create' first", name))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "url_secret '{}' not registered — run 'platform secret create' first",
+                name
+            )
+        })?;
     obj.insert(
         "url_secret".to_string(),
         serde_json::to_value(catalog::secret::to_ref(&row))?,
@@ -381,7 +404,11 @@ async fn resolve_url_secret(
 fn diff_json_fields(a: &serde_json::Value, b: &serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     if let (Some(ao), Some(bo)) = (a.as_object(), b.as_object()) {
-        for k in ao.keys().chain(bo.keys()).collect::<std::collections::BTreeSet<_>>() {
+        for k in ao
+            .keys()
+            .chain(bo.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
             if ao.get(k) != bo.get(k) {
                 out.push(k.clone());
             }

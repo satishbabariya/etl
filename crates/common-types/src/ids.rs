@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 macro_rules! define_id {
     ($name:ident, $prefix:literal) => {
-        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+        #[derive(
+            Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(Uuid);
 
@@ -75,11 +77,7 @@ pub struct TenantContext {
 
 impl TenantContext {
     /// Authenticated context — built from a verified JWT.
-    pub fn authed(
-        tenant_id: TenantId,
-        principal_id: PrincipalId,
-        role: crate::auth::Role,
-    ) -> Self {
+    pub fn authed(tenant_id: TenantId, principal_id: PrincipalId, role: crate::auth::Role) -> Self {
         Self {
             tenant_id,
             principal_id: Some(principal_id),
@@ -89,7 +87,11 @@ impl TenantContext {
 
     /// Tenant-only context for admin paths and tests.
     pub fn new(tenant_id: TenantId) -> Self {
-        Self { tenant_id, principal_id: None, role: None }
+        Self {
+            tenant_id,
+            principal_id: None,
+            role: None,
+        }
     }
 }
 

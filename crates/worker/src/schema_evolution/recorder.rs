@@ -1,9 +1,9 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use catalog::Catalog;
 use common_types::evolution::EvolutionPolicy;
 use common_types::ids::StreamId;

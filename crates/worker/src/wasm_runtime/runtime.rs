@@ -2,12 +2,12 @@
 //! loaded Components keyed by "<name>@<version>". Thread-safe (Arc-wrapped
 //! by callers).
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use wasmtime::Engine;
 use wasmtime::component::{Component, Linker};
+use wasmtime::Engine;
 
 use super::epoch::EpochTicker;
 use super::host::HostState;
@@ -34,12 +34,12 @@ impl WasmSourceRuntime {
             _,
             wasmtime::component::HasSelf<HostState>,
         >(&mut linker, |s| s)
-            .context("adding host.log / host.http-fetch to linker")?;
+        .context("adding host.log / host.http-fetch to linker")?;
         super::bindings::platform::connector::db::add_to_linker::<
             _,
             wasmtime::component::HasSelf<HostState>,
         >(&mut linker, |s| s)
-            .context("adding db.* (open/query/close/...) to linker")?;
+        .context("adding db.* (open/query/close/...) to linker")?;
 
         Ok(Arc::new(Self {
             engine,
@@ -95,8 +95,8 @@ impl WasmSourceRuntime {
 
     /// Precompile a `.wasm` to a `.cwasm` and write it to `out_path`.
     pub fn precompile_to(&self, wasm_path: &Path, out_path: &Path) -> anyhow::Result<()> {
-        let bytes = std::fs::read(wasm_path)
-            .with_context(|| format!("reading {}", wasm_path.display()))?;
+        let bytes =
+            std::fs::read(wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
         let serialized = self
             .engine
             .precompile_component(&bytes)

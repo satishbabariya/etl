@@ -134,7 +134,11 @@ mod loader_tests {
                 pk_columns: vec![],
             },
         );
-        let err = SnowflakeLoader.validate(&spec).await.unwrap_err().to_string();
+        let err = SnowflakeLoader
+            .validate(&spec)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("DEFINITELY_NOT_SET_VAR_2_5A"), "got {err}");
     }
 

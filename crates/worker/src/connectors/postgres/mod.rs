@@ -16,9 +16,7 @@ impl SourceConnector for PostgresConnector {
         source: &common_types::pipeline_spec::SourceSpec,
     ) -> anyhow::Result<arrow::datatypes::SchemaRef> {
         match source {
-            common_types::pipeline_spec::SourceSpec::Postgres(pg) => {
-                discover::run(conn, pg).await
-            }
+            common_types::pipeline_spec::SourceSpec::Postgres(pg) => discover::run(conn, pg).await,
             common_types::pipeline_spec::SourceSpec::Wasm(_) => {
                 anyhow::bail!("PostgresConnector received a SourceSpec::Wasm — dispatcher bug")
             }

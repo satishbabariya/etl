@@ -22,10 +22,7 @@ pub struct NewPipeline {
     pub spec: Value,
 }
 
-pub async fn create(
-    conn: &mut sqlx::PgConnection,
-    new: NewPipeline,
-) -> sqlx::Result<PipelineId> {
+pub async fn create(conn: &mut sqlx::PgConnection, new: NewPipeline) -> sqlx::Result<PipelineId> {
     let workspace_id = crate::workspace::ensure_default(conn, new.tenant_id).await?;
     let id = PipelineId::new();
     sqlx::query(
@@ -44,10 +41,7 @@ pub async fn create(
     Ok(id)
 }
 
-pub async fn get(
-    conn: &mut sqlx::PgConnection,
-    id: PipelineId,
-) -> sqlx::Result<Option<Pipeline>> {
+pub async fn get(conn: &mut sqlx::PgConnection, id: PipelineId) -> sqlx::Result<Option<Pipeline>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,

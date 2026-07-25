@@ -17,11 +17,11 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, WorkflowContext, WorkflowContextView, WorkflowResult};
 use uuid::Uuid;
 
-use crate::activities::cdc::CdcActivities;
 use crate::activities::cdc::inputs::{
     CdcSnapshotMarkCompletedInput, CdcSnapshotStateGetInput, EnsureSlotInput, ReadWindowInput,
     ReadWindowOutput, SnapshotChunkInput, SnapshotChunkOutput,
 };
+use crate::activities::cdc::CdcActivities;
 use crate::activities::run_lifecycle::{FailRunInput, RunLifecycleActivities};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,9 +52,15 @@ pub struct CdcPipelineWorkflow {
 fn retry_policy() -> temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
     use prost_wkt_types::Duration as PbDuration;
     temporalio_common::protos::temporal::api::common::v1::RetryPolicy {
-        initial_interval: Some(PbDuration { seconds: 1, nanos: 0 }),
+        initial_interval: Some(PbDuration {
+            seconds: 1,
+            nanos: 0,
+        }),
         backoff_coefficient: 2.0,
-        maximum_interval: Some(PbDuration { seconds: 30, nanos: 0 }),
+        maximum_interval: Some(PbDuration {
+            seconds: 30,
+            nanos: 0,
+        }),
         maximum_attempts: 5,
         non_retryable_error_types: vec![],
     }
@@ -92,7 +98,11 @@ impl CdcPipelineWorkflow {
                 let _ = ctx
                     .start_activity(
                         RunLifecycleActivities::fail_run,
-                        FailRunInput { run_id, tenant_id, error: err_str },
+                        FailRunInput {
+                            run_id,
+                            tenant_id,
+                            error: err_str,
+                        },
                         opts_short(),
                     )
                     .await;
@@ -106,10 +116,7 @@ impl CdcPipelineWorkflow {
         let pg = match &input.spec.source {
             SourceSpec::Postgres(p) => p.clone(),
             _ => {
-                return Err(anyhow::anyhow!(
-                    "CdcPipelineWorkflow requires Postgres source"
-                )
-                .into());
+                return Err(anyhow::anyhow!("CdcPipelineWorkflow requires Postgres source").into());
             }
         };
         let rel_name = format!("{}.{}", pg.schema, pg.table);

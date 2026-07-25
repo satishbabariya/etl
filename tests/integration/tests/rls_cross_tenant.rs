@@ -39,10 +39,7 @@ async fn reset(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn seed_tenant(
-    admin: &PgPool,
-    name: &str,
-) -> anyhow::Result<(Uuid, Uuid, Uuid)> {
+async fn seed_tenant(admin: &PgPool, name: &str) -> anyhow::Result<(Uuid, Uuid, Uuid)> {
     let tenant_id = Uuid::now_v7();
     let conn_id = Uuid::now_v7();
     let pipe_id = Uuid::now_v7();
@@ -153,11 +150,7 @@ async fn cross_tenant_updates_blocked() -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    assert_eq!(
-        result.rows_affected(),
-        0,
-        "RLS allowed cross-tenant UPDATE"
-    );
+    assert_eq!(result.rows_affected(), 0, "RLS allowed cross-tenant UPDATE");
 
     // Confirm A's pipeline name is unchanged (admin can read).
     let unchanged: String = sqlx::query("SELECT name FROM pipelines WHERE pipeline_id = $1")
@@ -178,12 +171,11 @@ async fn insert_with_wrong_tenant_id_rejected() -> anyhow::Result<()> {
     let (a, _, _) = seed_tenant(&admin, "acme").await?;
     let (b, _, _) = seed_tenant(&admin, "globex").await?;
     // Need a workspace owned by tenant B for the FK; it already exists.
-    let ws_b: Uuid =
-        sqlx::query("SELECT workspace_id FROM workspaces WHERE tenant_id = $1")
-            .bind(b)
-            .map(|r: sqlx::postgres::PgRow| r.get::<Uuid, _>("workspace_id"))
-            .fetch_one(&admin)
-            .await?;
+    let ws_b: Uuid = sqlx::query("SELECT workspace_id FROM workspaces WHERE tenant_id = $1")
+        .bind(b)
+        .map(|r: sqlx::postgres::PgRow| r.get::<Uuid, _>("workspace_id"))
+        .fetch_one(&admin)
+        .await?;
 
     let app = PgPool::connect(&app_url()).await?;
 
@@ -209,8 +201,7 @@ async fn insert_with_wrong_tenant_id_rejected() -> anyhow::Result<()> {
         .context("INSERT unexpectedly succeeded — RLS WITH CHECK is not enforced")?;
     let msg = format!("{err}");
     assert!(
-        msg.to_lowercase().contains("row-level security")
-            || msg.to_lowercase().contains("policy"),
+        msg.to_lowercase().contains("row-level security") || msg.to_lowercase().contains("policy"),
         "unexpected error: {msg}"
     );
 

@@ -137,19 +137,23 @@ pub async fn get_checkpoint(
     tenant_id: Option<common_types::ids::TenantId>,
 ) -> Result<Option<Checkpoint>, ChainError> {
     let row: Option<(i64, Vec<u8>)> = match tenant_id {
-        Some(tid) => sqlx::query_as(
-            "SELECT last_verified_audit_id, last_verified_hash \
+        Some(tid) => {
+            sqlx::query_as(
+                "SELECT last_verified_audit_id, last_verified_hash \
              FROM audit_verified_chain WHERE tenant_id = $1",
-        )
-        .bind(tid.as_uuid())
-        .fetch_optional(pool)
-        .await?,
-        None => sqlx::query_as(
-            "SELECT last_verified_audit_id, last_verified_hash \
+            )
+            .bind(tid.as_uuid())
+            .fetch_optional(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT last_verified_audit_id, last_verified_hash \
              FROM audit_verified_chain WHERE tenant_id IS NULL",
-        )
-        .fetch_optional(pool)
-        .await?,
+            )
+            .fetch_optional(pool)
+            .await?
+        }
     };
     Ok(row.map(|(id, h)| {
         let mut hash = [0u8; 32];
@@ -169,19 +173,19 @@ pub async fn prune_before(
     older_than_audit_id: i64,
 ) -> Result<u64, ChainError> {
     let r = match tenant_id {
-        Some(tid) => sqlx::query(
-            "DELETE FROM audit_log WHERE tenant_id = $1 AND audit_id < $2",
-        )
-        .bind(tid.as_uuid())
-        .bind(older_than_audit_id)
-        .execute(pool)
-        .await?,
-        None => sqlx::query(
-            "DELETE FROM audit_log WHERE tenant_id IS NULL AND audit_id < $1",
-        )
-        .bind(older_than_audit_id)
-        .execute(pool)
-        .await?,
+        Some(tid) => {
+            sqlx::query("DELETE FROM audit_log WHERE tenant_id = $1 AND audit_id < $2")
+                .bind(tid.as_uuid())
+                .bind(older_than_audit_id)
+                .execute(pool)
+                .await?
+        }
+        None => {
+            sqlx::query("DELETE FROM audit_log WHERE tenant_id IS NULL AND audit_id < $1")
+                .bind(older_than_audit_id)
+                .execute(pool)
+                .await?
+        }
     };
     Ok(r.rows_affected())
 }

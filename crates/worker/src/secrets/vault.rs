@@ -23,17 +23,20 @@ impl VaultSecrets {
             Ok(a) => a,
             Err(_) => return Ok(None),
         };
-        let token = std::env::var("VAULT_TOKEN")
-            .context("VAULT_ADDR set but VAULT_TOKEN missing")?;
+        let token =
+            std::env::var("VAULT_TOKEN").context("VAULT_ADDR set but VAULT_TOKEN missing")?;
         let mount = std::env::var("VAULT_KV_MOUNT").unwrap_or_else(|_| "secret".into());
         let settings = VaultClientSettingsBuilder::default()
             .address(addr)
             .token(token)
             .build()
             .map_err(|e| anyhow::anyhow!("vault client settings: {e}"))?;
-        let client = VaultClient::new(settings)
-            .map_err(|e| anyhow::anyhow!("vault client init: {e}"))?;
-        Ok(Some(Self { client, default_mount: mount }))
+        let client =
+            VaultClient::new(settings).map_err(|e| anyhow::anyhow!("vault client init: {e}"))?;
+        Ok(Some(Self {
+            client,
+            default_mount: mount,
+        }))
     }
 
     fn split_key(&self, key: &str) -> (String, String) {
@@ -52,12 +55,9 @@ impl Secrets for VaultSecrets {
         let resp: serde_json::Value = kv2::read(&self.client, &mount, &path)
             .await
             .with_context(|| format!("vault kv2::read mount={mount} path={path}"))?;
-        let v = resp
-            .get("value")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("vault entry at {mount}/{path} missing 'value' field")
-            })?;
+        let v = resp.get("value").and_then(|v| v.as_str()).ok_or_else(|| {
+            anyhow::anyhow!("vault entry at {mount}/{path} missing 'value' field")
+        })?;
         Ok(PlaintextSecret::new(v.to_string()))
     }
 }

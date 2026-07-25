@@ -42,11 +42,10 @@ async fn drop_slot(pool: &sqlx::PgPool, name: &str) {
 }
 
 async fn current_wal_lsn(pool: &sqlx::PgPool) -> String {
-    let (lsn,): (String,) =
-        sqlx::query_as("SELECT pg_current_wal_lsn()::text")
-            .fetch_one(pool)
-            .await
-            .expect("pg_current_wal_lsn");
+    let (lsn,): (String,) = sqlx::query_as("SELECT pg_current_wal_lsn()::text")
+        .fetch_one(pool)
+        .await
+        .expect("pg_current_wal_lsn");
     lsn
 }
 
@@ -78,14 +77,16 @@ async fn advance_slot_moves_confirmed_flush_lsn() {
         .await
         .expect("advance_slot should succeed");
 
-    let (advanced,): (bool,) =
-        sqlx::query_as("SELECT $1::pg_lsn >= $2::pg_lsn")
-            .bind(&confirmed)
-            .bind(&target)
-            .fetch_one(&pool)
-            .await
-            .expect("lsn compare");
-    assert!(advanced, "confirmed_flush_lsn {confirmed} should be >= target {target}");
+    let (advanced,): (bool,) = sqlx::query_as("SELECT $1::pg_lsn >= $2::pg_lsn")
+        .bind(&confirmed)
+        .bind(&target)
+        .fetch_one(&pool)
+        .await
+        .expect("lsn compare");
+    assert!(
+        advanced,
+        "confirmed_flush_lsn {confirmed} should be >= target {target}"
+    );
 
     drop_slot(&pool, &sname).await;
 }
@@ -156,13 +157,12 @@ async fn advance_slot_with_older_lsn_errors_and_does_not_regress() {
     .await
     .expect("re-query slot");
     let current = current.expect("confirmed_flush_lsn null");
-    let (no_regression,): (bool,) =
-        sqlx::query_as("SELECT $1::pg_lsn >= $2::pg_lsn")
-            .bind(&current)
-            .bind(&after_first)
-            .fetch_one(&pool)
-            .await
-            .expect("lsn compare");
+    let (no_regression,): (bool,) = sqlx::query_as("SELECT $1::pg_lsn >= $2::pg_lsn")
+        .bind(&current)
+        .bind(&after_first)
+        .fetch_one(&pool)
+        .await
+        .expect("lsn compare");
     assert!(
         no_regression,
         "lsn must not regress: after_first={after_first} current={current}"

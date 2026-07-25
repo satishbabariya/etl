@@ -113,7 +113,8 @@ impl MysqlSubscription {
                     }
                 }
                 EventData::TableMapEvent(tme) => {
-                    self.table_map_cache.insert(tme.table_id(), tme.into_owned());
+                    self.table_map_cache
+                        .insert(tme.table_id(), tme.into_owned());
                 }
                 EventData::RowsEvent(rd) => {
                     let tid = rd.table_id();

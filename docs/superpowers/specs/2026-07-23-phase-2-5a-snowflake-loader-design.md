@@ -1,6 +1,6 @@
 # Phase 2.5.a: Snowflake Destination Loader — Design
 
-**Status:** Approved for implementation 2026-07-23 (branch `phase-2-5a-snowflake-loader`).
+**Status:** Shipped 2026-07-25 (branch `phase-2-5a-snowflake-loader`).
 **Plan:** `docs/superpowers/plans/2026-07-23-phase-2-5a-snowflake-loader.md`
 **RFC:** RFC-0009 (Destination Loaders — Snowflake section).
 **Precedent:** `docs/superpowers/specs/2026-05-21-phase-2-4a-postgres-loader-design.md` (the PG loader MVP shape this mirrors).

@@ -15,7 +15,9 @@ pub struct PipelineStatusRow {
 }
 
 pub async fn run(id_str: String) -> anyhow::Result<()> {
-    let pid: PipelineId = id_str.parse().with_context(|| format!("parsing {id_str}"))?;
+    let pid: PipelineId = id_str
+        .parse()
+        .with_context(|| format!("parsing {id_str}"))?;
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let catalog = Catalog::connect(&db_url).await?;
 
@@ -35,9 +37,8 @@ pub async fn run(id_str: String) -> anyhow::Result<()> {
     .fetch_optional(catalog.pool())
     .await?;
 
-    let latest_cursor = latest_cursor_raw.map(|(kind, value)| {
-        serde_json::json!({ "kind": kind, "value": value })
-    });
+    let latest_cursor =
+        latest_cursor_raw.map(|(kind, value)| serde_json::json!({ "kind": kind, "value": value }));
 
     let slot: Option<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT slot_name, state, confirmed_flush FROM cdc_slots WHERE pipeline_id = $1",

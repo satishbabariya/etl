@@ -37,7 +37,10 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_int() {
-        let c = CursorValue { kind: CursorKind::Int64, value: "42".into() };
+        let c = CursorValue {
+            kind: CursorKind::Int64,
+            value: "42".into(),
+        };
         let j = serde_json::to_string(&c).unwrap();
         let back: CursorValue = serde_json::from_str(&j).unwrap();
         assert_eq!(c, back);
@@ -51,7 +54,10 @@ mod tests {
 
     #[test]
     fn lsn_roundtrips() {
-        let v = CursorValue { kind: CursorKind::Lsn, value: "16/B374D848".into() };
+        let v = CursorValue {
+            kind: CursorKind::Lsn,
+            value: "16/B374D848".into(),
+        };
         let j = serde_json::to_string(&v).unwrap();
         let back: CursorValue = serde_json::from_str(&j).unwrap();
         assert_eq!(back.kind, CursorKind::Lsn);

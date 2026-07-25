@@ -60,7 +60,11 @@ pub async fn read_chunk(
     let (batch, last) = rows_to_cdc_batch(rows, pk_col, cdc_schema, consistent_point)
         .context("rows → cdc batch")?;
     let is_final = batch.num_rows() < batch_size;
-    Ok(SnapshotChunk { batch, is_final, last_pk: last })
+    Ok(SnapshotChunk {
+        batch,
+        is_final,
+        last_pk: last,
+    })
 }
 
 fn rows_to_cdc_batch(
@@ -69,10 +73,10 @@ fn rows_to_cdc_batch(
     schema: SchemaRef,
     consistent_point: &str,
 ) -> anyhow::Result<(RecordBatch, Option<i64>)> {
-    use arrow::array::ArrayBuilder;
     use crate::connectors::postgres::cdc::types::{
         append_pg_scalar, make_pg_builder, parse_pg_text,
     };
+    use arrow::array::ArrayBuilder;
 
     let mut last_pk: Option<i64> = None;
     let n_data = schema
@@ -135,12 +139,20 @@ pub fn cdc_schema_for(data_cols: &[(&str, DataType)]) -> SchemaRef {
         .map(|(n, t)| Field::new(*n, t.clone(), true))
         .collect();
     fields.push(Field::new(common_types::cdc::COL_OP, DataType::Utf8, false));
-    fields.push(Field::new(common_types::cdc::COL_LSN, DataType::Utf8, false));
+    fields.push(Field::new(
+        common_types::cdc::COL_LSN,
+        DataType::Utf8,
+        false,
+    ));
     fields.push(Field::new(
         common_types::cdc::COL_COMMIT_TS,
         DataType::Timestamp(TimeUnit::Microsecond, None),
         true,
     ));
-    fields.push(Field::new(common_types::cdc::COL_TXID, DataType::Int64, true));
+    fields.push(Field::new(
+        common_types::cdc::COL_TXID,
+        DataType::Int64,
+        true,
+    ));
     Arc::new(Schema::new(fields))
 }

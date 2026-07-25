@@ -33,7 +33,10 @@ impl SnowflakeClient {
             format!("env var {} (private_key_env) not set", spec.private_key_env)
         })?;
         let base_url = std::env::var("ETL_SNOWFLAKE_BASE_URL").unwrap_or_else(|_| {
-            format!("https://{}.snowflakecomputing.com", spec.account.to_lowercase())
+            format!(
+                "https://{}.snowflakecomputing.com",
+                spec.account.to_lowercase()
+            )
         });
         Ok(Self {
             http: reqwest::Client::new(),
@@ -179,7 +182,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/api/v2/statements"))
-            .and(header("X-Snowflake-Authorization-Token-Type", "KEYPAIR_JWT"))
+            .and(header(
+                "X-Snowflake-Authorization-Token-Type",
+                "KEYPAIR_JWT",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": [["1"]], "statementHandle": "h1"
             })))

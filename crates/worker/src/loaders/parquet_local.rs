@@ -38,8 +38,7 @@ impl DestinationLoader for LocalParquetLoader {
         fs::create_dir_all(path.parent().unwrap())
             .with_context(|| format!("creating dir for {}", path.display()))?;
 
-        let file = File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let file = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         let props = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
             .context("constructing ArrowWriter")?;
@@ -121,12 +120,18 @@ mod tests {
             batch_seq: 0,
             stream_name: String::new(),
         };
-        let res = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();
+        let res = loader
+            .load(&spec, load_id.clone(), tiny_batch())
+            .await
+            .unwrap();
         assert_eq!(res.rows_loaded, 3);
         assert!(res.bytes_written > 0);
 
         let f = File::open(&res.path).unwrap();
-        let reader = ParquetRecordBatchReaderBuilder::try_new(f).unwrap().build().unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(f)
+            .unwrap()
+            .build()
+            .unwrap();
         let batches: Vec<_> = reader.collect::<Result<_, _>>().unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 3);
@@ -147,8 +152,14 @@ mod tests {
             batch_seq: 5,
             stream_name: String::new(),
         };
-        let r1 = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();
-        let r2 = loader.load(&spec, load_id.clone(), tiny_batch()).await.unwrap();
+        let r1 = loader
+            .load(&spec, load_id.clone(), tiny_batch())
+            .await
+            .unwrap();
+        let r2 = loader
+            .load(&spec, load_id.clone(), tiny_batch())
+            .await
+            .unwrap();
         assert_eq!(r1.path, r2.path);
         assert_eq!(r1.bytes_written, r2.bytes_written);
     }

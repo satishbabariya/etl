@@ -44,11 +44,15 @@ mod tests {
 
     fn add_nullable_col() -> ChangeKind {
         ChangeKind::AddColumn {
-            name: "age".into(), data_type: "Int64".into(), nullable: true,
+            name: "age".into(),
+            data_type: "Int64".into(),
+            nullable: true,
         }
     }
     fn drop_col() -> ChangeKind {
-        ChangeKind::DropColumn { name: "email".into() }
+        ChangeKind::DropColumn {
+            name: "email".into(),
+        }
     }
 
     #[test]

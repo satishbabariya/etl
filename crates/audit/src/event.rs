@@ -175,7 +175,10 @@ mod tests {
         let a = json!({"b": 1, "a": 2});
         let b = json!({"a": 2, "b": 1});
         assert_eq!(canon_bytes(&a), canon_bytes(&b));
-        assert_eq!(String::from_utf8(canon_bytes(&a)).unwrap(), r#"{"a":2,"b":1}"#);
+        assert_eq!(
+            String::from_utf8(canon_bytes(&a)).unwrap(),
+            r#"{"a":2,"b":1}"#
+        );
     }
 
     #[test]

@@ -101,7 +101,10 @@ pub async fn put(name: String, value: String, register: bool) -> Result<()> {
                 serde_json::json!({"backend": "file", "via": "put --register"}),
             )
             .await;
-            println!("registered catalog row for '{}' (backend=file, key={})", name, name);
+            println!(
+                "registered catalog row for '{}' (backend=file, key={})",
+                name, name
+            );
         } else {
             println!("catalog row for '{}' already exists — skipped", name);
         }

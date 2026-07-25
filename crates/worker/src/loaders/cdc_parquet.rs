@@ -27,11 +27,10 @@ impl CdcParquetLoader {
         path.push(pipeline_id.to_string());
         path.push("cdc");
         path.push(run_id.to_string());
-        std::fs::create_dir_all(&path)
-            .with_context(|| format!("create dir {}", path.display()))?;
+        std::fs::create_dir_all(&path).with_context(|| format!("create dir {}", path.display()))?;
         path.push(format!("batch-{:05}.parquet", batch_seq));
-        let file = std::fs::File::create(&path)
-            .with_context(|| format!("create {}", path.display()))?;
+        let file =
+            std::fs::File::create(&path).with_context(|| format!("create {}", path.display()))?;
         let props = WriterProperties::builder().build();
         let mut w = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
         w.write(batch)?;

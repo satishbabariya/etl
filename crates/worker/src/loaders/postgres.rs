@@ -54,7 +54,7 @@
 //! - Destination-schema split: `stream_name = "<src_schema>.<table>"` ⇒
 //!   destination `<src_schema>."<table>"` instead of one literal-dot table.
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -73,15 +73,11 @@ pub(crate) fn resolve_target_table<'a>(
         stream_name
     };
     if candidate.is_empty() {
-        bail!(
-            "postgres loader: target table is empty (both stream_name and spec.table are empty)"
-        );
+        bail!("postgres loader: target table is empty (both stream_name and spec.table are empty)");
     }
     for ch in candidate.chars() {
         if ch == '"' || ch == '\0' || ch.is_control() {
-            bail!(
-                "postgres loader: illegal character {ch:?} in target table name {candidate:?}"
-            );
+            bail!("postgres loader: illegal character {ch:?} in target table name {candidate:?}");
         }
     }
     Ok(candidate)
@@ -142,10 +138,7 @@ pub(crate) fn delete_sql(schema: &str, table: &str, pk_columns: &[String]) -> St
     format!("DELETE FROM \"{schema}\".\"{table}\" WHERE {where_clause}")
 }
 
-pub(crate) fn extract_data_row(
-    batch: &RecordBatch,
-    row: usize,
-) -> anyhow::Result<Vec<BoundValue>> {
+pub(crate) fn extract_data_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec<BoundValue>> {
     let schema = batch.schema();
     let keep = cdc_data_field_indices(schema.as_ref());
     let full = extract_row(batch, row)?;
@@ -216,16 +209,28 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
         let is_null = col.is_null(row);
         let v = match field.data_type() {
             DataType::Int64 => BoundValue::Int64(
-                col.as_any().downcast_ref::<Int64Array>().unwrap().value(row),
+                col.as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .value(row),
             ),
             DataType::Int32 => BoundValue::Int32(
-                col.as_any().downcast_ref::<Int32Array>().unwrap().value(row),
+                col.as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .value(row),
             ),
             DataType::Int16 => BoundValue::Int16(
-                col.as_any().downcast_ref::<Int16Array>().unwrap().value(row),
+                col.as_any()
+                    .downcast_ref::<Int16Array>()
+                    .unwrap()
+                    .value(row),
             ),
             DataType::Boolean => BoundValue::Bool(
-                col.as_any().downcast_ref::<BooleanArray>().unwrap().value(row),
+                col.as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .unwrap()
+                    .value(row),
             ),
             DataType::Float64 => {
                 let arr = col.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -237,11 +242,19 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
             }
             DataType::Utf8 => {
                 let arr = col.as_any().downcast_ref::<StringArray>().unwrap();
-                BoundValue::Text(if is_null { None } else { Some(arr.value(row).to_string()) })
+                BoundValue::Text(if is_null {
+                    None
+                } else {
+                    Some(arr.value(row).to_string())
+                })
             }
             DataType::Binary => {
                 let arr = col.as_any().downcast_ref::<BinaryArray>().unwrap();
-                BoundValue::Bytea(if is_null { None } else { Some(arr.value(row).to_vec()) })
+                BoundValue::Bytea(if is_null {
+                    None
+                } else {
+                    Some(arr.value(row).to_vec())
+                })
             }
             DataType::Date32 => {
                 let arr = col.as_any().downcast_ref::<Date32Array>().unwrap();
@@ -251,7 +264,10 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
                 BoundValue::Date(date)
             }
             DataType::Time64(TimeUnit::Microsecond) => {
-                let arr = col.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+                let arr = col
+                    .as_any()
+                    .downcast_ref::<Time64MicrosecondArray>()
+                    .unwrap();
                 let micros = arr.value(row);
                 let secs = (micros / 1_000_000) as u32;
                 let nanos = ((micros % 1_000_000) * 1_000) as u32;
@@ -260,14 +276,20 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
                 BoundValue::Time(t)
             }
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
-                let arr = col.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                let arr = col
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
                 let micros = arr.value(row);
                 let dt = DateTime::<Utc>::from_timestamp_micros(micros)
                     .context("timestamp_us out of range")?;
                 BoundValue::TimestampTz(dt)
             }
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let arr = col.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                let arr = col
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
                 let micros = arr.value(row);
                 let dt = DateTime::<Utc>::from_timestamp_micros(micros)
                     .context("timestamp_us out of range")?;
@@ -315,8 +337,7 @@ pub(crate) fn insert_sql(
         .map(|i| format!("${i}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let base =
-        format!("INSERT INTO \"{schema}\".\"{table}\" ({col_list}) VALUES ({placeholders})");
+    let base = format!("INSERT INTO \"{schema}\".\"{table}\" ({col_list}) VALUES ({placeholders})");
     if pk_columns.is_empty() {
         return base;
     }
@@ -418,11 +439,26 @@ pub(crate) async fn query_destination_columns(
 /// A change between the batch's data schema and the destination table's columns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchemaDelta {
-    AddColumn { name: String, pg_type: String, nullable: bool },
-    DropColumn { name: String },
-    WidenType { name: String, new_pg_type: String },
-    NarrowType { name: String },
-    IncompatibleType { name: String, dest_pg_type: String, batch_pg_type: String },
+    AddColumn {
+        name: String,
+        pg_type: String,
+        nullable: bool,
+    },
+    DropColumn {
+        name: String,
+    },
+    WidenType {
+        name: String,
+        new_pg_type: String,
+    },
+    NarrowType {
+        name: String,
+    },
+    IncompatibleType {
+        name: String,
+        dest_pg_type: String,
+        batch_pg_type: String,
+    },
 }
 
 impl SchemaDelta {
@@ -465,9 +501,15 @@ fn pg_type_relation(dest: &str, batch: &str) -> TypeRelation {
         ("bigint", "integer"),
         ("double precision", "real"),
     ];
-    if WIDENINGS.iter().any(|(f, t)| *f == d.as_str() && *t == b.as_str()) {
+    if WIDENINGS
+        .iter()
+        .any(|(f, t)| *f == d.as_str() && *t == b.as_str())
+    {
         TypeRelation::Widening
-    } else if NARROWINGS.iter().any(|(f, t)| *f == d.as_str() && *t == b.as_str()) {
+    } else if NARROWINGS
+        .iter()
+        .any(|(f, t)| *f == d.as_str() && *t == b.as_str())
+    {
         TypeRelation::Narrowing
     } else {
         TypeRelation::Incompatible
@@ -510,7 +552,9 @@ pub(crate) fn diff_schema(
 
     for dest_col in dest_cols {
         if batch_data_schema.field_with_name(&dest_col.name).is_err() {
-            deltas.push(SchemaDelta::DropColumn { name: dest_col.name.clone() });
+            deltas.push(SchemaDelta::DropColumn {
+                name: dest_col.name.clone(),
+            });
         }
     }
 
@@ -756,7 +800,11 @@ async fn apply_schema_evolution(
                 SchemaDelta::NarrowType { name } => {
                     format!("type narrowed (data loss risk): {name:?}")
                 }
-                SchemaDelta::IncompatibleType { name, dest_pg_type, batch_pg_type } => {
+                SchemaDelta::IncompatibleType {
+                    name,
+                    dest_pg_type,
+                    batch_pg_type,
+                } => {
                     format!(
                         "incompatible type for {name:?}: \
                          destination is {dest_pg_type}, batch expects {batch_pg_type}"
@@ -774,9 +822,11 @@ async fn apply_schema_evolution(
 
     for delta in &deltas {
         let ddl = match delta {
-            SchemaDelta::AddColumn { name, pg_type, nullable } => {
-                add_column_ddl(schema, target_table, name, pg_type, *nullable)
-            }
+            SchemaDelta::AddColumn {
+                name,
+                pg_type,
+                nullable,
+            } => add_column_ddl(schema, target_table, name, pg_type, *nullable),
             SchemaDelta::WidenType { name, new_pg_type } => {
                 alter_column_type_ddl(schema, target_table, name, new_pg_type)
             }
@@ -807,8 +857,8 @@ async fn cdc_apply(
     // Pre-loop: if the batch carries a "c" sentinel, evolve the destination
     // schema before any row is processed. The Arrow batch already has the
     // widened schema; the "c" row is just the signal.
-    let has_schema_change = (0..batch.num_rows())
-        .any(|r| cdc_op_at(batch, r).map(|op| op == "c").unwrap_or(false));
+    let has_schema_change =
+        (0..batch.num_rows()).any(|r| cdc_op_at(batch, r).map(|op| op == "c").unwrap_or(false));
     if has_schema_change {
         apply_schema_evolution(&mut *tx, &spec.schema, target_table, &data_schema).await?;
     }
@@ -878,9 +928,9 @@ mod tests {
     #[tokio::test]
     async fn validate_rejects_non_postgres_spec() {
         let loader = PostgresLoader;
-        let spec = DestinationSpec::LocalParquet(
-            common_types::pipeline_spec::LocalParquetSpec { base_path: "/tmp".into() },
-        );
+        let spec = DestinationSpec::LocalParquet(common_types::pipeline_spec::LocalParquetSpec {
+            base_path: "/tmp".into(),
+        });
         let err = loader.validate(&spec).await.unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("postgres"));
     }
@@ -901,9 +951,16 @@ mod tests {
         assert_eq!(pg_column_type(&DataType::Int32).unwrap(), "INTEGER");
         assert_eq!(pg_column_type(&DataType::Utf8).unwrap(), "TEXT");
         assert_eq!(pg_column_type(&DataType::Boolean).unwrap(), "BOOLEAN");
-        assert_eq!(pg_column_type(&DataType::Float64).unwrap(), "DOUBLE PRECISION");
         assert_eq!(
-            pg_column_type(&DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))).unwrap(),
+            pg_column_type(&DataType::Float64).unwrap(),
+            "DOUBLE PRECISION"
+        );
+        assert_eq!(
+            pg_column_type(&DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some("UTC".into())
+            ))
+            .unwrap(),
             "TIMESTAMPTZ"
         );
         assert_eq!(pg_column_type(&DataType::Date32).unwrap(), "DATE");
@@ -916,9 +973,12 @@ mod tests {
 
     #[test]
     fn pg_column_type_rejects_unsupported() {
-        let err =
-            pg_column_type(&DataType::List(Arc::new(Field::new("x", DataType::Int8, true))))
-                .unwrap_err();
+        let err = pg_column_type(&DataType::List(Arc::new(Field::new(
+            "x",
+            DataType::Int8,
+            true,
+        ))))
+        .unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("unsupported"));
     }
 
@@ -928,8 +988,7 @@ mod tests {
             ("id", DataType::Int64, false),
             ("name", DataType::Utf8, true),
         ])));
-        let ddl =
-            create_table_ddl("public", "customers", &schema, &["id".to_string()]).unwrap();
+        let ddl = create_table_ddl("public", "customers", &schema, &["id".to_string()]).unwrap();
         assert!(ddl.contains("CREATE TABLE IF NOT EXISTS \"public\".\"customers\""));
         assert!(ddl.contains("\"id\" BIGINT NOT NULL"));
         assert!(ddl.contains("\"name\" TEXT"));
@@ -1041,9 +1100,9 @@ mod tests {
         assert!(ddl.contains("run_id UUID"));
         assert!(ddl.contains("batch_seq BIGINT"));
         assert!(ddl.contains("stream_name TEXT"));
-        assert!(ddl.contains(
-            "PRIMARY KEY (tenant_id, pipeline_id, run_id, stream_name, batch_seq)"
-        ));
+        assert!(
+            ddl.contains("PRIMARY KEY (tenant_id, pipeline_id, run_id, stream_name, batch_seq)")
+        );
     }
 
     #[test]
@@ -1098,11 +1157,15 @@ mod tests {
         // filter must catch any `_cdc.*` prefix, not just known names.
         let schema = Schema::new(fields(&[
             ("id", DataType::Int64, false),
-            ("_cdc.position", DataType::Utf8, false),       // not in cdc.rs constants
-            ("_cdc.something_new", DataType::Utf8, false),  // future-proof
+            ("_cdc.position", DataType::Utf8, false), // not in cdc.rs constants
+            ("_cdc.something_new", DataType::Utf8, false), // future-proof
         ]));
         let stripped = cdc_data_schema(&schema);
-        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        let names: Vec<&str> = stripped
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
         assert_eq!(names, vec!["id"], "every _cdc.* column must be stripped");
     }
 
@@ -1120,7 +1183,11 @@ mod tests {
             ),
         ]));
         let stripped = cdc_data_schema(&schema);
-        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        let names: Vec<&str> = stripped
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
         assert_eq!(names, vec!["id", "name"]);
     }
 
@@ -1131,7 +1198,11 @@ mod tests {
             ("name", DataType::Utf8, true),
         ]));
         let stripped = cdc_data_schema(&schema);
-        let names: Vec<&str> = stripped.fields().iter().map(|f| f.name().as_str()).collect();
+        let names: Vec<&str> = stripped
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
         assert_eq!(names, vec!["id", "name"]);
     }
 
@@ -1337,7 +1408,10 @@ mod tests {
             batch_seq: 0,
             stream_name: String::new(),
         };
-        let err = PostgresLoader.load(&spec, load_id, batch).await.unwrap_err();
+        let err = PostgresLoader
+            .load(&spec, load_id, batch)
+            .await
+            .unwrap_err();
         let msg = format!("{err}").to_lowercase();
         assert!(msg.contains("cdc") && msg.contains("pk"), "got: {msg}");
     }
@@ -1358,21 +1432,41 @@ mod tests {
 
     #[test]
     fn dest_col_equality() {
-        let a = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
-        let b = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
+        let a = DestCol {
+            name: "id".into(),
+            pg_type: "bigint".into(),
+            nullable: false,
+        };
+        let b = DestCol {
+            name: "id".into(),
+            pg_type: "bigint".into(),
+            nullable: false,
+        };
         assert_eq!(a, b);
     }
 
     #[test]
     fn dest_col_nullable_differs() {
-        let a = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false };
-        let b = DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: true };
+        let a = DestCol {
+            name: "id".into(),
+            pg_type: "bigint".into(),
+            nullable: false,
+        };
+        let b = DestCol {
+            name: "id".into(),
+            pg_type: "bigint".into(),
+            nullable: true,
+        };
         assert_ne!(a, b);
     }
 
     #[test]
     fn diff_schema_detects_new_column() {
-        let dest = vec![DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false }];
+        let dest = vec![DestCol {
+            name: "id".into(),
+            pg_type: "bigint".into(),
+            nullable: false,
+        }];
         let batch_schema = Schema::new(fields(&[
             ("id", DataType::Int64, false),
             ("name", DataType::Utf8, true),
@@ -1388,7 +1482,11 @@ mod tests {
 
     #[test]
     fn diff_schema_detects_widen_int32_to_int64() {
-        let dest = vec![DestCol { name: "id".into(), pg_type: "integer".into(), nullable: false }];
+        let dest = vec![DestCol {
+            name: "id".into(),
+            pg_type: "integer".into(),
+            nullable: false,
+        }];
         let batch_schema = Schema::new(fields(&[("id", DataType::Int64, false)]));
         let deltas = diff_schema(&batch_schema, &dest).unwrap();
         assert_eq!(deltas.len(), 1);
@@ -1402,8 +1500,16 @@ mod tests {
     #[test]
     fn diff_schema_detects_dropped_column() {
         let dest = vec![
-            DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false },
-            DestCol { name: "name".into(), pg_type: "text".into(), nullable: true },
+            DestCol {
+                name: "id".into(),
+                pg_type: "bigint".into(),
+                nullable: false,
+            },
+            DestCol {
+                name: "name".into(),
+                pg_type: "text".into(),
+                nullable: true,
+            },
         ];
         let batch_schema = Schema::new(fields(&[("id", DataType::Int64, false)]));
         let deltas = diff_schema(&batch_schema, &dest).unwrap();
@@ -1414,8 +1520,16 @@ mod tests {
     #[test]
     fn diff_schema_no_delta_when_schemas_match() {
         let dest = vec![
-            DestCol { name: "id".into(), pg_type: "bigint".into(), nullable: false },
-            DestCol { name: "name".into(), pg_type: "text".into(), nullable: true },
+            DestCol {
+                name: "id".into(),
+                pg_type: "bigint".into(),
+                nullable: false,
+            },
+            DestCol {
+                name: "name".into(),
+                pg_type: "text".into(),
+                nullable: true,
+            },
         ];
         let batch_schema = Schema::new(fields(&[
             ("id", DataType::Int64, false),
@@ -1427,7 +1541,11 @@ mod tests {
 
     #[test]
     fn diff_schema_narrowing_int64_to_int32_is_destructive() {
-        let dest = vec![DestCol { name: "val".into(), pg_type: "bigint".into(), nullable: true }];
+        let dest = vec![DestCol {
+            name: "val".into(),
+            pg_type: "bigint".into(),
+            nullable: true,
+        }];
         let batch_schema = Schema::new(fields(&[("val", DataType::Int32, true)]));
         let deltas = diff_schema(&batch_schema, &dest).unwrap();
         assert_eq!(deltas.len(), 1);
@@ -1446,7 +1564,10 @@ mod tests {
     #[test]
     fn add_column_ddl_always_omits_not_null() {
         let sql = add_column_ddl("s", "t", "id2", "BIGINT", false);
-        assert!(!sql.contains("NOT NULL"), "ADD COLUMN must never emit NOT NULL; got: {sql}");
+        assert!(
+            !sql.contains("NOT NULL"),
+            "ADD COLUMN must never emit NOT NULL; got: {sql}"
+        );
     }
 
     #[test]
@@ -1461,17 +1582,23 @@ mod tests {
     #[test]
     fn schema_delta_is_destructive_classification() {
         assert!(!SchemaDelta::AddColumn {
-            name: "x".into(), pg_type: "TEXT".into(), nullable: true,
-        }.is_destructive());
+            name: "x".into(),
+            pg_type: "TEXT".into(),
+            nullable: true,
+        }
+        .is_destructive());
         assert!(!SchemaDelta::WidenType {
-            name: "x".into(), new_pg_type: "BIGINT".into(),
-        }.is_destructive());
+            name: "x".into(),
+            new_pg_type: "BIGINT".into(),
+        }
+        .is_destructive());
         assert!(SchemaDelta::DropColumn { name: "x".into() }.is_destructive());
         assert!(SchemaDelta::NarrowType { name: "x".into() }.is_destructive());
         assert!(SchemaDelta::IncompatibleType {
             name: "x".into(),
             dest_pg_type: "text".into(),
             batch_pg_type: "boolean".into(),
-        }.is_destructive());
+        }
+        .is_destructive());
     }
 }

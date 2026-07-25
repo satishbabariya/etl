@@ -57,7 +57,10 @@ pub async fn insert(conn: &mut sqlx::PgConnection, new: NewSchema) -> sqlx::Resu
     Ok(id)
 }
 
-pub async fn get_latest(conn: &mut sqlx::PgConnection, stream_id: StreamId) -> sqlx::Result<Option<Schema>> {
+pub async fn get_latest(
+    conn: &mut sqlx::PgConnection,
+    stream_id: StreamId,
+) -> sqlx::Result<Option<Schema>> {
     let row: Option<(
         uuid::Uuid,
         uuid::Uuid,
@@ -77,16 +80,18 @@ pub async fn get_latest(conn: &mut sqlx::PgConnection, stream_id: StreamId) -> s
     .bind(stream_id.as_uuid())
     .fetch_optional(&mut *conn)
     .await?;
-    Ok(row.map(|(sid, tid, stid, v, parent, fp, j, chg, d, app)| Schema {
-        schema_id: SchemaId::from_uuid_unchecked(sid),
-        tenant_id: TenantId::from_uuid_unchecked(tid),
-        stream_id: StreamId::from_uuid_unchecked(stid),
-        version: v,
-        parent_schema_id: parent.map(SchemaId::from_uuid_unchecked),
-        fingerprint: SchemaFingerprint::from_hex(fp),
-        arrow_schema_json: j,
-        change_summary: serde_json::from_value(chg).unwrap_or_default(),
-        detected_at: d,
-        applied_to_destination_at: app,
-    }))
+    Ok(
+        row.map(|(sid, tid, stid, v, parent, fp, j, chg, d, app)| Schema {
+            schema_id: SchemaId::from_uuid_unchecked(sid),
+            tenant_id: TenantId::from_uuid_unchecked(tid),
+            stream_id: StreamId::from_uuid_unchecked(stid),
+            version: v,
+            parent_schema_id: parent.map(SchemaId::from_uuid_unchecked),
+            fingerprint: SchemaFingerprint::from_hex(fp),
+            arrow_schema_json: j,
+            change_summary: serde_json::from_value(chg).unwrap_or_default(),
+            detected_at: d,
+            applied_to_destination_at: app,
+        }),
+    )
 }

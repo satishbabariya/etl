@@ -232,8 +232,7 @@ impl DbHost for super::host::HostState {
                     Some(s) => s,
                     None => {
                         return Ok(Err(DbError::InvalidConfig(
-                            "postgres subscribe-changes requires options[publication_names]"
-                                .into(),
+                            "postgres subscribe-changes requires options[publication_names]".into(),
                         )));
                     }
                 };
@@ -325,27 +324,27 @@ fn build_binlog_request<'a>(
         if segment.is_empty() {
             continue;
         }
-        let (uuid_str, ranges) = segment.split_once(':').ok_or_else(|| {
-            DbError::InvalidConfig(format!("malformed GTID segment: {segment}"))
-        })?;
+        let (uuid_str, ranges) = segment
+            .split_once(':')
+            .ok_or_else(|| DbError::InvalidConfig(format!("malformed GTID segment: {segment}")))?;
         let uuid = uuid::Uuid::parse_str(uuid_str)
             .map_err(|e| DbError::InvalidConfig(format!("parse uuid '{uuid_str}': {e}")))?;
         let mut intervals: Vec<GnoInterval> = Vec::new();
         for r in ranges.split(':') {
             let (lo, hi) = match r.split_once('-') {
                 Some((a, b)) => {
-                    let a: u64 = a.parse().map_err(|e| {
-                        DbError::InvalidConfig(format!("parse gno '{a}': {e}"))
-                    })?;
-                    let b: u64 = b.parse().map_err(|e| {
-                        DbError::InvalidConfig(format!("parse gno '{b}': {e}"))
-                    })?;
+                    let a: u64 = a
+                        .parse()
+                        .map_err(|e| DbError::InvalidConfig(format!("parse gno '{a}': {e}")))?;
+                    let b: u64 = b
+                        .parse()
+                        .map_err(|e| DbError::InvalidConfig(format!("parse gno '{b}': {e}")))?;
                     (a, b)
                 }
                 None => {
-                    let n: u64 = r.parse().map_err(|e| {
-                        DbError::InvalidConfig(format!("parse gno '{r}': {e}"))
-                    })?;
+                    let n: u64 = r
+                        .parse()
+                        .map_err(|e| DbError::InvalidConfig(format!("parse gno '{r}': {e}")))?;
                     (n, n)
                 }
             };
@@ -388,9 +387,7 @@ pub fn add_to_linker<T: 'static + Send>(
 where
     super::host::HostState: DbHost,
 {
-    wit_db::add_to_linker::<T, wasmtime::component::HasSelf<super::host::HostState>>(
-        linker, get,
-    )
+    wit_db::add_to_linker::<T, wasmtime::component::HasSelf<super::host::HostState>>(linker, get)
 }
 
 #[cfg(test)]

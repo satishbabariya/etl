@@ -7,7 +7,7 @@
 //!   indefinitely instead of stopping on empty batches. The component
 //!   itself is identical; only the workflow shape differs.
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use connector_sdk::SourceConnector;
 use std::sync::Arc;
 
@@ -22,9 +22,12 @@ pub fn build_source_connector(
         .strip_prefix("wasm-cdc:")
         .or_else(|| connector_ref.strip_prefix("wasm:"));
     if let Some(rest) = wasm_artifact {
-        let runtime = wasm_runtime
-            .context("wasm connector requested but no WasmSourceRuntime provided")?;
-        return Ok(Box::new(WasmSourceConnector::new(runtime, rest.to_string())));
+        let runtime =
+            wasm_runtime.context("wasm connector requested but no WasmSourceRuntime provided")?;
+        return Ok(Box::new(WasmSourceConnector::new(
+            runtime,
+            rest.to_string(),
+        )));
     }
     if connector_ref.starts_with("postgres@") {
         return Ok(Box::new(PostgresConnector));
@@ -62,10 +65,7 @@ mod tests {
     fn wasm_cdc_prefix_is_recognized() {
         match build_source_connector("wasm-cdc:mysql-cdc-rs@0.1.0", None) {
             Ok(_) => panic!("expected error when runtime missing"),
-            Err(e) => assert!(
-                e.to_string().contains("no WasmSourceRuntime"),
-                "got: {e}"
-            ),
+            Err(e) => assert!(e.to_string().contains("no WasmSourceRuntime"), "got: {e}"),
         }
     }
 }

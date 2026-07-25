@@ -5,10 +5,16 @@ use std::collections::{BTreeMap, HashSet};
 pub fn diff_schemas(old: &Schema, new: &Schema) -> Vec<ChangeKind> {
     let mut changes = Vec::new();
 
-    let old_fields: BTreeMap<&str, &arrow::datatypes::Field> =
-        old.fields().iter().map(|f| (f.name().as_str(), f.as_ref())).collect();
-    let new_fields: BTreeMap<&str, &arrow::datatypes::Field> =
-        new.fields().iter().map(|f| (f.name().as_str(), f.as_ref())).collect();
+    let old_fields: BTreeMap<&str, &arrow::datatypes::Field> = old
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.as_ref()))
+        .collect();
+    let new_fields: BTreeMap<&str, &arrow::datatypes::Field> = new
+        .fields()
+        .iter()
+        .map(|f| (f.name().as_str(), f.as_ref()))
+        .collect();
 
     let old_names: HashSet<&str> = old_fields.keys().copied().collect();
     let new_names: HashSet<&str> = new_fields.keys().copied().collect();
@@ -22,7 +28,9 @@ pub fn diff_schemas(old: &Schema, new: &Schema) -> Vec<ChangeKind> {
         });
     }
     for name in old_names.difference(&new_names) {
-        changes.push(ChangeKind::DropColumn { name: name.to_string() });
+        changes.push(ChangeKind::DropColumn {
+            name: name.to_string(),
+        });
     }
     for name in old_names.intersection(&new_names) {
         let o = old_fields[name];
@@ -32,19 +40,27 @@ pub fn diff_schemas(old: &Schema, new: &Schema) -> Vec<ChangeKind> {
         if o_ty != n_ty {
             if is_widening(o.data_type(), n.data_type()) {
                 changes.push(ChangeKind::WidenType {
-                    name: name.to_string(), from: o_ty, to: n_ty,
+                    name: name.to_string(),
+                    from: o_ty,
+                    to: n_ty,
                 });
             } else {
                 changes.push(ChangeKind::NarrowType {
-                    name: name.to_string(), from: o_ty, to: n_ty,
+                    name: name.to_string(),
+                    from: o_ty,
+                    to: n_ty,
                 });
             }
         }
         if o.is_nullable() != n.is_nullable() {
             if n.is_nullable() {
-                changes.push(ChangeKind::MakeNullable { name: name.to_string() });
+                changes.push(ChangeKind::MakeNullable {
+                    name: name.to_string(),
+                });
             } else {
-                changes.push(ChangeKind::MakeNonNullable { name: name.to_string() });
+                changes.push(ChangeKind::MakeNonNullable {
+                    name: name.to_string(),
+                });
             }
         }
     }
@@ -63,7 +79,8 @@ pub fn diff_schemas(old: &Schema, new: &Schema) -> Vec<ChangeKind> {
         .collect();
     if old_order != new_order && !old_order.is_empty() {
         changes.push(ChangeKind::ReorderColumns {
-            before: old_order, after: new_order,
+            before: old_order,
+            after: new_order,
         });
     }
 
@@ -122,7 +139,9 @@ mod tests {
         ]);
         let new = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
         let c = diff_schemas(&old, &new);
-        assert!(c.iter().any(|ck| matches!(ck, ChangeKind::DropColumn { name } if name == "email")));
+        assert!(c
+            .iter()
+            .any(|ck| matches!(ck, ChangeKind::DropColumn { name } if name == "email")));
     }
 
     #[test]
@@ -139,7 +158,9 @@ mod tests {
         let old = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
         let new = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
         let c = diff_schemas(&old, &new);
-        assert!(c.iter().any(|ck| matches!(ck, ChangeKind::NarrowType { .. })));
+        assert!(c
+            .iter()
+            .any(|ck| matches!(ck, ChangeKind::NarrowType { .. })));
     }
 
     #[test]
@@ -147,6 +168,8 @@ mod tests {
         let old = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
         let new = Schema::new(vec![Field::new("x", DataType::Int64, true)]);
         let c = diff_schemas(&old, &new);
-        assert!(c.iter().any(|ck| matches!(ck, ChangeKind::MakeNullable { .. })));
+        assert!(c
+            .iter()
+            .any(|ck| matches!(ck, ChangeKind::MakeNullable { .. })));
     }
 }

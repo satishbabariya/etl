@@ -2,11 +2,11 @@
 pub mod auth;
 pub mod cdc;
 pub mod connection_config;
-pub mod secrets;
 pub mod cursor;
 pub mod dsl;
 pub mod evolution;
 pub mod ids;
 pub mod pipeline_spec;
 pub mod schema_fingerprint;
+pub mod secrets;
 pub mod transform;

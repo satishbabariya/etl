@@ -227,8 +227,8 @@ async fn cdc_round_trip_insert_update_delete() -> anyhow::Result<()> {
     // The snapshot batch is still all-Utf8 (intentional — deferred), so
     // we read all parquet files and pick one whose op column contains
     // 'i'/'u'/'d' (a streaming batch).
-    let streaming_schema = read_streaming_parquet_schema(tmp.path())
-        .expect("at least one streaming parquet file");
+    let streaming_schema =
+        read_streaming_parquet_schema(tmp.path()).expect("at least one streaming parquet file");
     let id_field = streaming_schema.field_with_name("id").unwrap();
     assert_eq!(
         id_field.data_type(),

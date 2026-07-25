@@ -83,7 +83,10 @@ impl BufferedSink {
 
     /// Read-only peek — clones; does not drain.
     pub fn snapshot(&self) -> Vec<MeteringEvent> {
-        self.inner.lock().expect("BufferedSink mutex poisoned").clone()
+        self.inner
+            .lock()
+            .expect("BufferedSink mutex poisoned")
+            .clone()
     }
 }
 

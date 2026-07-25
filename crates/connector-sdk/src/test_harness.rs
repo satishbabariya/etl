@@ -25,11 +25,7 @@ pub async fn run_smoke<C: SourceConnector>(
         anyhow::bail!("discover() returned empty schema");
     }
     let outcome = connector.read_batch(conn, source, None, batch_size).await?;
-    let columns: Vec<String> = schema
-        .fields()
-        .iter()
-        .map(|f| f.name().clone())
-        .collect();
+    let columns: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
     let batch_columns: Vec<String> = outcome
         .batch
         .schema()
@@ -88,8 +84,7 @@ mod tests {
             _batch_size: usize,
         ) -> anyhow::Result<ReadOutcome> {
             let arr = Int64Array::from(vec![1, 2, 3]);
-            let batch =
-                RecordBatch::try_new(self.schema.clone(), vec![Arc::new(arr)]).unwrap();
+            let batch = RecordBatch::try_new(self.schema.clone(), vec![Arc::new(arr)]).unwrap();
             Ok(ReadOutcome {
                 batch,
                 new_cursor: None,
@@ -112,7 +107,8 @@ mod tests {
 
     #[tokio::test]
     async fn smoke_passes_when_schema_matches() {
-        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let c = FakeOk { schema };
         let conn = ConnectionConfig::from_url("none://");
         let report = run_smoke(&c, &conn, &pg_source(), 10).await.unwrap();
@@ -142,14 +138,10 @@ mod tests {
             _cursor: Option<common_types::cursor::CursorValue>,
             _batch_size: usize,
         ) -> anyhow::Result<ReadOutcome> {
-            let other_schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
-                "name",
-                DataType::Utf8,
-                false,
-            )]));
+            let other_schema: SchemaRef =
+                Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)]));
             let arr = StringArray::from(vec!["x"]);
-            let batch =
-                RecordBatch::try_new(other_schema.clone(), vec![Arc::new(arr)]).unwrap();
+            let batch = RecordBatch::try_new(other_schema.clone(), vec![Arc::new(arr)]).unwrap();
             Ok(ReadOutcome {
                 batch,
                 new_cursor: None,

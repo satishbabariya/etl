@@ -1,10 +1,10 @@
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 use wasmtime::Store;
-use wasmtime::component::{Component, Linker};
 
 use super::epoch::EpochTicker;
 use super::host::HostState;
@@ -28,7 +28,7 @@ impl WasmScalarRuntime {
             _,
             wasmtime::component::HasSelf<HostState>,
         >(&mut linker, |s| s)
-            .context("adding scalar UDF host.log to linker")?;
+        .context("adding scalar UDF host.log to linker")?;
         Ok(Arc::new(Self {
             engine,
             linker,
@@ -46,8 +46,8 @@ impl WasmScalarRuntime {
     }
 
     pub fn precompile_to(&self, wasm_path: &Path, out_path: &Path) -> anyhow::Result<()> {
-        let bytes = std::fs::read(wasm_path)
-            .with_context(|| format!("reading {}", wasm_path.display()))?;
+        let bytes =
+            std::fs::read(wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
         let serialized = self
             .engine
             .precompile_component(&bytes)

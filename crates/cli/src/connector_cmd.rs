@@ -20,9 +20,7 @@ pub async fn create(
     out_dir: Option<String>,
 ) -> Result<()> {
     if kind != "source" {
-        anyhow::bail!(
-            "kind '{kind}' not supported (II.3.a/b only support 'source')"
-        );
+        anyhow::bail!("kind '{kind}' not supported (II.3.a/b only support 'source')");
     }
     let target = match out_dir {
         Some(d) => PathBuf::from(d).join(&name),
@@ -42,7 +40,10 @@ pub async fn create(
         "typescript" | "ts" => {
             connector_sdk::templates::materialize_source_template_typescript(&target, &name)
                 .with_context(|| format!("creating {}", target.display()))?;
-            println!("created TypeScript connector skeleton at {}", target.display());
+            println!(
+                "created TypeScript connector skeleton at {}",
+                target.display()
+            );
             println!("next:");
             println!("  cd {}", target.display());
             println!("  npm install");
@@ -50,9 +51,7 @@ pub async fn create(
             println!("  platform connector test .");
             println!("  platform connector publish . --registry ./connectors");
         }
-        other => anyhow::bail!(
-            "unknown --lang: '{other}' (expected 'rust' or 'typescript')"
-        ),
+        other => anyhow::bail!("unknown --lang: '{other}' (expected 'rust' or 'typescript')"),
     }
     Ok(())
 }
@@ -218,10 +217,7 @@ pub async fn test(path: String) -> Result<()> {
             }
             let wasm = ts_wasm_artifact(&path);
             if !wasm.exists() {
-                anyhow::bail!(
-                    "expected {} after build but it's missing",
-                    wasm.display()
-                );
+                anyhow::bail!("expected {} after build but it's missing", wasm.display());
             }
         }
     }
@@ -229,11 +225,7 @@ pub async fn test(path: String) -> Result<()> {
     Ok(())
 }
 
-pub async fn publish(
-    path: String,
-    registry: String,
-    version: Option<String>,
-) -> Result<()> {
+pub async fn publish(path: String, registry: String, version: Option<String>) -> Result<()> {
     use crate::connector_build::{detect_lang, read_package_json_name_version, Lang};
 
     let path = PathBuf::from(&path);

@@ -24,7 +24,9 @@ pub struct CachedCreds {
 }
 
 pub fn creds_path() -> PathBuf {
-    let dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".etl");
+    let dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".etl");
     let _ = std::fs::create_dir_all(&dir);
     dir.join("credentials.json")
 }
@@ -103,11 +105,7 @@ pub fn current_principal() -> Result<Principal> {
 
 pub fn require_role(p: &Principal, action: Action) -> Result<()> {
     if !p.role.permits(action) {
-        anyhow::bail!(
-            "principal role {:?} not permitted for {:?}",
-            p.role,
-            action
-        );
+        anyhow::bail!("principal role {:?} not permitted for {:?}", p.role, action);
     }
     Ok(())
 }

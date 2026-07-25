@@ -201,11 +201,7 @@ impl PgSubscription {
         Ok(())
     }
 
-    fn cdc_event_to_change_event(
-        &mut self,
-        ev: CdcEvent,
-        lsn: &str,
-    ) -> Option<ChangeEvent> {
+    fn cdc_event_to_change_event(&mut self, ev: CdcEvent, lsn: &str) -> Option<ChangeEvent> {
         match ev {
             CdcEvent::Relation(info) => {
                 self.relations.insert(info.rel_id, info);
@@ -277,12 +273,7 @@ mod tests {
 
     #[test]
     fn positional_preserves_order_with_null() {
-        let arr = positional(&[
-            Some("a".into()),
-            Some("b".into()),
-            None,
-            Some("d".into()),
-        ]);
+        let arr = positional(&[Some("a".into()), Some("b".into()), None, Some("d".into())]);
         let items = match arr {
             serde_json::Value::Array(v) => v,
             _ => panic!(),
