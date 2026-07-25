@@ -20,6 +20,7 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use crate::connectors::dispatch::build_source_connector;
 use crate::loaders::parquet_local::LocalParquetLoader;
 use crate::loaders::postgres::PostgresLoader;
+use crate::loaders::snowflake::SnowflakeLoader;
 
 fn loader_name(dest: &common_types::pipeline_spec::DestinationSpec) -> &'static str {
     match dest {
@@ -296,9 +297,10 @@ impl SyncActivities {
                     .load(&input.destination, load_id.clone(), batch)
                     .await
             }
-            // Wired for real in phase-2-5a-8 once SnowflakeLoader lands.
             common_types::pipeline_spec::DestinationSpec::Snowflake(_) => {
-                Err(anyhow::anyhow!("snowflake loader dispatch lands in phase-2-5a-8"))
+                SnowflakeLoader
+                    .load(&input.destination, load_id.clone(), batch)
+                    .await
             }
         }
         .map_err(to_retryable)?;
@@ -465,6 +467,22 @@ mod dispatch_tests {
             common_types::pipeline_spec::LocalParquetSpec { base_path: "/tmp".into() },
         );
         assert_eq!(loader_name(&spec), "local_parquet");
+    }
+
+    #[test]
+    fn pick_loader_returns_snowflake_for_snowflake_spec() {
+        let spec = DestinationSpec::Snowflake(common_types::pipeline_spec::SnowflakeDestinationSpec {
+            account: "a".into(),
+            user: "u".into(),
+            private_key_env: "K".into(),
+            warehouse: "w".into(),
+            database: "d".into(),
+            schema: "s".into(),
+            table: "t".into(),
+            role: None,
+            pk_columns: vec![],
+        });
+        assert_eq!(loader_name(&spec), "snowflake");
     }
 }
 
