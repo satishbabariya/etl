@@ -5,6 +5,7 @@ use catalog::{
     cdc::{CdcSlot, SlotState},
     Catalog,
 };
+use common_types::cursor::lsn_from_string;
 use common_types::ids::{PipelineId, TenantId};
 use inputs::*;
 use metrics;
@@ -243,8 +244,30 @@ impl CdcActivities {
         )
         .await
         .map_err(retryable)?;
+        let url = resolved.expect_url();
+
+        // Reads don't consume the slot; it is advanced last, below. If a
+        // previous attempt of this activity got as far as advancing, its
+        // window is already written under this batch_seq — re-reading would
+        // fetch the *next* changes and overwrite that file.
+        if let Some(start) = input.start_lsn.as_deref() {
+            let confirmed = slot::confirmed_flush_lsn(url, &input.slot_name)
+                .await
+                .map_err(retryable)?;
+            if let Some(confirmed) = confirmed {
+                if lsn_from_string(&confirmed).map_err(retryable)?
+                    > lsn_from_string(start).map_err(retryable)?
+                {
+                    return Ok(ReadWindowOutput {
+                        rows: 0,
+                        new_lsn: Some(confirmed),
+                    });
+                }
+            }
+        }
+
         let out = stream::read_window(
-            resolved.expect_url(),
+            url,
             &input.slot_name,
             &input.publication_name,
             input.start_lsn.as_deref(),
@@ -259,75 +282,79 @@ impl CdcActivities {
                 new_lsn: None,
             });
         }
-        let rel_id_opt = out
+        // A window can hold only Begin/Commit (or no Relation for our
+        // table); it still has to be advanced past.
+        let rel_id = out
             .relations
             .values()
             .find(|r| format!("{}.{}", r.namespace, r.name) == input.table_rel_name)
             .map(|r| r.rel_id);
-        let rel_id = match rel_id_opt {
-            Some(r) => r,
-            // No Relation message seen yet (can happen if the slot only emitted
-            // Begin/Commit with no data rows for our table this window).
-            None => {
-                return Ok(ReadWindowOutput {
-                    rows: 0,
-                    new_lsn: None,
+        let mut rows = 0;
+        if let Some(rel_id) = rel_id {
+            let rel = out.relations.get(&rel_id).unwrap();
+            let cols: Vec<(&str, DataType)> = rel
+                .columns
+                .iter()
+                .map(|c| {
+                    (
+                        c.name.as_str(),
+                        crate::connectors::postgres::cdc::types::pg_oid_to_arrow_type(c.type_oid),
+                    )
                 })
-            }
-        };
-        let rel = out.relations.get(&rel_id).unwrap();
-        let cols: Vec<(&str, DataType)> = rel
-            .columns
-            .iter()
-            .map(|c| {
-                (
-                    c.name.as_str(),
-                    crate::connectors::postgres::cdc::types::pg_oid_to_arrow_type(c.type_oid),
-                )
-            })
-            .collect();
-        let schema = snapshot::cdc_schema_for(&cols);
-        let batch = stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
-            .map_err(retryable)?;
-        let rows = batch.num_rows();
-        for ev in &out.events {
-            let op = match ev {
-                crate::connectors::postgres::cdc::CdcEvent::Insert { .. } => "i",
-                crate::connectors::postgres::cdc::CdcEvent::Update { .. } => "u",
-                crate::connectors::postgres::cdc::CdcEvent::Delete { .. } => "d",
-                _ => continue,
-            };
-            metrics::counter!(
-                crate::metrics::CDC_EVENTS,
-                "op" => op,
-                "tenant_id" => input.tenant_id.to_string(),
-            )
-            .increment(1);
-        }
-        if rows > 0 {
-            CdcParquetLoader
-                .write(
-                    &input.destination,
-                    input.tenant_id,
-                    input.pipeline_id,
-                    input.run_id,
-                    input.batch_seq,
-                    &batch,
-                )
-                .await
+                .collect();
+            let schema = snapshot::cdc_schema_for(&cols);
+            let batch = stream::events_to_batch(&out.events, &out.relations, rel_id, schema)
                 .map_err(retryable)?;
+            rows = batch.num_rows();
+            for ev in &out.events {
+                let op = match ev {
+                    crate::connectors::postgres::cdc::CdcEvent::Insert { .. } => "i",
+                    crate::connectors::postgres::cdc::CdcEvent::Update { .. } => "u",
+                    crate::connectors::postgres::cdc::CdcEvent::Delete { .. } => "d",
+                    _ => continue,
+                };
+                metrics::counter!(
+                    crate::metrics::CDC_EVENTS,
+                    "op" => op,
+                    "tenant_id" => input.tenant_id.to_string(),
+                )
+                .increment(1);
+            }
+            if rows > 0 {
+                CdcParquetLoader
+                    .write(
+                        &input.destination,
+                        input.tenant_id,
+                        input.pipeline_id,
+                        input.run_id,
+                        input.batch_seq,
+                        &batch,
+                    )
+                    .await
+                    .map_err(retryable)?;
+            }
         }
-        let new_lsn = out.new_position.map(common_types::cursor::lsn_to_string);
-        if let Some(lsn) = &new_lsn {
-            let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
-            let tid = TenantId::from_uuid_unchecked(input.tenant_id);
-            let ctx = common_types::ids::TenantContext::new(tid);
-            self.catalog
-                .cdc_update_confirmed_flush(ctx, pid, lsn)
-                .await
-                .map_err(|e| retryable(anyhow::anyhow!(e)))?;
-        }
-        Ok(ReadWindowOutput { rows, new_lsn })
+        let Some(target) = out.new_position.map(common_types::cursor::lsn_to_string) else {
+            return Ok(ReadWindowOutput {
+                rows,
+                new_lsn: None,
+            });
+        };
+        let pid = PipelineId::from_uuid_unchecked(input.pipeline_id);
+        let tid = TenantId::from_uuid_unchecked(input.tenant_id);
+        let ctx = common_types::ids::TenantContext::new(tid);
+        self.catalog
+            .cdc_update_confirmed_flush(ctx, pid, &target)
+            .await
+            .map_err(|e| retryable(anyhow::anyhow!(e)))?;
+        // Commit point: only now is the window released from the slot.
+        let new_lsn = slot::advance_slot(url, &input.slot_name, &target)
+            .await
+            .map_err(retryable)?;
+        Ok(ReadWindowOutput {
+            rows,
+            new_lsn: Some(new_lsn),
+        })
     }
 
     #[activity]

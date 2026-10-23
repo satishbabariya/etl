@@ -99,6 +99,19 @@ pub async fn slot_lag_bytes(conn_url: &str, slot: &str) -> anyhow::Result<i64> {
     Ok(lag)
 }
 
+/// The slot's `confirmed_flush_lsn`, or `None` if it has none yet.
+pub async fn confirmed_flush_lsn(conn_url: &str, slot: &str) -> anyhow::Result<Option<String>> {
+    let mut c = PgConnection::connect(conn_url).await?;
+    let (lsn,): (Option<String>,) = sqlx::query_as(
+        "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name = $1",
+    )
+    .bind(slot)
+    .fetch_one(&mut c)
+    .await
+    .context("read confirmed_flush_lsn")?;
+    Ok(lsn)
+}
+
 /// Advance the logical replication slot to `target_lsn`, releasing WAL the
 /// consumer has durably committed. Returns the slot's `confirmed_flush_lsn`
 /// after the advance.
