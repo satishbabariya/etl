@@ -38,18 +38,14 @@ pub async fn read_chunk(
         .filter(|f| !f.name().starts_with("_cdc"))
         .map(|f| f.name().as_str())
         .collect();
-    let projection = data_field_names
-        .iter()
-        .map(|n| format!("\"{n}\"::text AS \"{n}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let where_clause = match last_pk {
-        Some(_) => format!(" WHERE \"{pk_col}\" > $1"),
-        None => String::new(),
-    };
-    let stmt = format!(
-        "SELECT {projection} FROM \"{schema}\".\"{table}\"{where_clause} ORDER BY \"{pk_col}\" LIMIT {batch_size}"
-    );
+    let stmt = chunk_sql(
+        schema,
+        table,
+        pk_col,
+        &data_field_names,
+        last_pk.is_some(),
+        batch_size,
+    )?;
     let mut q = sqlx::query(&stmt);
     if let Some(pk) = last_pk {
         q = q.bind(pk);
@@ -65,6 +61,33 @@ pub async fn read_chunk(
         is_final,
         last_pk: last,
     })
+}
+
+/// PK-ordered chunk SELECT; `$1` is the last PK when `has_last_pk`.
+fn chunk_sql(
+    schema: &str,
+    table: &str,
+    pk_col: &str,
+    data_field_names: &[&str],
+    has_last_pk: bool,
+    batch_size: usize,
+) -> anyhow::Result<String> {
+    use crate::connectors::postgres::quote_ident;
+    let projection = data_field_names
+        .iter()
+        .map(|n| quote_ident(n).map(|q| format!("{q}::text AS {q}")))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .join(", ");
+    let pk = quote_ident(pk_col)?;
+    let where_clause = if has_last_pk {
+        format!(" WHERE {pk} > $1")
+    } else {
+        String::new()
+    };
+    let (schema, table) = (quote_ident(schema)?, quote_ident(table)?);
+    Ok(format!(
+        "SELECT {projection} FROM {schema}.{table}{where_clause} ORDER BY {pk} LIMIT {batch_size}"
+    ))
 }
 
 fn rows_to_cdc_batch(
@@ -155,4 +178,28 @@ pub fn cdc_schema_for(data_cols: &[(&str, DataType)]) -> SchemaRef {
         true,
     ));
     Arc::new(Schema::new(fields))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_sql_escapes_quotes_in_identifiers() {
+        let evil = "a\"; DROP TABLE x; --";
+        let sql = chunk_sql("public", evil, evil, &["id", evil], true, 50).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"id\"::text AS \"id\", \
+             \"a\"\"; DROP TABLE x; --\"::text AS \"a\"\"; DROP TABLE x; --\" \
+             FROM \"public\".\"a\"\"; DROP TABLE x; --\" \
+             WHERE \"a\"\"; DROP TABLE x; --\" > $1 \
+             ORDER BY \"a\"\"; DROP TABLE x; --\" LIMIT 50"
+        );
+    }
+
+    #[test]
+    fn chunk_sql_rejects_nul() {
+        assert!(chunk_sql("public", "t", "id", &["a\0b"], false, 50).is_err());
+    }
 }
