@@ -448,15 +448,17 @@ impl Catalog {
         Ok(id)
     }
 
-    /// Lookup is intentionally unscoped — a JWT login looks up by name
+    /// Lookup is intentionally cross-tenant — a JWT login looks up by name
     /// across all tenants and the principal's tenant_id is read from the
-    /// returned row. RLS isn't engaged here (admin path).
+    /// returned row — so it runs in admin mode.
     pub async fn principal_get_by_name(
         &self,
         name: &str,
     ) -> sqlx::Result<Option<(principal::Principal, String)>> {
-        let mut conn = self.pool.acquire().await?;
-        principal::get_by_name(&mut conn, name).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = principal::get_by_name(&mut tx, name).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     /// Used by the issuer's refresh endpoint: re-load a principal by id
@@ -465,8 +467,10 @@ impl Catalog {
         &self,
         id: common_types::ids::PrincipalId,
     ) -> sqlx::Result<Option<(principal::Principal, String)>> {
-        let mut conn = self.pool.acquire().await?;
-        principal::get_by_id(&mut conn, id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = principal::get_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Refresh tokens
@@ -481,17 +485,24 @@ impl Catalog {
         Ok(id)
     }
 
+    // Refresh and revocation lookups are keyed by token id / jti alone, so
+    // they run in admin mode: under fail-closed RLS an unscoped lookup would
+    // find nothing, and "not revoked" must never be the result of that.
     pub async fn refresh_get(
         &self,
         token_id: uuid::Uuid,
     ) -> sqlx::Result<Option<refresh::RefreshTokenRow>> {
-        let mut conn = self.pool.acquire().await?;
-        refresh::get(&mut conn, token_id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = refresh::get(&mut tx, token_id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     pub async fn refresh_delete(&self, token_id: uuid::Uuid) -> sqlx::Result<u64> {
-        let mut conn = self.pool.acquire().await?;
-        refresh::delete(&mut conn, token_id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = refresh::delete(&mut tx, token_id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Revoked tokens
@@ -509,8 +520,10 @@ impl Catalog {
     }
 
     pub async fn revoke_is_revoked(&self, jti: uuid::Uuid) -> sqlx::Result<bool> {
-        let mut conn = self.pool.acquire().await?;
-        revoke::is_revoked(&mut conn, jti).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = revoke::is_revoked(&mut tx, jti).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Audit

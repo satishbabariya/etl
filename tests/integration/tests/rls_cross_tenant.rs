@@ -372,3 +372,29 @@ async fn etl_app_metering_and_audit_writes_scope_themselves() -> anyhow::Result<
 
     Ok(())
 }
+
+// Revocation is looked up by jti alone. Over etl_app it must still see the
+// row: an unscoped lookup finding nothing would read as "not revoked".
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn etl_app_revocation_lookup_sees_revoked_jti() -> anyhow::Result<()> {
+    let admin = migrated_admin().await?;
+    let (a, _, _) = seed_tenant(&admin, "acme").await?;
+    let tenant = common_types::ids::TenantId::from_uuid_unchecked(a);
+    let jti = Uuid::now_v7();
+
+    let app = catalog::Catalog::connect_app(&app_url()).await?;
+    app.revoke_insert(
+        common_types::ids::TenantContext::new(tenant),
+        jti,
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    )
+    .await?;
+    assert!(
+        app.revoke_is_revoked(jti).await?,
+        "revoked jti read as live"
+    );
+    assert!(!app.revoke_is_revoked(Uuid::now_v7()).await?);
+
+    Ok(())
+}
