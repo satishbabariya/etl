@@ -1,4 +1,4 @@
-//! Streaming CDC via `pg_logical_slot_get_binary_changes`.
+//! Streaming CDC via `pg_logical_slot_peek_binary_changes`.
 //!
 //! We deliberately do not use the streaming replication protocol in
 //! Phase I.6 MVP — tokio-postgres 0.7 does not expose it, and the SQL
@@ -6,9 +6,11 @@
 //! polling tick rather than server-push latency. Good enough for local
 //! dogfood; streaming-protocol migration is a Phase II task.
 //!
-//! Each `read_window` call issues one SQL query that drains up to
-//! `max_events` rows from the slot. The slot advances automatically:
-//! `get_binary_changes` commits position on success.
+//! Each `read_window` call issues one SQL query that reads up to
+//! `max_events` rows (whole transactions) from the slot WITHOUT consuming
+//! them. The caller advances the slot (`slot::advance_slot`) to
+//! `new_position` only after the window is durably written, so a failure
+//! in between re-reads the same changes instead of losing them.
 
 use anyhow::{Context, Result};
 use sqlx::{Connection, PgConnection, Row};
@@ -27,14 +29,16 @@ pub async fn read_window(
     conn_url: &str,
     slot_name: &str,
     publication: &str,
-    _start_lsn: Option<&str>, // informational only — pg_logical_slot_get advances the slot itself
+    _start_lsn: Option<&str>, // informational only — reads start at the slot's confirmed_flush_lsn
     max_events: usize,
     mut relations: RelationTable,
 ) -> Result<WindowOutput> {
     let mut c = PgConnection::connect(conn_url).await?;
-    // Drain up to max_events rows; proto_version=1 matches our decoder.
+    // Peek up to max_events rows; proto_version=1 matches our decoder. The
+    // last row is a Commit whose lsn is the commit record's end, so
+    // advancing the slot to it skips exactly the transactions read here.
     let stmt = "SELECT lsn::text, data \
-                FROM pg_logical_slot_get_binary_changes($1, NULL, $2, \
+                FROM pg_logical_slot_peek_binary_changes($1, NULL, $2, \
                     'proto_version', '1', 'publication_names', $3)";
     let rows = sqlx::query(stmt)
         .bind(slot_name)
@@ -42,7 +46,7 @@ pub async fn read_window(
         .bind(publication)
         .fetch_all(&mut c)
         .await
-        .context("pg_logical_slot_get_binary_changes")?;
+        .context("pg_logical_slot_peek_binary_changes")?;
     let mut events: Vec<CdcEvent> = Vec::with_capacity(rows.len());
     let mut last_lsn_str: Option<String> = None;
     for r in &rows {

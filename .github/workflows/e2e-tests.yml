@@ -59,6 +59,7 @@ jobs:
           cargo test -p integration-tests --test wasm_connector --no-run --locked
           cargo test -p integration-tests --test mysql_cdc_e2e --no-run --locked
           cargo test -p integration-tests --test pg_loader_real_e2e --no-run --locked
+          cargo test -p integration-tests --test cdc_insert_update_delete --no-run --locked
 
       # --test-threads=1: tests in mysql_cdc_e2e share catalog state
       # (truncate_all_for_tests + create_pipeline) and stomp on each
@@ -75,6 +76,9 @@ jobs:
 
       - name: e2e — mysql_cdc (native)
         run: cargo test -p integration-tests --test mysql_cdc_e2e -- --ignored --nocapture --test-threads=1
+
+      - name: e2e — postgres_cdc (native)
+        run: cargo test -p integration-tests --test cdc_insert_update_delete -- --ignored --nocapture --test-threads=1
 
       # Full-stack loader e2e: WASM PG CDC → PostgresLoader and native PG
       # cursor → PostgresLoader, both through Temporal. Shares the catalog

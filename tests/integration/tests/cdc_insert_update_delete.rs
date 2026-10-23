@@ -111,6 +111,13 @@ fn read_ops(dir: &std::path::Path) -> Vec<String> {
 }
 
 async fn reset_orders() -> anyhow::Result<()> {
+    // The source DB isn't created by db/postgres-init; make it on first use.
+    run_sql(
+        "etl_catalog",
+        "SELECT 'CREATE DATABASE cdc_source_demo' \
+         WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'cdc_source_demo') \\gexec",
+    )
+    .await?;
     // Drop the table first so REPLICA IDENTITY is re-set cleanly.
     run_sql(
         "cdc_source_demo",
