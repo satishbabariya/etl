@@ -22,7 +22,10 @@ pub struct SnowflakeLoader;
 fn spec_of(dest: &DestinationSpec) -> anyhow::Result<&SnowflakeDestinationSpec> {
     match dest {
         DestinationSpec::Snowflake(s) => Ok(s),
-        other => bail!("SnowflakeLoader invoked with non-snowflake destination: {other:?}"),
+        other => bail!(
+            "SnowflakeLoader invoked with non-snowflake destination: {}",
+            other.kind()
+        ),
     }
 }
 
@@ -150,5 +153,21 @@ mod loader_tests {
             },
         );
         assert!(SnowflakeLoader.validate(&spec).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn wrong_variant_error_does_not_leak_spec() {
+        let spec = common_types::pipeline_spec::DestinationSpec::Postgres(
+            common_types::pipeline_spec::PostgresDestinationSpec {
+                connection_url: "postgres://etl:hunter2@db.internal/etl".into(),
+                schema: "public".into(),
+                table: "t".into(),
+                pk_columns: vec![],
+            },
+        );
+        let err = SnowflakeLoader.validate(&spec).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(!msg.contains("hunter2"), "got {msg}");
+        assert!(msg.contains("postgres"), "got {msg}");
     }
 }

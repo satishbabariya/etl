@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 blake3 = { workspace = true }
 anyhow = { workspace = true }
 zeroize = { workspace = true }
+url = "2"
 
 [dev-dependencies]
 serde_json = { workspace = true }

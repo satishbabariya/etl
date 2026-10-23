@@ -59,6 +59,7 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use common_types::pipeline_spec::{DestinationSpec, PostgresDestinationSpec};
+use common_types::redact::redact_url;
 use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Postgres, Transaction};
@@ -596,7 +597,7 @@ impl PostgresLoader {
             .max_connections(4)
             .connect(&spec.connection_url)
             .await
-            .with_context(|| format!("connect to {}", spec.connection_url))
+            .with_context(|| format!("connect to {}", redact_url(&spec.connection_url)))
     }
 }
 
@@ -733,7 +734,10 @@ fn bind_one<'a>(
 fn postgres_spec(dest: &DestinationSpec) -> anyhow::Result<&PostgresDestinationSpec> {
     match dest {
         DestinationSpec::Postgres(s) => Ok(s),
-        other => bail!("PostgresLoader received non-postgres destination: {other:?}"),
+        other => bail!(
+            "PostgresLoader received non-postgres destination: {}",
+            other.kind()
+        ),
     }
 }
 
@@ -933,6 +937,40 @@ mod tests {
         });
         let err = loader.validate(&spec).await.unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("postgres"));
+    }
+
+    #[tokio::test]
+    async fn connect_error_does_not_leak_password() {
+        // A bad sslmode fails at option parsing, before any network I/O,
+        // so this exercises the connect error path without a server.
+        let spec = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: "postgres://etl:hunter2@db.internal:5432/etl?sslmode=bogus".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        let err = PostgresLoader.validate(&spec).await.unwrap_err();
+        for msg in [format!("{err:#}"), format!("{err:?}")] {
+            assert!(!msg.contains("hunter2"), "got {msg}");
+            assert!(msg.contains("db.internal"), "got {msg}");
+        }
+    }
+
+    #[tokio::test]
+    async fn wrong_variant_error_does_not_leak_spec() {
+        let spec = DestinationSpec::Postgres(PostgresDestinationSpec {
+            connection_url: "postgres://etl:hunter2@db.internal/etl".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        });
+        let err = crate::loaders::parquet_local::LocalParquetLoader
+            .validate(&spec)
+            .await
+            .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(!msg.contains("hunter2"), "got {msg}");
+        assert!(!msg.contains("db.internal"), "got {msg}");
     }
 
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};

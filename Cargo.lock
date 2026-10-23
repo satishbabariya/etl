@@ -1150,6 +1150,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 1.0.69",
+ "url",
  "uuid",
  "zeroize",
 ]
