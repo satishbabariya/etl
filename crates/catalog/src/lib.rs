@@ -62,20 +62,20 @@ impl Catalog {
         &self.pool
     }
 
-    /// Open a transaction that issues `SET LOCAL app.tenant_id = '<uuid>'`
-    /// (or empty string for admin mode). Every public method below uses
-    /// this to scope its query under RLS.
+    /// Open a transaction that issues `SET LOCAL app.tenant_id = '<uuid>'`,
+    /// or `SET LOCAL app.admin = 'on'` for admin mode (`None`). Every public
+    /// method below uses this to scope its query under RLS; an unscoped
+    /// etl_app session sees no tenant rows (migration 0018).
     async fn begin_with_tenant(
         &self,
         ctx: Option<TenantContext>,
     ) -> sqlx::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
         let mut tx = self.pool.begin().await?;
-        let lit = ctx
-            .map(|c| format!("'{}'", c.tenant_id.as_uuid()))
-            .unwrap_or_else(|| "''".to_string());
-        sqlx::query(&format!("SET LOCAL app.tenant_id = {lit}"))
-            .execute(&mut *tx)
-            .await?;
+        let stmt = match ctx {
+            Some(c) => format!("SET LOCAL app.tenant_id = '{}'", c.tenant_id.as_uuid()),
+            None => "SET LOCAL app.admin = 'on'".to_string(),
+        };
+        sqlx::query(&stmt).execute(&mut *tx).await?;
         if let Some(c) = ctx {
             if let Some(pid) = c.principal_id {
                 sqlx::query(&format!("SET LOCAL app.principal_id = '{}'", pid.as_uuid()))
@@ -96,7 +96,7 @@ impl Catalog {
         Ok(tx)
     }
 
-    // Tenants — admin-mode (NULL app.tenant_id)
+    // Tenants — admin-mode (app.admin = 'on')
     pub async fn create_tenant(&self, name: &str) -> sqlx::Result<TenantId> {
         let mut tx = self.begin_with_tenant(None).await?;
         let id = tenant::create(&mut tx, name).await?;
@@ -133,11 +133,13 @@ impl Catalog {
                 "invalid status '{status}' (expected active|suspended)"
             )));
         }
+        let mut tx = self.begin_with_tenant(None).await?;
         let r = sqlx::query("UPDATE tenants SET status = $1 WHERE tenant_id = $2")
             .bind(status)
             .bind(tenant_id.as_uuid())
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(r.rows_affected())
     }
 
@@ -567,15 +569,20 @@ impl Catalog {
             serde_json::Value,
         )>,
     > {
-        sqlx::query_as(
+        let mut tx = self
+            .begin_with_tenant(Some(TenantContext::new(tenant_id)))
+            .await?;
+        let rows = sqlx::query_as(
             "SELECT audit_id, action, principal_id, target, occurred_at, payload \
              FROM audit_log WHERE tenant_id = $1 \
              ORDER BY audit_id DESC LIMIT $2",
         )
         .bind(tenant_id.as_uuid())
         .bind(limit)
-        .fetch_all(self.pool())
-        .await
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows)
     }
 
     /// Truncates every table. Intended for test cleanup only — admin only.

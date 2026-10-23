@@ -207,3 +207,168 @@ async fn insert_with_wrong_tenant_id_rejected() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// Migration 0018: RLS fails closed. Earlier tests in this file seed via the
+// superuser and don't depend on migration order; these do.
+async fn migrated_admin() -> anyhow::Result<PgPool> {
+    catalog::Catalog::connect(&admin_url())
+        .await?
+        .migrate()
+        .await?;
+    let admin = PgPool::connect(&admin_url()).await?;
+    reset(&admin).await?;
+    Ok(admin)
+}
+
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn unscoped_session_sees_no_tenant_rows() -> anyhow::Result<()> {
+    let admin = migrated_admin().await?;
+    let (a, _, _) = seed_tenant(&admin, "acme").await?;
+    seed_tenant(&admin, "globex").await?;
+    let ws_a: Uuid = sqlx::query("SELECT workspace_id FROM workspaces WHERE tenant_id = $1")
+        .bind(a)
+        .map(|r: sqlx::postgres::PgRow| r.get::<Uuid, _>("workspace_id"))
+        .fetch_one(&admin)
+        .await?;
+
+    let app = PgPool::connect(&app_url()).await?;
+
+    // No app.tenant_id and no app.admin: nothing is visible.
+    let pipelines: i64 = sqlx::query_scalar("SELECT count(*) FROM pipelines")
+        .fetch_one(&app)
+        .await?;
+    assert_eq!(pipelines, 0, "unscoped session saw pipelines");
+    let tenants: i64 = sqlx::query_scalar("SELECT count(*) FROM tenants")
+        .fetch_one(&app)
+        .await?;
+    assert_eq!(tenants, 0, "unscoped session saw tenants");
+
+    // An empty tenant id (the old admin-mode spelling) is not admin either.
+    let mut tx = app.begin().await?;
+    sqlx::query("SET LOCAL app.tenant_id = ''")
+        .execute(&mut *tx)
+        .await?;
+    let pipelines: i64 = sqlx::query_scalar("SELECT count(*) FROM pipelines")
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    assert_eq!(pipelines, 0, "empty app.tenant_id still bypasses RLS");
+
+    // ...and it cannot write.
+    let res = sqlx::query(
+        "INSERT INTO connections(connection_id, tenant_id, workspace_id, name, connector_ref, config) \
+         VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(a)
+    .bind(ws_a)
+    .bind("unscoped")
+    .bind("postgres@0.1.0")
+    .bind(serde_json::json!({}))
+    .execute(&app)
+    .await;
+    assert!(res.is_err(), "unscoped session inserted a tenant row");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn explicit_admin_flag_sees_all_tenants() -> anyhow::Result<()> {
+    let admin = migrated_admin().await?;
+    seed_tenant(&admin, "acme").await?;
+    seed_tenant(&admin, "globex").await?;
+
+    let app = PgPool::connect(&app_url()).await?;
+    let mut tx = app.begin().await?;
+    sqlx::query("SET LOCAL app.admin = 'on'")
+        .execute(&mut *tx)
+        .await?;
+    let pipelines: i64 = sqlx::query_scalar("SELECT count(*) FROM pipelines")
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    assert_eq!(pipelines, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn cdc_snapshots_are_tenant_isolated() -> anyhow::Result<()> {
+    let admin = migrated_admin().await?;
+    let (a, _, pipe_a) = seed_tenant(&admin, "acme").await?;
+    let (b, _, pipe_b) = seed_tenant(&admin, "globex").await?;
+    for (tenant, pipe) in [(a, pipe_a), (b, pipe_b)] {
+        sqlx::query(
+            "INSERT INTO cdc_snapshots(pipeline_id, tenant_id, captured_position) VALUES ($1,$2,'0/0')",
+        )
+        .bind(pipe)
+        .bind(tenant)
+        .execute(&admin)
+        .await?;
+    }
+
+    let app = PgPool::connect(&app_url()).await?;
+    let mut tx = app.begin().await?;
+    sqlx::query(&format!("SET LOCAL app.tenant_id = '{a}'"))
+        .execute(&mut *tx)
+        .await?;
+    let visible: Vec<Uuid> = sqlx::query_scalar("SELECT pipeline_id FROM cdc_snapshots")
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    assert_eq!(
+        visible,
+        vec![pipe_a],
+        "tenant A saw another tenant's snapshot"
+    );
+
+    Ok(())
+}
+
+// The worker writes metering and audit rows over its etl_app pool. Under
+// fail-closed RLS those writes must scope themselves to the row's tenant.
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn etl_app_metering_and_audit_writes_scope_themselves() -> anyhow::Result<()> {
+    use metering::MeteringSink;
+    let admin = migrated_admin().await?;
+    let (a, _, pipe_a) = seed_tenant(&admin, "acme").await?;
+    let tenant = common_types::ids::TenantId::from_uuid_unchecked(a);
+
+    let app = catalog::Catalog::connect_app(&app_url()).await?;
+    let sink = metering::CatalogMeteringSink::new(app.pool().clone());
+    sink.emit(&metering::MeteringEvent::new(
+        tenant,
+        Some(common_types::ids::PipelineId::from_uuid_unchecked(pipe_a)),
+        None,
+        metering::BillableMetric::RowsRead,
+        7,
+        metering::MeteringSource::Read,
+    ))
+    .await?;
+
+    app.audit_write(&audit::AuditRow {
+        tenant_id: Some(tenant),
+        principal_id: None,
+        jti: None,
+        event: audit::AuditEvent::SecretRead,
+        target: Some("rls-test".into()),
+        occurred_at: chrono::Utc::now(),
+        payload: serde_json::json!({}),
+    })
+    .await?;
+    let tail = app.audit_tail(tenant, 10).await?;
+    assert_eq!(tail.len(), 1, "audit_tail as etl_app: {tail:?}");
+
+    let metered: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM metering_events WHERE tenant_id = $1")
+            .bind(a)
+            .fetch_one(&admin)
+            .await?;
+    assert_eq!(metered, 1);
+
+    Ok(())
+}
