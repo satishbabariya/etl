@@ -86,13 +86,25 @@ pub enum DestinationSpec {
     Snowflake(SnowflakeDestinationSpec),
 }
 
+impl DestinationSpec {
+    /// Variant name (matches the serde `type` tag). Use this rather than
+    /// `{:?}` in errors: the variant payload can carry credentials.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DestinationSpec::LocalParquet(_) => "local_parquet",
+            DestinationSpec::Postgres(_) => "postgres",
+            DestinationSpec::Snowflake(_) => "snowflake",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalParquetSpec {
     /// Directory where Parquet files will be written. Created on demand.
     pub base_path: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PostgresDestinationSpec {
     /// Plain `postgres://...` URL. MVP — RFC-11 secret refs are a follow-up.
     pub connection_url: String,
@@ -104,6 +116,21 @@ pub struct PostgresDestinationSpec {
     /// `INSERT ... ON CONFLICT (pk) DO UPDATE`.
     #[serde(default)]
     pub pk_columns: Vec<String>,
+}
+
+/// Redacts the password in `connection_url`.
+impl std::fmt::Debug for PostgresDestinationSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresDestinationSpec")
+            .field(
+                "connection_url",
+                &crate::redact::redact_url(&self.connection_url),
+            )
+            .field("schema", &self.schema)
+            .field("table", &self.table)
+            .field("pk_columns", &self.pk_columns)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -349,6 +376,60 @@ mod tests {
         let j = serde_json::to_string(&s).unwrap();
         let back: SourceSpec = serde_json::from_str(&j).unwrap();
         assert_eq!(serde_json::to_string(&back).unwrap(), j);
+    }
+
+    #[test]
+    fn debug_redacts_postgres_destination_password() {
+        let pg = PostgresDestinationSpec {
+            connection_url: "postgres://etl:hunter2@db.internal:5432/etl_dest".into(),
+            schema: "public".into(),
+            table: "t".into(),
+            pk_columns: vec![],
+        };
+        let dbg = format!("{pg:?}");
+        assert!(!dbg.contains("hunter2"), "got {dbg}");
+        assert!(dbg.contains("db.internal"), "got {dbg}");
+
+        let spec = PipelineSpec {
+            source: SourceSpec::Wasm(WasmSourceSpec {
+                config: serde_json::json!({}),
+            }),
+            destination: DestinationSpec::Postgres(pg),
+            batch_size: 1,
+            transform: None,
+        };
+        let dbg = format!("{spec:?}");
+        assert!(!dbg.contains("hunter2"), "got {dbg}");
+    }
+
+    #[test]
+    fn destination_kind_matches_serde_tag() {
+        let dests = [
+            DestinationSpec::LocalParquet(LocalParquetSpec {
+                base_path: "/tmp".into(),
+            }),
+            DestinationSpec::Postgres(PostgresDestinationSpec {
+                connection_url: "postgres://x".into(),
+                schema: "public".into(),
+                table: "t".into(),
+                pk_columns: vec![],
+            }),
+            DestinationSpec::Snowflake(SnowflakeDestinationSpec {
+                account: "a".into(),
+                user: "u".into(),
+                private_key_env: "K".into(),
+                warehouse: "w".into(),
+                database: "d".into(),
+                schema: "s".into(),
+                table: "t".into(),
+                role: None,
+                pk_columns: vec![],
+            }),
+        ];
+        for d in dests {
+            let j = serde_json::to_value(&d).unwrap();
+            assert_eq!(j["type"], d.kind());
+        }
     }
 }
 
