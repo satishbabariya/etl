@@ -9,11 +9,11 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "^1.19.0",
     "@bytecodealliance/componentize-js": "^0.18.0",
-    "esbuild": "^0.28.0",
+    "@bytecodealliance/jco": "^1.19.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.4.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "apache-arrow": "^15.0.0"
