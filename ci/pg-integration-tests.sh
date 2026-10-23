@@ -55,6 +55,7 @@ TESTS=(
   postgres_loader_multi_table
   postgres_loader_schema_evolution
   pg_cdc_advance_slot
+  pg_cdc_peek_window
   snowflake_loader_mock
 )
 
