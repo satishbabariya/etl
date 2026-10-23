@@ -43,8 +43,11 @@ pub fn snowflake_type_for(dt: &DataType) -> anyhow::Result<&'static str> {
     })
 }
 
+// Snowflake treats backslash as an escape character inside single-quoted
+// literals, so it must be doubled (before quotes) or a value ending in `\`
+// would escape the closing quote.
 fn escape_str(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -467,6 +470,19 @@ mod tests {
         let strs: ArrayRef = Arc::new(StringArray::from(vec![Some("O'Brien"), None]));
         assert_eq!(sql_literal(strs.as_ref(), 0).unwrap(), "'O''Brien'");
         assert_eq!(sql_literal(strs.as_ref(), 1).unwrap(), "NULL");
+
+        let backslashes: ArrayRef = Arc::new(StringArray::from(vec![
+            r"C:\path\",
+            r"\'); DROP TABLE t; --",
+        ]));
+        assert_eq!(
+            sql_literal(backslashes.as_ref(), 0).unwrap(),
+            r"'C:\\path\\'"
+        );
+        assert_eq!(
+            sql_literal(backslashes.as_ref(), 1).unwrap(),
+            r"'\\''); DROP TABLE t; --'"
+        );
 
         let ints: ArrayRef = Arc::new(Int64Array::from(vec![42]));
         assert_eq!(sql_literal(ints.as_ref(), 0).unwrap(), "42");
