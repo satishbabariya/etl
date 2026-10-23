@@ -3,7 +3,7 @@
 
 use base64::Engine;
 use catalog::Catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -21,6 +21,17 @@ fn workspace_root() -> PathBuf {
     p
 }
 
+/// `platform` invocation with HOME pointed at a per-test temp dir, so
+/// the CLI's credential cache (`$HOME/.etl/credentials.json`) never
+/// touches the real user's file.
+fn platform(home: &Path) -> Command {
+    let mut cmd = Command::new(cargo_bin("platform"));
+    cmd.env("HOME", home)
+        .env("DATABASE_URL", catalog_url())
+        .current_dir(workspace_root());
+    cmd
+}
+
 #[tokio::test]
 #[ignore = "requires docker postgres"]
 async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
@@ -34,6 +45,8 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let keys = tempfile::tempdir()?;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
     Command::new(cargo_bin("etl-auth"))
         .args(["--keys-dir", keys.path().to_str().unwrap(), "init-issuer"])
         .status()
@@ -64,14 +77,12 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "rev-tenant"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args([
             "auth",
             "create-principal",
@@ -83,20 +94,15 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
             "--role",
             "operator",
         ])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let creds_path = dirs::home_dir().unwrap().join(".etl/credentials.json");
-    let _ = std::fs::remove_file(&creds_path);
+    let creds_path = home.join(".etl/credentials.json");
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["auth", "login", "carol", "--password", "pw"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18402")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
@@ -107,12 +113,10 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
     let claims: serde_json::Value = serde_json::from_slice(&payload)?;
     let jti = claims["jti"].as_str().unwrap().to_string();
 
-    let apply = Command::new(cargo_bin("platform"))
+    let apply = platform(home)
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_REVOCATION_CHECK", "1")
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18402")
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
@@ -121,7 +125,10 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
         String::from_utf8_lossy(&apply.stderr)
     );
 
+    // No --keys-dir here, so etl-auth would resolve $HOME/.etl/auth-keys;
+    // keep it off the real home directory too.
     Command::new(cargo_bin("etl-auth"))
+        .env("HOME", home)
         .args([
             "revoke",
             &jti,
@@ -133,12 +140,10 @@ async fn revoking_jti_blocks_subsequent_calls() -> anyhow::Result<()> {
         .status()
         .await?;
 
-    let apply2 = Command::new(cargo_bin("platform"))
+    let apply2 = platform(home)
         .args(["apply", "-f", "examples/dsl/customers-sync.yaml"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_REVOCATION_CHECK", "1")
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18402")
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(!apply2.status.success(), "expected revoked-token rejection");
