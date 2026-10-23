@@ -20,6 +20,15 @@ pub struct SnapshotChunk {
     pub is_final: bool,
 }
 
+/// Quote `name` as a MySQL identifier: wrap in backticks and double any
+/// embedded backtick. NUL is rejected (MySQL doesn't allow it in names).
+fn quote_ident(name: &str) -> Result<String> {
+    if name.contains('\0') {
+        return Err(anyhow!("mysql identifier {name:?} contains a NUL byte"));
+    }
+    Ok(format!("`{}`", name.replace('`', "``")))
+}
+
 /// Compose the SELECT statement for one snapshot chunk. Public for
 /// unit-testing the SQL shape; the real query is executed by `read_chunk`.
 /// Per-column projection: `HEX(\`col\`)` for Binary columns,
@@ -31,25 +40,28 @@ pub fn build_chunk_sql(
     data_columns: &[(&str, &arrow::datatypes::DataType)],
     has_last_pk: bool,
     batch_size: usize,
-) -> String {
+) -> Result<String> {
     let projection = data_columns
         .iter()
-        .map(|(name, dt)| match dt {
-            arrow::datatypes::DataType::Binary => {
-                format!("HEX(`{name}`) AS `{name}`")
-            }
-            _ => format!("CAST(`{name}` AS CHAR) AS `{name}`"),
+        .map(|(name, dt)| {
+            let name = quote_ident(name)?;
+            Ok(match dt {
+                arrow::datatypes::DataType::Binary => format!("HEX({name}) AS {name}"),
+                _ => format!("CAST({name} AS CHAR) AS {name}"),
+            })
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>>>()?
         .join(", ");
+    let pk_col = quote_ident(pk_col)?;
     let where_clause = if has_last_pk {
-        format!(" WHERE `{pk_col}` > ?")
+        format!(" WHERE {pk_col} > ?")
     } else {
         String::new()
     };
-    format!(
-        "SELECT {projection} FROM `{schema}`.`{table}`{where_clause} ORDER BY `{pk_col}` LIMIT {batch_size}"
-    )
+    let (schema, table) = (quote_ident(schema)?, quote_ident(table)?);
+    Ok(format!(
+        "SELECT {projection} FROM {schema}.{table}{where_clause} ORDER BY {pk_col} LIMIT {batch_size}"
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -92,7 +104,7 @@ pub async fn read_chunk(
         &data_columns,
         last_pk.is_some(),
         batch_size,
-    );
+    )?;
 
     let rows: Vec<mysql_async::Row> = match last_pk {
         Some(pk) => conn.exec(&stmt, (pk,)).await.context("snapshot SELECT")?,
@@ -340,7 +352,7 @@ mod tests {
             ("customer", &DataType::Utf8),
             ("amount", &DataType::Utf8),
         ];
-        let s = build_chunk_sql("shop", "orders", "id", &cols, true, 500);
+        let s = build_chunk_sql("shop", "orders", "id", &cols, true, 500).unwrap();
         assert!(s.contains("`shop`.`orders`"));
         assert!(s.contains("WHERE `id` > ?"));
         assert!(s.contains("ORDER BY `id`"));
@@ -354,7 +366,7 @@ mod tests {
         use arrow::datatypes::DataType;
         let cols: Vec<(&str, &DataType)> =
             vec![("id", &DataType::Int64), ("amount", &DataType::Utf8)];
-        let s = build_chunk_sql("shop", "orders", "id", &cols, false, 100);
+        let s = build_chunk_sql("shop", "orders", "id", &cols, false, 100).unwrap();
         assert!(!s.contains("WHERE"));
         assert!(s.contains("ORDER BY `id`"));
         assert!(s.contains("LIMIT 100"));
@@ -368,12 +380,41 @@ mod tests {
             ("payload", &DataType::Binary),
             ("name", &DataType::Utf8),
         ];
-        let s = build_chunk_sql("shop", "blobs", "id", &cols, false, 100);
+        let s = build_chunk_sql("shop", "blobs", "id", &cols, false, 100).unwrap();
         assert!(
             s.contains("HEX(`payload`) AS `payload`"),
             "expected HEX projection for binary column; got: {s}"
         );
         assert!(s.contains("CAST(`id` AS CHAR) AS `id`"));
         assert!(s.contains("CAST(`name` AS CHAR) AS `name`"));
+    }
+
+    #[test]
+    fn quote_ident_doubles_embedded_backticks() {
+        assert_eq!(quote_ident("orders").unwrap(), "`orders`");
+        assert_eq!(
+            quote_ident("a`; DROP TABLE x; --").unwrap(),
+            "`a``; DROP TABLE x; --`"
+        );
+    }
+
+    #[test]
+    fn quote_ident_rejects_nul() {
+        let err = quote_ident("a\0b").unwrap_err();
+        assert!(format!("{err}").contains("NUL"), "got: {err}");
+    }
+
+    #[test]
+    fn build_sql_escapes_backticks_in_identifiers() {
+        use arrow::datatypes::DataType;
+        let evil = "a`; DROP TABLE x; --";
+        let cols: Vec<(&str, &DataType)> = vec![(evil, &DataType::Int64), ("b", &DataType::Binary)];
+        let s = build_chunk_sql("shop", evil, evil, &cols, true, 10).unwrap();
+        assert_eq!(
+            s,
+            "SELECT CAST(`a``; DROP TABLE x; --` AS CHAR) AS `a``; DROP TABLE x; --`, \
+             HEX(`b`) AS `b` FROM `shop`.`a``; DROP TABLE x; --` \
+             WHERE `a``; DROP TABLE x; --` > ? ORDER BY `a``; DROP TABLE x; --` LIMIT 10"
+        );
     }
 }

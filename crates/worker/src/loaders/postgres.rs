@@ -64,6 +64,8 @@ use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Postgres, Transaction};
 
+use crate::connectors::postgres::quote_ident;
+
 pub(crate) fn resolve_target_table<'a>(
     spec: &'a PostgresDestinationSpec,
     stream_name: &'a str,
@@ -129,14 +131,26 @@ pub(crate) fn cdc_op_at<'a>(batch: &'a RecordBatch, row: usize) -> anyhow::Resul
     Ok(arr.value(row))
 }
 
-pub(crate) fn delete_sql(schema: &str, table: &str, pk_columns: &[String]) -> String {
+/// `"<schema>"."<table>"`, each part quoted via [`quote_ident`].
+fn qualified_table(schema: &str, table: &str) -> anyhow::Result<String> {
+    Ok(format!("{}.{}", quote_ident(schema)?, quote_ident(table)?))
+}
+
+pub(crate) fn delete_sql(
+    schema: &str,
+    table: &str,
+    pk_columns: &[String],
+) -> anyhow::Result<String> {
     let where_clause = pk_columns
         .iter()
         .enumerate()
-        .map(|(i, c)| format!("\"{c}\" = ${}", i + 1))
-        .collect::<Vec<_>>()
+        .map(|(i, c)| Ok(format!("{} = ${}", quote_ident(c)?, i + 1)))
+        .collect::<anyhow::Result<Vec<_>>>()?
         .join(" AND ");
-    format!("DELETE FROM \"{schema}\".\"{table}\" WHERE {where_clause}")
+    Ok(format!(
+        "DELETE FROM {} WHERE {where_clause}",
+        qualified_table(schema, table)?
+    ))
 }
 
 pub(crate) fn extract_data_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec<BoundValue>> {
@@ -303,9 +317,9 @@ pub(crate) fn extract_row(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec
     Ok(out)
 }
 
-pub(crate) fn ensure_log_table_ddl(schema: &str) -> String {
-    format!(
-        "CREATE TABLE IF NOT EXISTS \"{schema}\".\"_etl_loaded_batches\" (\
+pub(crate) fn ensure_log_table_ddl(schema: &str) -> anyhow::Result<String> {
+    Ok(format!(
+        "CREATE TABLE IF NOT EXISTS {} (\
             tenant_id UUID NOT NULL, \
             pipeline_id UUID NOT NULL, \
             run_id UUID NOT NULL, \
@@ -314,8 +328,9 @@ pub(crate) fn ensure_log_table_ddl(schema: &str) -> String {
             rows_loaded BIGINT NOT NULL, \
             loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), \
             PRIMARY KEY (tenant_id, pipeline_id, run_id, stream_name, batch_seq)\
-        )"
-    )
+        )",
+        qualified_table(schema, "_etl_loaded_batches")?
+    ))
 }
 
 pub(crate) fn insert_sql(
@@ -323,7 +338,7 @@ pub(crate) fn insert_sql(
     table: &str,
     arrow_schema: &Schema,
     pk_columns: &[String],
-) -> String {
+) -> anyhow::Result<String> {
     let field_names: Vec<&str> = arrow_schema
         .fields()
         .iter()
@@ -331,34 +346,37 @@ pub(crate) fn insert_sql(
         .collect();
     let col_list = field_names
         .iter()
-        .map(|n| format!("\"{n}\""))
-        .collect::<Vec<_>>()
+        .map(|n| quote_ident(n))
+        .collect::<anyhow::Result<Vec<_>>>()?
         .join(", ");
     let placeholders = (1..=field_names.len())
         .map(|i| format!("${i}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let base = format!("INSERT INTO \"{schema}\".\"{table}\" ({col_list}) VALUES ({placeholders})");
+    let base = format!(
+        "INSERT INTO {} ({col_list}) VALUES ({placeholders})",
+        qualified_table(schema, table)?
+    );
     if pk_columns.is_empty() {
-        return base;
+        return Ok(base);
     }
     let pk_list = pk_columns
         .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
+        .map(|c| quote_ident(c))
+        .collect::<anyhow::Result<Vec<_>>>()?
         .join(", ");
     let non_pk: Vec<String> = field_names
         .iter()
         .filter(|n| !pk_columns.iter().any(|p| p == *n))
-        .map(|n| format!("\"{n}\" = EXCLUDED.\"{n}\""))
-        .collect();
+        .map(|n| quote_ident(n).map(|q| format!("{q} = EXCLUDED.{q}")))
+        .collect::<anyhow::Result<_>>()?;
     if non_pk.is_empty() {
-        format!("{base} ON CONFLICT ({pk_list}) DO NOTHING")
+        Ok(format!("{base} ON CONFLICT ({pk_list}) DO NOTHING"))
     } else {
-        format!(
+        Ok(format!(
             "{base} ON CONFLICT ({pk_list}) DO UPDATE SET {}",
             non_pk.join(", ")
-        )
+        ))
     }
 }
 
@@ -377,16 +395,20 @@ pub(crate) fn create_table_ddl(
     for f in arrow_schema.fields() {
         let ty = pg_column_type(f.data_type())?;
         let null = if f.is_nullable() { "" } else { " NOT NULL" };
-        cols.push(format!("\"{}\" {}{}", f.name(), ty, null));
+        cols.push(format!("{} {}{}", quote_ident(f.name())?, ty, null));
     }
     let pk_clause = if pk_columns.is_empty() {
         String::new()
     } else {
-        let quoted: Vec<String> = pk_columns.iter().map(|c| format!("\"{c}\"")).collect();
+        let quoted = pk_columns
+            .iter()
+            .map(|c| quote_ident(c))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         format!(", PRIMARY KEY ({})", quoted.join(", "))
     };
     Ok(format!(
-        "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" ({}{})",
+        "CREATE TABLE IF NOT EXISTS {} ({}{})",
+        qualified_table(schema, table)?,
         cols.join(", "),
         pk_clause,
     ))
@@ -570,10 +592,12 @@ pub(crate) fn add_column_ddl(
     col_name: &str,
     pg_type: &str,
     _nullable: bool,
-) -> String {
-    format!(
-        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \"{col_name}\" {pg_type}"
-    )
+) -> anyhow::Result<String> {
+    Ok(format!(
+        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} {pg_type}",
+        qualified_table(schema, table)?,
+        quote_ident(col_name)?
+    ))
 }
 
 /// `ALTER TABLE "<schema>"."<table>" ALTER COLUMN "<name>" TYPE <new_type> USING "<name>"::<new_type>`
@@ -582,11 +606,12 @@ pub(crate) fn alter_column_type_ddl(
     table: &str,
     col_name: &str,
     new_pg_type: &str,
-) -> String {
-    format!(
-        "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{col_name}\" \
-         TYPE {new_pg_type} USING \"{col_name}\"::{new_pg_type}"
-    )
+) -> anyhow::Result<String> {
+    let col = quote_ident(col_name)?;
+    Ok(format!(
+        "ALTER TABLE {} ALTER COLUMN {col} TYPE {new_pg_type} USING {col}::{new_pg_type}",
+        qualified_table(schema, table)?
+    ))
 }
 
 pub struct PostgresLoader;
@@ -641,19 +666,19 @@ impl DestinationLoader for PostgresLoader {
         let mut tx: Transaction<'_, Postgres> = pool.begin().await.context("begin tx")?;
 
         // 1. Ensure log table.
-        tx.execute(sqlx::query(&ensure_log_table_ddl(&spec.schema)))
+        tx.execute(sqlx::query(&ensure_log_table_ddl(&spec.schema)?))
             .await
             .context("ensure log table")?;
+        let log_table = qualified_table(&spec.schema, "_etl_loaded_batches")?;
 
         // 2. Resolve target table (validates stream_name even for retried loads).
         let target_table = resolve_target_table(spec, &load_id.stream_name)?;
 
         // 3. Idempotency check — if this load_id is already logged, no-op.
         let existing = sqlx::query(&format!(
-            "SELECT rows_loaded FROM \"{}\".\"_etl_loaded_batches\" \
+            "SELECT rows_loaded FROM {log_table} \
              WHERE tenant_id=$1 AND pipeline_id=$2 AND run_id=$3 \
-             AND stream_name=$4 AND batch_seq=$5",
-            spec.schema
+             AND stream_name=$4 AND batch_seq=$5"
         ))
         .bind(load_id.tenant_id.as_uuid())
         .bind(load_id.pipeline_id.as_uuid())
@@ -687,10 +712,9 @@ impl DestinationLoader for PostgresLoader {
 
         // 5. Record in log.
         sqlx::query(&format!(
-            "INSERT INTO \"{}\".\"_etl_loaded_batches\" \
+            "INSERT INTO {log_table} \
              (tenant_id, pipeline_id, run_id, stream_name, batch_seq, rows_loaded) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            spec.schema
+             VALUES ($1, $2, $3, $4, $5, $6)"
         ))
         .bind(load_id.tenant_id.as_uuid())
         .bind(load_id.pipeline_id.as_uuid())
@@ -762,7 +786,7 @@ async fn plain_apply(
         target_table,
         batch.schema().as_ref(),
         &spec.pk_columns,
-    );
+    )?;
     let mut rows_loaded = 0usize;
     for r in 0..batch.num_rows() {
         let values = extract_row(batch, r)?;
@@ -830,9 +854,9 @@ async fn apply_schema_evolution(
                 name,
                 pg_type,
                 nullable,
-            } => add_column_ddl(schema, target_table, name, pg_type, *nullable),
+            } => add_column_ddl(schema, target_table, name, pg_type, *nullable)?,
             SchemaDelta::WidenType { name, new_pg_type } => {
-                alter_column_type_ddl(schema, target_table, name, new_pg_type)
+                alter_column_type_ddl(schema, target_table, name, new_pg_type)?
             }
             _ => continue,
         };
@@ -872,8 +896,8 @@ async fn cdc_apply(
         .await
         .context("create target table (cdc)")?;
 
-    let upsert_sql = insert_sql(&spec.schema, target_table, &data_schema, &spec.pk_columns);
-    let del_sql = delete_sql(&spec.schema, target_table, &spec.pk_columns);
+    let upsert_sql = insert_sql(&spec.schema, target_table, &data_schema, &spec.pk_columns)?;
+    let del_sql = delete_sql(&spec.schema, target_table, &spec.pk_columns)?;
 
     let mut applied = 0usize;
     for r in 0..batch.num_rows() {
@@ -1053,7 +1077,7 @@ mod tests {
             ("id", DataType::Int64, false),
             ("name", DataType::Utf8, true),
         ])));
-        let sql = insert_sql("public", "events", &schema, &[]);
+        let sql = insert_sql("public", "events", &schema, &[]).unwrap();
         assert_eq!(
             sql,
             r#"INSERT INTO "public"."events" ("id", "name") VALUES ($1, $2)"#
@@ -1067,7 +1091,7 @@ mod tests {
             ("name", DataType::Utf8, true),
             ("amount", DataType::Float64, true),
         ])));
-        let sql = insert_sql("public", "customers", &schema, &["id".to_string()]);
+        let sql = insert_sql("public", "customers", &schema, &["id".to_string()]).unwrap();
         assert_eq!(
             sql,
             r#"INSERT INTO "public"."customers" ("id", "name", "amount") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "amount" = EXCLUDED."amount""#
@@ -1081,7 +1105,7 @@ mod tests {
             ("id", DataType::Int64, false),
             ("val", DataType::Int64, true),
         ])));
-        let sql = insert_sql("public", "t", &schema, &["tenant".into(), "id".into()]);
+        let sql = insert_sql("public", "t", &schema, &["tenant".into(), "id".into()]).unwrap();
         assert!(sql.contains("ON CONFLICT (\"tenant\", \"id\")"));
         assert!(sql.contains("SET \"val\" = EXCLUDED.\"val\""));
         assert!(!sql.contains("SET \"tenant\""));
@@ -1091,7 +1115,7 @@ mod tests {
     #[test]
     fn insert_sql_pk_only_uses_do_nothing() {
         let schema = Arc::new(Schema::new(fields(&[("id", DataType::Int64, false)])));
-        let sql = insert_sql("public", "t", &schema, &["id".into()]);
+        let sql = insert_sql("public", "t", &schema, &["id".into()]).unwrap();
         assert!(sql.contains("ON CONFLICT (\"id\") DO NOTHING"));
     }
 
@@ -1131,7 +1155,7 @@ mod tests {
 
     #[test]
     fn ensure_log_table_ddl_is_idempotent_and_keyed_by_load_id() {
-        let ddl = ensure_log_table_ddl("public");
+        let ddl = ensure_log_table_ddl("public").unwrap();
         assert!(ddl.contains("CREATE TABLE IF NOT EXISTS \"public\".\"_etl_loaded_batches\""));
         assert!(ddl.contains("tenant_id UUID"));
         assert!(ddl.contains("pipeline_id UUID"));
@@ -1288,13 +1312,13 @@ mod tests {
 
     #[test]
     fn delete_sql_single_pk() {
-        let sql = delete_sql("public", "customers", &["id".to_string()]);
+        let sql = delete_sql("public", "customers", &["id".to_string()]).unwrap();
         assert_eq!(sql, r#"DELETE FROM "public"."customers" WHERE "id" = $1"#);
     }
 
     #[test]
     fn delete_sql_composite_pk() {
-        let sql = delete_sql("public", "t", &["tenant".to_string(), "id".to_string()]);
+        let sql = delete_sql("public", "t", &["tenant".to_string(), "id".to_string()]).unwrap();
         assert_eq!(
             sql,
             r#"DELETE FROM "public"."t" WHERE "tenant" = $1 AND "id" = $2"#
@@ -1592,7 +1616,7 @@ mod tests {
 
     #[test]
     fn add_column_ddl_builds_nullable_column() {
-        let sql = add_column_ddl("myschema", "mytable", "score", "DOUBLE PRECISION", true);
+        let sql = add_column_ddl("myschema", "mytable", "score", "DOUBLE PRECISION", true).unwrap();
         assert_eq!(
             sql,
             r#"ALTER TABLE "myschema"."mytable" ADD COLUMN IF NOT EXISTS "score" DOUBLE PRECISION"#
@@ -1601,7 +1625,7 @@ mod tests {
 
     #[test]
     fn add_column_ddl_always_omits_not_null() {
-        let sql = add_column_ddl("s", "t", "id2", "BIGINT", false);
+        let sql = add_column_ddl("s", "t", "id2", "BIGINT", false).unwrap();
         assert!(
             !sql.contains("NOT NULL"),
             "ADD COLUMN must never emit NOT NULL; got: {sql}"
@@ -1610,10 +1634,87 @@ mod tests {
 
     #[test]
     fn alter_column_type_ddl_emits_using_cast() {
-        let sql = alter_column_type_ddl("public", "orders", "amount", "BIGINT");
+        let sql = alter_column_type_ddl("public", "orders", "amount", "BIGINT").unwrap();
         assert_eq!(
             sql,
             r#"ALTER TABLE "public"."orders" ALTER COLUMN "amount" TYPE BIGINT USING "amount"::BIGINT"#
+        );
+    }
+
+    const EVIL: &str = "a\"; DROP TABLE x; --";
+    const EVIL_QUOTED: &str = "\"a\"\"; DROP TABLE x; --\"";
+
+    #[test]
+    fn insert_sql_escapes_quotes_in_identifiers() {
+        let schema = Schema::new(fields(&[
+            ("id", DataType::Int64, false),
+            (EVIL, DataType::Utf8, true),
+        ]));
+        let sql = insert_sql(EVIL, "t", &schema, &["id".into()]).unwrap();
+        assert!(
+            sql.starts_with(&format!("INSERT INTO {EVIL_QUOTED}.\"t\"")),
+            "{sql}"
+        );
+        assert!(sql.contains(&format!("(\"id\", {EVIL_QUOTED})")), "{sql}");
+        assert!(
+            sql.contains(&format!("{EVIL_QUOTED} = EXCLUDED.{EVIL_QUOTED}")),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn create_table_ddl_escapes_quotes_in_column_and_pk_names() {
+        let schema = Schema::new(fields(&[(EVIL, DataType::Int64, false)]));
+        let ddl = create_table_ddl("public", "t", &schema, &[EVIL.to_string()]).unwrap();
+        assert!(
+            ddl.contains(&format!("({EVIL_QUOTED} BIGINT NOT NULL")),
+            "{ddl}"
+        );
+        assert!(
+            ddl.contains(&format!("PRIMARY KEY ({EVIL_QUOTED})")),
+            "{ddl}"
+        );
+    }
+
+    #[test]
+    fn create_table_ddl_rejects_nul_in_column_name() {
+        let schema = Schema::new(fields(&[("a\0b", DataType::Int64, false)]));
+        assert!(create_table_ddl("public", "t", &schema, &[]).is_err());
+    }
+
+    #[test]
+    fn delete_sql_escapes_quotes_in_pk_names() {
+        let sql = delete_sql("public", "t", &[EVIL.to_string()]).unwrap();
+        assert_eq!(
+            sql,
+            format!("DELETE FROM \"public\".\"t\" WHERE {EVIL_QUOTED} = $1")
+        );
+    }
+
+    #[test]
+    fn schema_evolution_ddl_escapes_quotes_in_column_names() {
+        let add = add_column_ddl("s", "t", EVIL, "TEXT", true).unwrap();
+        assert!(
+            add.ends_with(&format!("ADD COLUMN IF NOT EXISTS {EVIL_QUOTED} TEXT")),
+            "{add}"
+        );
+        let alter = alter_column_type_ddl("s", "t", EVIL, "BIGINT").unwrap();
+        assert!(
+            alter.ends_with(&format!(
+                "ALTER COLUMN {EVIL_QUOTED} TYPE BIGINT USING {EVIL_QUOTED}::BIGINT"
+            )),
+            "{alter}"
+        );
+    }
+
+    #[test]
+    fn ensure_log_table_ddl_escapes_quotes_in_schema_name() {
+        let ddl = ensure_log_table_ddl(EVIL).unwrap();
+        assert!(
+            ddl.starts_with(&format!(
+                "CREATE TABLE IF NOT EXISTS {EVIL_QUOTED}.\"_etl_loaded_batches\""
+            )),
+            "{ddl}"
         );
     }
 

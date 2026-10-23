@@ -26,28 +26,7 @@ pub async fn run(
         .await
         .context("connecting to source for read_batch")?;
 
-    let column_list = schema
-        .fields()
-        .iter()
-        .map(|f| format!("\"{}\"", f.name()))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let sql = match cursor.as_ref() {
-        None => format!(
-            "SELECT {} FROM \"{}\".\"{}\" ORDER BY \"{}\" ASC LIMIT {}",
-            column_list, spec.schema, spec.table, spec.cursor_column, batch_size as i64,
-        ),
-        Some(_) => format!(
-            "SELECT {} FROM \"{}\".\"{}\" WHERE \"{}\" > $1 ORDER BY \"{}\" ASC LIMIT {}",
-            column_list,
-            spec.schema,
-            spec.table,
-            spec.cursor_column,
-            spec.cursor_column,
-            batch_size as i64,
-        ),
-    };
+    let sql = select_sql(&schema, spec, cursor.is_some(), batch_size)?;
 
     let mut query = sqlx::query(&sql);
     if let Some(c) = cursor.as_ref() {
@@ -75,6 +54,37 @@ pub async fn run(
         is_final: row_count < batch_size,
         stream_name: None,
     })
+}
+
+/// Cursor-ordered SELECT for one batch; `$1` is the cursor when `has_cursor`.
+fn select_sql(
+    schema: &arrow::datatypes::Schema,
+    spec: &PostgresSourceSpec,
+    has_cursor: bool,
+    batch_size: usize,
+) -> anyhow::Result<String> {
+    use super::quote_ident;
+    let column_list = schema
+        .fields()
+        .iter()
+        .map(|f| quote_ident(f.name()))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .join(", ");
+    let table = format!(
+        "{}.{}",
+        quote_ident(&spec.schema)?,
+        quote_ident(&spec.table)?
+    );
+    let cursor_col = quote_ident(&spec.cursor_column)?;
+    let where_clause = if has_cursor {
+        format!(" WHERE {cursor_col} > $1")
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "SELECT {column_list} FROM {table}{where_clause} ORDER BY {cursor_col} ASC LIMIT {}",
+        batch_size as i64,
+    ))
 }
 
 fn bind_cursor<'a>(
@@ -223,6 +233,38 @@ mod tests {
             pk_columns: vec!["id".into()],
             sync_mode: Default::default(),
         }
+    }
+
+    #[test]
+    fn select_sql_escapes_quotes_in_identifiers() {
+        use arrow::datatypes::{Field, Schema};
+        let evil = "a\"; DROP TABLE x; --";
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(evil, DataType::Utf8, true),
+        ]);
+        let mut s = spec();
+        s.table = evil.into();
+        s.cursor_column = evil.into();
+        let sql = select_sql(&schema, &s, true, 10).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"id\", \"a\"\"; DROP TABLE x; --\" \
+             FROM \"public\".\"a\"\"; DROP TABLE x; --\" \
+             WHERE \"a\"\"; DROP TABLE x; --\" > $1 \
+             ORDER BY \"a\"\"; DROP TABLE x; --\" ASC LIMIT 10"
+        );
+    }
+
+    #[test]
+    fn select_sql_without_cursor_omits_where() {
+        use arrow::datatypes::{Field, Schema};
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let sql = select_sql(&schema, &spec(), false, 5).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"id\" FROM \"public\".\"customers\" ORDER BY \"updated_at\" ASC LIMIT 5"
+        );
     }
 
     #[tokio::test]

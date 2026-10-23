@@ -6,6 +6,16 @@ pub mod read;
 use async_trait::async_trait;
 use connector_sdk::{ReadOutcome, SourceConnector};
 
+/// Quote `name` as a Postgres delimited identifier: wrap in `"` and double
+/// any embedded `"`. NUL is rejected (Postgres can't store it in a name).
+/// Shared by the source connector and the Postgres destination loader.
+pub(crate) fn quote_ident(name: &str) -> anyhow::Result<String> {
+    if name.contains('\0') {
+        anyhow::bail!("postgres identifier {name:?} contains a NUL byte");
+    }
+    Ok(format!("\"{}\"", name.replace('"', "\"\"")))
+}
+
 pub struct PostgresConnector;
 
 #[async_trait]
@@ -44,5 +54,29 @@ impl SourceConnector for PostgresConnector {
                 anyhow::bail!("PostgresConnector received a SourceSpec::MysqlCdc — dispatcher bug")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quote_ident_wraps_plain_names() {
+        assert_eq!(quote_ident("orders").unwrap(), "\"orders\"");
+    }
+
+    #[test]
+    fn quote_ident_doubles_embedded_quotes() {
+        assert_eq!(
+            quote_ident("a\"; DROP TABLE x; --").unwrap(),
+            "\"a\"\"; DROP TABLE x; --\""
+        );
+    }
+
+    #[test]
+    fn quote_ident_rejects_nul() {
+        let err = quote_ident("a\0b").unwrap_err();
+        assert!(format!("{err}").contains("NUL"), "got: {err}");
     }
 }
