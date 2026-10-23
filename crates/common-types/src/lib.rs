@@ -7,6 +7,7 @@ pub mod dsl;
 pub mod evolution;
 pub mod ids;
 pub mod pipeline_spec;
+pub mod redact;
 pub mod schema_fingerprint;
 pub mod secrets;
 pub mod transform;

@@ -20,17 +20,29 @@ pub async fn ensure_publication(
             .fetch_one(&mut c)
             .await?;
     if !exists.0 {
-        // table is expected as "schema.table"; split + quote parts.
-        let (schema, tbl) = table
-            .split_once('.')
-            .ok_or_else(|| anyhow::anyhow!("table must be schema.table, got {table}"))?;
-        let stmt = format!("CREATE PUBLICATION \"{publication}\" FOR TABLE \"{schema}\".\"{tbl}\"");
+        let stmt = create_publication_sql(publication, table)?;
         sqlx::query(&stmt)
             .execute(&mut c)
             .await
             .context("CREATE PUBLICATION")?;
     }
     Ok(())
+}
+
+/// DDL can't take bind parameters, so the publication and table names are
+/// quoted as identifiers.
+fn create_publication_sql(publication: &str, table: &str) -> anyhow::Result<String> {
+    use crate::connectors::postgres::quote_ident;
+    // table is expected as "schema.table"; split + quote parts.
+    let (schema, tbl) = table
+        .split_once('.')
+        .ok_or_else(|| anyhow::anyhow!("table must be schema.table, got {table}"))?;
+    Ok(format!(
+        "CREATE PUBLICATION {} FOR TABLE {}.{}",
+        quote_ident(publication)?,
+        quote_ident(schema)?,
+        quote_ident(tbl)?
+    ))
 }
 
 pub async fn ensure_slot(conn_url: &str, slot: &str) -> anyhow::Result<EnsureResult> {
@@ -110,4 +122,23 @@ pub async fn advance_slot(conn_url: &str, slot: &str, target_lsn: &str) -> anyho
     .await
     .context("re-query confirmed_flush_lsn after advance")?;
     Ok(confirmed.unwrap_or_else(|| target_lsn.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_publication_sql_escapes_quotes_in_identifiers() {
+        let sql = create_publication_sql("etl_pub", "public.a\"; DROP TABLE x; --").unwrap();
+        assert_eq!(
+            sql,
+            "CREATE PUBLICATION \"etl_pub\" FOR TABLE \"public\".\"a\"\"; DROP TABLE x; --\""
+        );
+    }
+
+    #[test]
+    fn create_publication_sql_requires_schema_qualified_table() {
+        assert!(create_publication_sql("etl_pub", "orders").is_err());
+    }
 }
