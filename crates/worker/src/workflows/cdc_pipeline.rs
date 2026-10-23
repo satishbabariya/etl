@@ -39,6 +39,12 @@ pub struct CdcPipelineInput {
     /// for tests; 0 means forever).
     #[serde(default)]
     pub max_windows: u32,
+    /// Windows per run before continuing-as-new; 0 = the default.
+    #[serde(default)]
+    pub continue_as_new_after: u32,
+    /// Set when this run is a continuation of an earlier one.
+    #[serde(default)]
+    pub resume: Option<super::StreamResume>,
 }
 
 #[workflow]
@@ -93,6 +99,7 @@ impl CdcPipelineWorkflow {
         let (run_id, tenant_id) = ctx.state(|s| (s.input.run_id, s.input.tenant_id));
         match Self::run_inner(ctx).await {
             Ok(()) => Ok(()),
+            Err(t) if super::is_continue_as_new(&t) => Err(t),
             Err(t) => {
                 let err_str = format!("{t}");
                 let _ = ctx
@@ -210,12 +217,33 @@ impl CdcPipelineWorkflow {
             .await?;
         }
 
+        // A continuation resumes the batch numbering and LSN of the run it
+        // replaced; the snapshot above was already marked complete.
+        let mut current_lsn: Option<String> = Some(slot.consistent_point.clone());
+        if let Some(r) = &input.resume {
+            batch_seq = r.batch_seq;
+            if r.position.is_some() {
+                current_lsn = r.position.clone();
+            }
+        }
+
         // Streaming loop. `max_windows > 0` caps iterations (used by tests).
         let mut window_seq: u32 = 0;
-        let mut current_lsn: Option<String> = Some(slot.consistent_point.clone());
         loop {
             if input.max_windows > 0 && window_seq >= input.max_windows {
                 break;
+            }
+            if super::should_continue_as_new(ctx, window_seq, input.continue_as_new_after) {
+                let next = CdcPipelineInput {
+                    max_windows: super::remaining_windows(input.max_windows, window_seq),
+                    resume: Some(super::StreamResume {
+                        batch_seq,
+                        position: current_lsn.clone(),
+                        ..Default::default()
+                    }),
+                    ..input.clone()
+                };
+                return Err(super::continue_as_new(CdcPipelineWorkflow::name(), &next));
             }
             let out: ReadWindowOutput = ctx
                 .start_activity(

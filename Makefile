@@ -16,6 +16,7 @@ lib-tests:
 build:
 	cargo build --workspace
 
+e2e: export ETL_CDC_CONTINUE_AS_NEW_AFTER = 3
 e2e: stack build
 	cargo test -p integration-tests --test mysql_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
 	cargo test -p integration-tests --test postgres_cdc_wasm_e2e -- --ignored --nocapture --test-threads=1
