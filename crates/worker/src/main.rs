@@ -96,21 +96,29 @@ async fn main() -> anyhow::Result<()> {
     // catalog and publishes etl_cdc_slot_lag_bytes every 15s.
     let cat_for_resolver = catalog.clone();
     let secrets_for_resolver = secrets.clone();
-    let source_url_resolver = move |pid: uuid::Uuid| -> Option<String> {
+    let source_url_resolver = move |pid: uuid::Uuid, tid: uuid::Uuid| -> Option<String> {
         let cat = cat_for_resolver.clone();
         let secrets = secrets_for_resolver.clone();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
+                // Scoped to the slot's tenant: RLS hides every row otherwise.
+                let mut tx = cat.pool().begin().await.ok()?;
+                sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+                    .bind(tid.to_string())
+                    .execute(&mut *tx)
+                    .await
+                    .ok()?;
                 let row: Option<(serde_json::Value,)> = sqlx::query_as(
                     "SELECT c.config FROM pipelines p \
                      JOIN connections c ON c.connection_id = p.source_conn_id \
                      WHERE p.pipeline_id = $1",
                 )
                 .bind(pid)
-                .fetch_optional(cat.pool())
+                .fetch_optional(&mut *tx)
                 .await
                 .ok()
                 .flatten();
+                let _ = tx.commit().await;
                 let cfg = row?.0;
                 let conn: common_types::connection_config::ConnectionConfig =
                     serde_json::from_value(cfg).ok()?;

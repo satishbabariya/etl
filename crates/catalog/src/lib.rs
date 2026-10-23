@@ -62,20 +62,20 @@ impl Catalog {
         &self.pool
     }
 
-    /// Open a transaction that issues `SET LOCAL app.tenant_id = '<uuid>'`
-    /// (or empty string for admin mode). Every public method below uses
-    /// this to scope its query under RLS.
+    /// Open a transaction that issues `SET LOCAL app.tenant_id = '<uuid>'`,
+    /// or `SET LOCAL app.admin = 'on'` for admin mode (`None`). Every public
+    /// method below uses this to scope its query under RLS; an unscoped
+    /// etl_app session sees no tenant rows (migration 0018).
     async fn begin_with_tenant(
         &self,
         ctx: Option<TenantContext>,
     ) -> sqlx::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
         let mut tx = self.pool.begin().await?;
-        let lit = ctx
-            .map(|c| format!("'{}'", c.tenant_id.as_uuid()))
-            .unwrap_or_else(|| "''".to_string());
-        sqlx::query(&format!("SET LOCAL app.tenant_id = {lit}"))
-            .execute(&mut *tx)
-            .await?;
+        let stmt = match ctx {
+            Some(c) => format!("SET LOCAL app.tenant_id = '{}'", c.tenant_id.as_uuid()),
+            None => "SET LOCAL app.admin = 'on'".to_string(),
+        };
+        sqlx::query(&stmt).execute(&mut *tx).await?;
         if let Some(c) = ctx {
             if let Some(pid) = c.principal_id {
                 sqlx::query(&format!("SET LOCAL app.principal_id = '{}'", pid.as_uuid()))
@@ -96,7 +96,7 @@ impl Catalog {
         Ok(tx)
     }
 
-    // Tenants — admin-mode (NULL app.tenant_id)
+    // Tenants — admin-mode (app.admin = 'on')
     pub async fn create_tenant(&self, name: &str) -> sqlx::Result<TenantId> {
         let mut tx = self.begin_with_tenant(None).await?;
         let id = tenant::create(&mut tx, name).await?;
@@ -133,11 +133,13 @@ impl Catalog {
                 "invalid status '{status}' (expected active|suspended)"
             )));
         }
+        let mut tx = self.begin_with_tenant(None).await?;
         let r = sqlx::query("UPDATE tenants SET status = $1 WHERE tenant_id = $2")
             .bind(status)
             .bind(tenant_id.as_uuid())
-            .execute(self.pool())
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(r.rows_affected())
     }
 
@@ -446,15 +448,17 @@ impl Catalog {
         Ok(id)
     }
 
-    /// Lookup is intentionally unscoped — a JWT login looks up by name
+    /// Lookup is intentionally cross-tenant — a JWT login looks up by name
     /// across all tenants and the principal's tenant_id is read from the
-    /// returned row. RLS isn't engaged here (admin path).
+    /// returned row — so it runs in admin mode.
     pub async fn principal_get_by_name(
         &self,
         name: &str,
     ) -> sqlx::Result<Option<(principal::Principal, String)>> {
-        let mut conn = self.pool.acquire().await?;
-        principal::get_by_name(&mut conn, name).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = principal::get_by_name(&mut tx, name).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     /// Used by the issuer's refresh endpoint: re-load a principal by id
@@ -463,8 +467,10 @@ impl Catalog {
         &self,
         id: common_types::ids::PrincipalId,
     ) -> sqlx::Result<Option<(principal::Principal, String)>> {
-        let mut conn = self.pool.acquire().await?;
-        principal::get_by_id(&mut conn, id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = principal::get_by_id(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Refresh tokens
@@ -479,17 +485,24 @@ impl Catalog {
         Ok(id)
     }
 
+    // Refresh and revocation lookups are keyed by token id / jti alone, so
+    // they run in admin mode: under fail-closed RLS an unscoped lookup would
+    // find nothing, and "not revoked" must never be the result of that.
     pub async fn refresh_get(
         &self,
         token_id: uuid::Uuid,
     ) -> sqlx::Result<Option<refresh::RefreshTokenRow>> {
-        let mut conn = self.pool.acquire().await?;
-        refresh::get(&mut conn, token_id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = refresh::get(&mut tx, token_id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     pub async fn refresh_delete(&self, token_id: uuid::Uuid) -> sqlx::Result<u64> {
-        let mut conn = self.pool.acquire().await?;
-        refresh::delete(&mut conn, token_id).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = refresh::delete(&mut tx, token_id).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Revoked tokens
@@ -507,8 +520,10 @@ impl Catalog {
     }
 
     pub async fn revoke_is_revoked(&self, jti: uuid::Uuid) -> sqlx::Result<bool> {
-        let mut conn = self.pool.acquire().await?;
-        revoke::is_revoked(&mut conn, jti).await
+        let mut tx = self.begin_with_tenant(None).await?;
+        let r = revoke::is_revoked(&mut tx, jti).await?;
+        tx.commit().await?;
+        Ok(r)
     }
 
     // Audit
@@ -567,15 +582,20 @@ impl Catalog {
             serde_json::Value,
         )>,
     > {
-        sqlx::query_as(
+        let mut tx = self
+            .begin_with_tenant(Some(TenantContext::new(tenant_id)))
+            .await?;
+        let rows = sqlx::query_as(
             "SELECT audit_id, action, principal_id, target, occurred_at, payload \
              FROM audit_log WHERE tenant_id = $1 \
              ORDER BY audit_id DESC LIMIT $2",
         )
         .bind(tenant_id.as_uuid())
         .bind(limit)
-        .fetch_all(self.pool())
-        .await
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows)
     }
 
     /// Truncates every table. Intended for test cleanup only — admin only.
