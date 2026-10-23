@@ -11,6 +11,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # CDC workflows continue-as-new every 3 windows (production default 500),
+  # so each CDC e2e runs as a chain of runs and proves no batch is lost or
+  # replayed across the hand-off.
+  ETL_CDC_CONTINUE_AS_NEW_AFTER: 3
 
 jobs:
   e2e:

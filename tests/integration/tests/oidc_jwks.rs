@@ -2,7 +2,7 @@
 //! end-to-end through the JWKS endpoint.
 
 use catalog::Catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -20,6 +20,17 @@ fn workspace_root() -> PathBuf {
     p
 }
 
+/// `platform` invocation with HOME pointed at a per-test temp dir, so
+/// the CLI's credential cache (`$HOME/.etl/credentials.json`) never
+/// touches the real user's file.
+fn platform(home: &Path) -> Command {
+    let mut cmd = Command::new(cargo_bin("platform"));
+    cmd.env("HOME", home)
+        .env("DATABASE_URL", catalog_url())
+        .current_dir(workspace_root());
+    cmd
+}
+
 #[tokio::test]
 #[ignore = "requires docker postgres"]
 async fn issuer_login_jwks_round_trip() -> anyhow::Result<()> {
@@ -33,6 +44,8 @@ async fn issuer_login_jwks_round_trip() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let keys = tempfile::tempdir()?;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
     Command::new(cargo_bin("etl-auth"))
         .args(["--keys-dir", keys.path().to_str().unwrap(), "init-issuer"])
         .status()
@@ -65,14 +78,12 @@ async fn issuer_login_jwks_round_trip() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "oidc-tenant"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args([
             "auth",
             "create-principal",
@@ -84,19 +95,14 @@ async fn issuer_login_jwks_round_trip() -> anyhow::Result<()> {
             "--role",
             "operator",
         ])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let creds_path = dirs::home_dir().unwrap().join(".etl/credentials.json");
-    let _ = std::fs::remove_file(&creds_path);
-    let login = Command::new(cargo_bin("platform"))
+    let creds_path = home.join(".etl/credentials.json");
+    let login = platform(home)
         .args(["auth", "login", "alice", "--password", "pw"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18400")
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(

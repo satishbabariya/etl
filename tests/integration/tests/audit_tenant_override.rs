@@ -2,7 +2,7 @@
 //! rows (one in admin's home tenant, one in target).
 
 use catalog::Catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -20,6 +20,17 @@ fn workspace_root() -> PathBuf {
     p
 }
 
+/// `platform` invocation with HOME pointed at a per-test temp dir, so
+/// the CLI's credential cache (`$HOME/.etl/credentials.json`) never
+/// touches the real user's file.
+fn platform(home: &Path) -> Command {
+    let mut cmd = Command::new(cargo_bin("platform"));
+    cmd.env("HOME", home)
+        .env("DATABASE_URL", catalog_url())
+        .current_dir(workspace_root());
+    cmd
+}
+
 #[tokio::test]
 #[ignore = "requires docker postgres"]
 async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
@@ -33,6 +44,8 @@ async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let keys = tempfile::tempdir()?;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
     Command::new(cargo_bin("etl-auth"))
         .args(["--keys-dir", keys.path().to_str().unwrap(), "init-issuer"])
         .status()
@@ -63,21 +76,17 @@ async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "home"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "other"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args([
             "auth",
             "create-principal",
@@ -89,27 +98,19 @@ async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
             "--role",
             "admin",
         ])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let creds = dirs::home_dir().unwrap().join(".etl/credentials.json");
-    let _ = std::fs::remove_file(&creds);
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["auth", "login", "root", "--password", "pw"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18460")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let out = Command::new(cargo_bin("platform"))
+    let out = platform(home)
         .args(["--tenant", "other", "audit", "tail", "--limit", "1"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", "http://127.0.0.1:18460")
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
@@ -118,7 +119,7 @@ async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let home: (i64,) = sqlx::query_as(
+    let home_rows: (i64,) = sqlx::query_as(
         "SELECT count(*) FROM audit_log al \
          JOIN tenants t ON t.tenant_id = al.tenant_id \
          WHERE t.name = 'home' AND al.action = 'TENANT_OVERRIDE'",
@@ -132,7 +133,7 @@ async fn admin_tenant_override_audits_both_tenants() -> anyhow::Result<()> {
     )
     .fetch_one(cat.pool())
     .await?;
-    assert_eq!(home.0, 1, "expected 1 home TENANT_OVERRIDE row");
+    assert_eq!(home_rows.0, 1, "expected 1 home TENANT_OVERRIDE row");
     assert_eq!(other.0, 1, "expected 1 target TENANT_OVERRIDE row");
 
     let _ = server.start_kill();

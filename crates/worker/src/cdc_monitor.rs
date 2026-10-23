@@ -8,14 +8,14 @@ use std::time::Duration;
 
 pub fn spawn_slot_lag_poller<F>(catalog: Arc<Catalog>, source_url_resolver: F, interval: Duration)
 where
-    F: Fn(uuid::Uuid) -> Option<String> + Send + Sync + 'static,
+    F: Fn(uuid::Uuid, uuid::Uuid) -> Option<String> + Send + Sync + 'static,
 {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(interval).await;
             // Admin-mode query — bypass RLS so we see every tenant's slot.
-            // We connect via etl_app pool but issue SET LOCAL app.tenant_id = ''
-            // (admin) inside a tx.
+            // We connect via etl_app pool but issue SET LOCAL app.admin = 'on'
+            // inside a tx.
             let mut tx = match catalog.pool().begin().await {
                 Ok(t) => t,
                 Err(e) => {
@@ -23,7 +23,7 @@ where
                     continue;
                 }
             };
-            if let Err(e) = sqlx::query("SET LOCAL app.tenant_id = ''")
+            if let Err(e) = sqlx::query("SET LOCAL app.admin = 'on'")
                 .execute(&mut *tx)
                 .await
             {
@@ -44,7 +44,7 @@ where
             };
             let _ = tx.commit().await;
             for (pipeline_id, slot_name, tenant_id) in rows {
-                let Some(url) = source_url_resolver(pipeline_id) else {
+                let Some(url) = source_url_resolver(pipeline_id, tenant_id) else {
                     continue;
                 };
                 match crate::connectors::postgres::cdc::slot::slot_lag_bytes(&url, &slot_name).await

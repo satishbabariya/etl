@@ -2,7 +2,7 @@
 //! II.2.c moves login to the etl-auth issuer; the test spawns one.
 
 use catalog::Catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -18,6 +18,17 @@ fn workspace_root() -> PathBuf {
     p.pop();
     p.pop();
     p
+}
+
+/// `platform` invocation with HOME pointed at a per-test temp dir, so
+/// the CLI's credential cache (`$HOME/.etl/credentials.json`) never
+/// touches the real user's file.
+fn platform(home: &Path) -> Command {
+    let mut cmd = Command::new(cargo_bin("platform"));
+    cmd.env("HOME", home)
+        .env("DATABASE_URL", catalog_url())
+        .current_dir(workspace_root());
+    cmd
 }
 
 async fn spawn_issuer(
@@ -72,15 +83,15 @@ async fn login_then_whoami_returns_principal() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let (mut server, _keys, issuer) = spawn_issuer(18403).await?;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "ack"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args([
             "auth",
             "create-principal",
@@ -92,20 +103,13 @@ async fn login_then_whoami_returns_principal() -> anyhow::Result<()> {
             "--role",
             "operator",
         ])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let creds_path = dirs::home_dir().unwrap().join(".etl/credentials.json");
-    let _ = std::fs::remove_file(&creds_path);
-
-    let login = Command::new(cargo_bin("platform"))
+    let login = platform(home)
         .args(["auth", "login", "alice", "--password", "pw"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", &issuer)
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
@@ -114,12 +118,7 @@ async fn login_then_whoami_returns_principal() -> anyhow::Result<()> {
         String::from_utf8_lossy(&login.stderr)
     );
 
-    let whoami = Command::new(cargo_bin("platform"))
-        .args(["auth", "whoami"])
-        .env("DATABASE_URL", catalog_url())
-        .current_dir(workspace_root())
-        .output()
-        .await?;
+    let whoami = platform(home).args(["auth", "whoami"]).output().await?;
     let stdout = String::from_utf8_lossy(&whoami.stdout);
     assert!(whoami.status.success());
     assert!(stdout.contains("Operator"), "expected role: {stdout}");
@@ -141,15 +140,15 @@ async fn login_with_wrong_password_rejects() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let (mut server, _keys, issuer) = spawn_issuer(18404).await?;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
 
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args(["tenant", "create", "ack2"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
-    Command::new(cargo_bin("platform"))
+    platform(home)
         .args([
             "auth",
             "create-principal",
@@ -161,17 +160,13 @@ async fn login_with_wrong_password_rejects() -> anyhow::Result<()> {
             "--role",
             "viewer",
         ])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
 
-    let login = Command::new(cargo_bin("platform"))
+    let login = platform(home)
         .args(["auth", "login", "bob", "--password", "wrong"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_ISSUER", &issuer)
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(!login.status.success(), "expected wrong-password rejection");

@@ -47,6 +47,14 @@ fn lock_key(tenant_id: Option<common_types::ids::TenantId>) -> i64 {
 /// writes for the same tenant serialize.
 pub async fn write_event(pool: &PgPool, row: &AuditRow) -> Result<i64, ChainError> {
     let mut tx = pool.begin().await?;
+    // Scope to the row's tenant so the write passes RLS when the pool is
+    // etl_app. System rows (tenant_id NULL) are admitted by the policy.
+    if let Some(tid) = row.tenant_id {
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(tid.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
     let key = lock_key(row.tenant_id);
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)

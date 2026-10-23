@@ -42,6 +42,12 @@ impl MeteringSink for CatalogMeteringSink {
             .unwrap_or_default()
             .trim_matches('"')
             .to_string();
+        // Scope the insert to the event's tenant so it passes RLS as etl_app.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(event.tenant_id.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "INSERT INTO metering_events \
                (event_id, tenant_id, pipeline_id, run_id, metric, value, source, emitted_at) \
@@ -56,8 +62,9 @@ impl MeteringSink for CatalogMeteringSink {
         .bind(event.value)
         .bind(source_str)
         .bind(event.timestamp)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 }

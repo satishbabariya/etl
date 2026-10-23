@@ -55,6 +55,13 @@ pub struct WasmCdcPipelineInput {
     /// Defaults to 2s when zero.
     #[serde(default)]
     pub idle_sleep_secs: u32,
+    /// Windows per run before continuing-as-new; 0 = the default.
+    #[serde(default)]
+    pub continue_as_new_after: u32,
+    /// Set when this run is a continuation of an earlier one; the cursor
+    /// travels in `initial_cursor`.
+    #[serde(default)]
+    pub resume: Option<super::StreamResume>,
 }
 
 #[workflow]
@@ -107,6 +114,7 @@ impl WasmCdcPipelineWorkflow {
         let (run_id, tenant_id) = ctx.state(|s| (s.input.run_id, s.input.tenant_id));
         match Self::run_inner(ctx).await {
             Ok(()) => Ok(()),
+            Err(t) if super::is_continue_as_new(&t) => Err(t),
             Err(t) => {
                 let err_str = format!("{t}");
                 let _ = ctx
@@ -173,14 +181,32 @@ impl WasmCdcPipelineWorkflow {
         });
 
         let mut cursor: Option<CursorValue> = input.initial_cursor.clone();
-        let mut batch_seq: u32 = 0;
+        let resume = input.resume.clone().unwrap_or_default();
+        let mut batch_seq: u32 = resume.batch_seq;
         let mut window_seq: u32 = 0;
-        let mut rows_total_so_far: u64 = 0;
-        let mut rows_rejected_so_far: u64 = 0;
+        let mut rows_total_so_far: u64 = resume.rows_total;
+        let mut rows_rejected_so_far: u64 = resume.rows_rejected;
 
         loop {
             if input.max_windows > 0 && window_seq >= input.max_windows {
                 break;
+            }
+            if super::should_continue_as_new(ctx, window_seq, input.continue_as_new_after) {
+                let next = WasmCdcPipelineInput {
+                    initial_cursor: cursor.clone(),
+                    max_windows: super::remaining_windows(input.max_windows, window_seq),
+                    resume: Some(super::StreamResume {
+                        batch_seq,
+                        position: None,
+                        rows_total: rows_total_so_far,
+                        rows_rejected: rows_rejected_so_far,
+                    }),
+                    ..input.clone()
+                };
+                return Err(super::continue_as_new(
+                    WasmCdcPipelineWorkflow::name(),
+                    &next,
+                ));
             }
             let read_out = ctx
                 .start_activity(
