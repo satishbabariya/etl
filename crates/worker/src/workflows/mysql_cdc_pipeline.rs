@@ -31,6 +31,12 @@ pub struct MysqlCdcPipelineInput {
     /// 0 = forever (production); >0 caps streaming windows for tests.
     #[serde(default)]
     pub max_windows: u32,
+    /// Windows per run before continuing-as-new; 0 = the default.
+    #[serde(default)]
+    pub continue_as_new_after: u32,
+    /// Set when this run is a continuation of an earlier one.
+    #[serde(default)]
+    pub resume: Option<super::StreamResume>,
 }
 
 #[workflow]
@@ -82,6 +88,7 @@ impl MysqlCdcPipelineWorkflow {
         let (run_id, tenant_id) = ctx.state(|s| (s.input.run_id, s.input.tenant_id));
         match Self::run_inner(ctx).await {
             Ok(()) => Ok(()),
+            Err(t) if super::is_continue_as_new(&t) => Err(t),
             Err(t) => {
                 let err_str = format!("{t}");
                 let _ = ctx
@@ -255,9 +262,32 @@ impl MysqlCdcPipelineWorkflow {
         } else {
             0
         };
+        // A continuation resumes the GTID and batch numbering of the run it
+        // replaced; the GTID is otherwise only held in workflow memory.
+        if let Some(r) = &input.resume {
+            batch_seq = r.batch_seq;
+            if let Some(gtid) = &r.position {
+                current_gtid = gtid.clone();
+            }
+        }
         loop {
             if input.max_windows > 0 && window_seq >= input.max_windows {
                 break;
+            }
+            if super::should_continue_as_new(ctx, window_seq, input.continue_as_new_after) {
+                let next = MysqlCdcPipelineInput {
+                    max_windows: super::remaining_windows(input.max_windows, window_seq),
+                    resume: Some(super::StreamResume {
+                        batch_seq,
+                        position: Some(current_gtid.clone()),
+                        ..Default::default()
+                    }),
+                    ..input.clone()
+                };
+                return Err(super::continue_as_new(
+                    MysqlCdcPipelineWorkflow::name(),
+                    &next,
+                ));
             }
             let out = ctx
                 .start_activity(

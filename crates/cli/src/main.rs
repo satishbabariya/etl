@@ -620,6 +620,15 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
         .run_timeout(Duration::from_secs(3600))
         .task_timeout(Duration::from_secs(60))
         .build();
+    // CDC workflows stream until terminated and bound their own history by
+    // continuing-as-new, so they get no execution/run timeout.
+    let cdc_opts = WorkflowStartOptions::new(cfg.task_queue.clone(), workflow_id.clone())
+        .task_timeout(Duration::from_secs(60))
+        .build();
+    let continue_as_new_after = std::env::var("ETL_CDC_CONTINUE_AS_NEW_AFTER")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     // Phase II.3.e: route to WasmCdcPipelineWorkflow when the connector
     // ref carries the wasm-cdc: prefix. This is the SDK-authored CDC
@@ -646,12 +655,14 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
             idle_sleep_secs: 0,
+            continue_as_new_after,
+            resume: None,
         };
         client
             .start_workflow(
                 worker::workflows::WasmCdcPipelineWorkflow::run,
                 wasm_cdc_input,
-                opts,
+                cdc_opts,
             )
             .await
             .context("starting WasmCdcPipelineWorkflow")?;
@@ -677,12 +688,14 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            continue_as_new_after,
+            resume: None,
         };
         client
             .start_workflow(
                 worker::workflows::MysqlCdcPipelineWorkflow::run,
                 mysql_input,
-                opts,
+                cdc_opts,
             )
             .await
             .context("starting MysqlCdcPipelineWorkflow")?;
@@ -710,9 +723,15 @@ async fn pipeline_run(id_str: String, tenant_override: Option<&str>) -> anyhow::
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            continue_as_new_after,
+            resume: None,
         };
         client
-            .start_workflow(worker::workflows::CdcPipelineWorkflow::run, cdc_input, opts)
+            .start_workflow(
+                worker::workflows::CdcPipelineWorkflow::run,
+                cdc_input,
+                cdc_opts,
+            )
             .await
             .context("starting CdcPipelineWorkflow")?;
         println!("started CDC workflow {}", workflow_id);
