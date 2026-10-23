@@ -1,6 +1,7 @@
 //! Tenant lifecycle: create / list / suspend / terminate.
 //!
-//! create  → catalog row + Temporal namespace etl-<simple>
+//! create  → catalog row + Temporal namespace etl-<simple> (namespace is
+//!           best-effort: a Temporal outage warns, `pipeline run` re-ensures)
 //! list    → tabular dump (UUID, name, created_at)
 //! suspend → name-prefix hack ("suspended:<name>") so resolver misses;
 //!           Phase II.2 will add a proper status column
@@ -28,7 +29,18 @@ pub async fn create(name: String) -> anyhow::Result<()> {
         serde_json::json!({"created_by_admin": true}),
     )
     .await;
-    register_temporal_namespace(&id).await?;
+    // The catalog row (and its audit row) is already committed, so the
+    // tenant exists regardless of Temporal. Failing the command here would
+    // report a completed create as an error and invite a retry that adds a
+    // second tenant with the same name. Namespace registration is
+    // idempotent and `pipeline run` re-ensures it before starting a
+    // workflow, so degrade to a warning instead.
+    if let Err(e) = register_temporal_namespace(&id).await {
+        eprintln!(
+            "warning: tenant {name} created, but registering its Temporal namespace failed: {e:#}\n\
+             warning: the namespace will be registered on the tenant's first `platform pipeline run`"
+        );
+    }
     Ok(())
 }
 
