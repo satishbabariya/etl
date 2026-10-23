@@ -3108,7 +3108,6 @@ dependencies = [
  "catalog",
  "chrono",
  "common-types",
- "dirs 5.0.1",
  "loader-sdk",
  "metering",
  "mysql_async",

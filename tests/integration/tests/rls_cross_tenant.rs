@@ -30,6 +30,11 @@ fn app_url() -> String {
 }
 
 async fn reset(pool: &PgPool) -> anyhow::Result<()> {
+    // Migrate first so the file also runs against a fresh database.
+    catalog::Catalog::connect(&admin_url())
+        .await?
+        .migrate()
+        .await?;
     sqlx::query(
         "TRUNCATE cdc_slots, runs, stream_state, schemas, streams, pipelines, \
                   connections, workspaces, tenants CASCADE",
@@ -208,13 +213,8 @@ async fn insert_with_wrong_tenant_id_rejected() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Migration 0018: RLS fails closed. Earlier tests in this file seed via the
-// superuser and don't depend on migration order; these do.
+// Migration 0018: RLS fails closed.
 async fn migrated_admin() -> anyhow::Result<PgPool> {
-    catalog::Catalog::connect(&admin_url())
-        .await?
-        .migrate()
-        .await?;
     let admin = PgPool::connect(&admin_url()).await?;
     reset(&admin).await?;
     Ok(admin)

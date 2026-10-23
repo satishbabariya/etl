@@ -19,12 +19,7 @@ set -euo pipefail
 : "${ETL_INTEGRATION_PG_URL:?ETL_INTEGRATION_PG_URL must be set}"
 command -v jq > /dev/null || { echo "jq is required"; exit 1; }
 
-# Run order matters: rls_cross_tenant doesn't migrate the catalog itself,
-# so it runs after tenant_api_isolation (which does).
-#
 # Not included:
-# - rbac_matrix: viewer_cannot_write_secrets fails on main (under
-#   investigation); add it back once that is fixed.
 # - tenant_lifecycle, schema_evolution, incremental_sync, transforms_*,
 #   durability_midbatch, cdc_*: spawn the worker, need Temporal.
 # - connector_lifecycle, typescript_connector_lifecycle: build a new
@@ -57,6 +52,7 @@ TESTS=(
   pg_cdc_advance_slot
   pg_cdc_peek_window
   snowflake_loader_mock
+  rbac_matrix
 )
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
