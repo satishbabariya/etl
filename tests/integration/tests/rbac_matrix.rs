@@ -1,7 +1,7 @@
 //! Phase II.2.b — RBAC matrix + cross-tenant JWT rejection.
 
 use catalog::Catalog;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 fn cargo_bin(name: &str) -> String {
@@ -56,14 +56,22 @@ async fn spawn_issuer(port: u16) -> (tokio::process::Child, tempfile::TempDir, S
     (child, keys, issuer)
 }
 
-async fn login(name: &str, password: &str, issuer: &str) {
-    let creds_path = dirs::home_dir().unwrap().join(".etl/credentials.json");
-    let _ = std::fs::remove_file(&creds_path);
-    let out = Command::new(cargo_bin("platform"))
-        .args(["auth", "login", name, "--password", password])
+/// `platform` invocation with HOME pointed at a per-test temp dir, so
+/// the CLI's credential cache (`$HOME/.etl/credentials.json`) never
+/// touches the real user's file.
+fn platform(home: &Path) -> Command {
+    let mut cmd = Command::new(cargo_bin("platform"));
+    cmd.env("HOME", home)
         .env("DATABASE_URL", catalog_url())
+        .current_dir(workspace_root());
+    cmd
+}
+
+async fn login(home: &Path, name: &str, password: &str, issuer: &str) {
+    let _ = std::fs::remove_file(home.join(".etl/credentials.json"));
+    let out = platform(home)
+        .args(["auth", "login", name, "--password", password])
         .env("ETL_AUTH_ISSUER", issuer)
-        .current_dir(workspace_root())
         .output()
         .await
         .unwrap();
@@ -88,20 +96,25 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
     cat.truncate_all_for_tests().await?;
 
     let (mut server, _keys, issuer) = spawn_issuer(18405).await;
+    let cli_home = tempfile::tempdir()?;
+    let home = cli_home.path();
 
-    Command::new(cargo_bin("platform"))
+    let out = platform(home)
         .args(["tenant", "create", "rbacco"])
-        .env("DATABASE_URL", catalog_url())
         .env("ETL_AUTH_BYPASS", "1")
-        .current_dir(workspace_root())
         .output()
         .await?;
+    assert!(
+        out.status.success(),
+        "bootstrap create-tenant failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     for (name, role) in [
         ("v_user", "viewer"),
         ("o_user", "operator"),
         ("a_user", "admin"),
     ] {
-        let out = Command::new(cargo_bin("platform"))
+        let out = platform(home)
             .args([
                 "auth",
                 "create-principal",
@@ -113,9 +126,7 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
                 "--role",
                 role,
             ])
-            .env("DATABASE_URL", catalog_url())
             .env("ETL_AUTH_BYPASS", "1")
-            .current_dir(workspace_root())
             .output()
             .await?;
         assert!(
@@ -125,11 +136,9 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         );
     }
 
-    login("v_user", "pw", &issuer).await;
-    let put = Command::new(cargo_bin("platform"))
+    login(home, "v_user", "pw", &issuer).await;
+    let put = platform(home)
         .args(["secret", "put", "k", "v", "--register"])
-        .env("DATABASE_URL", catalog_url())
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(!put.status.success(), "viewer should be rejected");
@@ -139,11 +148,9 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         "expected not-permitted: {stderr}"
     );
 
-    login("o_user", "pw", &issuer).await;
-    let put = Command::new(cargo_bin("platform"))
+    login(home, "o_user", "pw", &issuer).await;
+    let put = platform(home)
         .args(["secret", "put", "k", "v", "--register"])
-        .env("DATABASE_URL", catalog_url())
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
@@ -152,22 +159,23 @@ async fn viewer_cannot_write_secrets() -> anyhow::Result<()> {
         String::from_utf8_lossy(&put.stderr)
     );
 
-    let create = Command::new(cargo_bin("platform"))
+    let create = platform(home)
         .args(["tenant", "create", "another"])
-        .env("DATABASE_URL", catalog_url())
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
         !create.status.success(),
         "operator should not create tenants"
     );
+    let stderr = String::from_utf8_lossy(&create.stderr);
+    assert!(
+        stderr.contains("not permitted"),
+        "expected not-permitted for operator tenant create: {stderr}"
+    );
 
-    login("a_user", "pw", &issuer).await;
-    let create = Command::new(cargo_bin("platform"))
+    login(home, "a_user", "pw", &issuer).await;
+    let create = platform(home)
         .args(["tenant", "create", "another"])
-        .env("DATABASE_URL", catalog_url())
-        .current_dir(workspace_root())
         .output()
         .await?;
     assert!(
