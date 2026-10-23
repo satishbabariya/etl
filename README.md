@@ -2,6 +2,7 @@
 
 [![lib-tests](https://github.com/satishbabariya/etl/actions/workflows/lib-tests.yml/badge.svg?branch=main)](https://github.com/satishbabariya/etl/actions/workflows/lib-tests.yml)
 [![e2e-tests](https://github.com/satishbabariya/etl/actions/workflows/e2e-tests.yml/badge.svg?branch=main)](https://github.com/satishbabariya/etl/actions/workflows/e2e-tests.yml)
+[![pg-integration-tests](https://github.com/satishbabariya/etl/actions/workflows/pg-integration-tests.yml/badge.svg?branch=main)](https://github.com/satishbabariya/etl/actions/workflows/pg-integration-tests.yml)
 
 Rust + Temporal + WebAssembly ETL platform targeting the Fivetran ingestion market. Full architecture across 23 RFCs in `docs/rfc/`, roadmap in `docs/superpowers/specs/2026-04-22-implementation-roadmap-design.md`, phase plans in `docs/superpowers/plans/`.
 
@@ -113,7 +114,7 @@ Currently: **Snowflake destination loader MVP (phase 2-5a)** — append and upse
 
 Not yet built: `control-api` (stub — the CLI writes the catalog directly), deployment packaging (RFC-18), lakehouse/query/streaming (RFC-21..23), quotas, lineage.
 
-CI: `lib-tests.yml` runs `cargo test --workspace --lib` on every push/PR; `e2e-tests.yml` runs a curated 5-binary e2e subset against the docker-compose stack (Postgres + Temporal + Vault) on pushes to `main`. Most integration tests in `tests/integration` and the example connectors' tests are not run in CI yet. `make stack` / `make lib-tests` / `make e2e` mirror CI locally.
+CI: `lib-tests.yml` runs `cargo test --workspace --lib` on every push/PR; `e2e-tests.yml` runs a curated 5-binary e2e subset against the docker-compose stack (Postgres + Temporal + Vault) on pushes to `main`; `pg-integration-tests.yml` runs the Postgres-only integration tests (RLS, audit, auth, loaders; list in `ci/pg-integration-tests.sh`) on every push to `main` and PR. Integration tests that need Temporal, Vault or MySQL beyond the e2e subset, and the example connectors' tests, are not run in CI yet. `make stack` / `make lib-tests` / `make e2e` / `make pg-integration` mirror CI locally.
 
 Next up: Snowflake follow-ups (2-5b CDC op-aware `MERGE`, stage + `COPY INTO` bulk path, schema evolution, multi-table routing), wiring `advance_slot` and non-Parquet destinations into native CDC, metering follow-ups (durable sink, `pipeline_id` on `ReadBatchInput`, ComputeMs/WasmFuel), then **Phase II.4** self-hosted packaging (Helm + Terraform + `platform install`) and **II.5** (dashboards + lineage + read-only UI).
 

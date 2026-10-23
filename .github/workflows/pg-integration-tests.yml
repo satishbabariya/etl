@@ -1,0 +1,68 @@
+name: pg-integration-tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Line tables keep backtraces useful while cutting debug-info size;
+  # ~20 linked test binaries at full debug info strain the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Set explicitly: several tests skip (and pass) when they can't connect.
+  DATABASE_URL: postgres://etl:etl@localhost:5432/etl_catalog
+  DATABASE_URL_APP: postgres://etl_app:etl_app@localhost:5432/etl_catalog
+  ETL_INTEGRATION_PG_URL: postgres://etl:etl@localhost:5432/etl_catalog
+
+jobs:
+  pg-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install build dependencies (protoc for tonic/prost)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Free disk space (drop large untouched dirs ~30 GB)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Only the postgres service: wal_level=logical + db/postgres-init
+      # (etl_app role, source demo DB). Started after checkout because
+      # the init scripts are mounted from the repo.
+      - name: Bring up Postgres
+        run: docker compose up -d postgres
+
+      - name: Wait for Postgres readiness
+        run: ./ci/wait-for-postgres.sh
+
+      # Many of these tests shell out to target/debug/{platform,etl-auth}.
+      - name: Build workspace binaries
+        run: cargo build --workspace --locked
+
+      # The binary list lives in the script (shared with `make pg-integration`).
+      - name: Postgres-backed integration tests
+        run: ./ci/pg-integration-tests.sh
+
+      - name: Postgres logs (on failure)
+        if: failure()
+        run: docker compose logs postgres | tail -100
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
