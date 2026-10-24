@@ -38,6 +38,10 @@ pub enum CdcEvent {
     Update {
         rel_id: u32,
         row: Vec<Option<String>>,
+        /// Columns sent as TOAST "unchanged" that the old tuple couldn't
+        /// fill (default replica identity): `row` holds None for them, but
+        /// the destination's value must be kept, not overwritten.
+        unchanged: Vec<usize>,
     },
     Delete {
         rel_id: u32,
@@ -205,18 +209,28 @@ fn decode_update(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
     anyhow::ensure!(tag == b'N', "update new-tuple tag expected 'N', got {tag}");
     // An unchanged TOAST column carries no value in the new tuple. Its old
     // value is its current one, so take it from the old tuple when there
-    // is one; otherwise it stays NULL (a loader applying the row would
-    // overwrite the stored value — default replica identity only).
+    // is one (REPLICA IDENTITY FULL); otherwise report it as unchanged.
+    let mut unchanged = Vec::new();
     let row = decode_tuple_cols(&mut rdr)?
         .into_iter()
         .enumerate()
         .map(|(i, c)| match c {
             TupleCol::Text(s) => Some(s),
             TupleCol::Null => None,
-            TupleCol::Unchanged => old.get(i).cloned().flatten(),
+            TupleCol::Unchanged => {
+                let filled = old.get(i).cloned().flatten();
+                if filled.is_none() {
+                    unchanged.push(i);
+                }
+                filled
+            }
         })
         .collect();
-    Ok(CdcEvent::Update { rel_id, row })
+    Ok(CdcEvent::Update {
+        rel_id,
+        row,
+        unchanged,
+    })
 }
 
 fn decode_delete(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
@@ -328,7 +342,10 @@ mod tests {
             1, b'1', b'u',
         ];
         match decode_message(&body).unwrap() {
-            CdcEvent::Update { row, .. } => assert_eq!(row, vec![Some("1".into()), None]),
+            CdcEvent::Update { row, unchanged, .. } => {
+                assert_eq!(row, vec![Some("1".into()), None]);
+                assert_eq!(unchanged, vec![1]);
+            }
             other => panic!("got {other:?}"),
         }
     }

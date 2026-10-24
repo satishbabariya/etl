@@ -12,9 +12,8 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
-    Int16Builder, Int32Builder, Int64Builder, Int8Builder, StringBuilder,
-    TimestampMicrosecondBuilder,
+    ArrayBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int16Builder,
+    Int32Builder, Int64Builder, Int8Builder, StringBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_ipc::writer::StreamWriter;
@@ -159,6 +158,10 @@ pub struct DynamicBatchBuilder {
     data_builders: Vec<Builder>,
     op_builder: StringBuilder,
     pos_builder: StringBuilder,
+    /// `_cdc.unchanged` per row; the column is only emitted if some row
+    /// has TOAST-unchanged columns, so ordinary batches keep their shape.
+    unchanged_builder: StringBuilder,
+    any_unchanged: bool,
 }
 
 impl DynamicBatchBuilder {
@@ -177,12 +180,34 @@ impl DynamicBatchBuilder {
             data_builders,
             op_builder: StringBuilder::new(),
             pos_builder: StringBuilder::new(),
+            unchanged_builder: StringBuilder::new(),
+            any_unchanged: false,
         }
     }
 
     /// Append one row. `cells` is a positional slice of length
     /// `schema.fields().len() - 2` (data columns only).
     pub fn append_row(&mut self, cells: &[Option<&str>], op: char, position: &str) {
+        self.append_row_unchanged(cells, op, position, &[]);
+    }
+
+    /// [`append_row`](Self::append_row) for an update that left the
+    /// `unchanged` columns TOAST-unchanged (no value sent): they are
+    /// recorded in `_cdc.unchanged` so loaders keep the stored value.
+    pub fn append_row_unchanged(
+        &mut self,
+        cells: &[Option<&str>],
+        op: char,
+        position: &str,
+        unchanged: &[&str],
+    ) {
+        if unchanged.is_empty() {
+            self.unchanged_builder.append_null();
+        } else {
+            self.any_unchanged = true;
+            self.unchanged_builder
+                .append_value(serde_json::to_string(unchanged).expect("names serialize"));
+        }
         for (i, b) in self.data_builders.iter_mut().enumerate() {
             let cell = cells.get(i).copied().flatten();
             b.append_text(cell);
@@ -202,12 +227,24 @@ impl DynamicBatchBuilder {
         }
         arrays.push(Arc::new(self.op_builder.finish()) as ArrayRef);
         arrays.push(Arc::new(self.pos_builder.finish()) as ArrayRef);
-        let batch =
-            RecordBatch::try_new(self.schema.clone(), arrays).map_err(|e| e.to_string())?;
+        let schema = if self.any_unchanged {
+            arrays.push(Arc::new(self.unchanged_builder.finish()) as ArrayRef);
+            let mut fields: Vec<Field> = self
+                .schema
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            fields.push(Field::new("_cdc.unchanged", DataType::Utf8, true));
+            Arc::new(Schema::new(fields))
+        } else {
+            self.schema.clone()
+        };
+        let batch = RecordBatch::try_new(schema.clone(), arrays).map_err(|e| e.to_string())?;
         let mut buf = Vec::new();
         {
-            let mut w = StreamWriter::try_new(&mut buf, self.schema.as_ref())
-                .map_err(|e| e.to_string())?;
+            let mut w =
+                StreamWriter::try_new(&mut buf, schema.as_ref()).map_err(|e| e.to_string())?;
             w.write(&batch).map_err(|e| e.to_string())?;
             w.finish().map_err(|e| e.to_string())?;
         }
@@ -235,8 +272,7 @@ fn parse_ts_micros(s: &str) -> Option<i64> {
     let d: u32 = date_parts.next()?.parse().ok()?;
     let days = days_since_epoch(y, mo, d)?;
     let (h, mi, s_int, micros) = parse_hms_micros(time_str)?;
-    let secs =
-        (days as i64) * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s_int as i64;
+    let secs = (days as i64) * 86_400 + (h as i64) * 3600 + (mi as i64) * 60 + s_int as i64;
     Some(secs * 1_000_000 + micros as i64)
 }
 
@@ -335,5 +371,37 @@ mod tests {
         assert_eq!(bb.rows(), 2);
         let bytes = bb.finish_to_ipc().unwrap();
         assert!(!bytes.is_empty());
+    }
+
+    fn read_back(bytes: &[u8]) -> RecordBatch {
+        let mut r =
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).unwrap();
+        r.next().unwrap().unwrap()
+    }
+
+    #[test]
+    fn unchanged_column_only_when_some_row_has_one() {
+        use arrow_array::Array;
+        let s = build_full_schema(&[
+            Field::new("id", DataType::Int64, false),
+            Field::new("body", DataType::Utf8, true),
+        ]);
+        let mut plain = DynamicBatchBuilder::new(s.clone());
+        plain.append_row(&[Some("1"), Some("x")], 'u', "p1");
+        let b = read_back(&plain.finish_to_ipc().unwrap());
+        assert!(b.schema().field_with_name("_cdc.unchanged").is_err());
+
+        let mut bb = DynamicBatchBuilder::new(s);
+        bb.append_row(&[Some("1"), Some("x")], 'i', "p1");
+        bb.append_row_unchanged(&[Some("1"), None], 'u', "p2", &["body"]);
+        let b = read_back(&bb.finish_to_ipc().unwrap());
+        let col = b
+            .column_by_name("_cdc.unchanged")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow_array::StringArray>()
+            .unwrap();
+        assert!(col.is_null(0));
+        assert_eq!(col.value(1), r#"["body"]"#);
     }
 }

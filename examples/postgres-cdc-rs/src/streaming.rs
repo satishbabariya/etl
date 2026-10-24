@@ -44,7 +44,8 @@ pub fn next_window(
         if evt.table != qualified {
             continue;
         }
-        if append_event(&mut bb, &evt, cols.len()) {
+        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        if append_event(&mut bb, &evt, &names) {
             rows_collected += 1;
         }
     }
@@ -68,7 +69,8 @@ pub fn next_window(
     })
 }
 
-fn append_event(bb: &mut DynamicBatchBuilder, evt: &db::ChangeEvent, n_cols: usize) -> bool {
+fn append_event(bb: &mut DynamicBatchBuilder, evt: &db::ChangeEvent, names: &[&str]) -> bool {
+    let n_cols = names.len();
     use serde_json::Value;
     let v: Value = match serde_json::from_str(&evt.row_json) {
         Ok(v) => v,
@@ -106,6 +108,16 @@ fn append_event(bb: &mut DynamicBatchBuilder, evt: &db::ChangeEvent, n_cols: usi
         });
     }
     let cells: Vec<Option<&str>> = owned.iter().map(|c| c.as_deref()).collect();
-    bb.append_row(&cells, evt.op, &evt.position);
+    // Positions the host reports as TOAST-unchanged (no value sent).
+    let unchanged: Vec<&str> = v
+        .get("unchanged")
+        .and_then(|u| u.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p.as_u64().and_then(|p| names.get(p as usize).copied()))
+                .collect()
+        })
+        .unwrap_or_default();
+    bb.append_row_unchanged(&cells, evt.op, &evt.position, &unchanged);
     true
 }

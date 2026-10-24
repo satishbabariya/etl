@@ -131,6 +131,24 @@ pub(crate) fn cdc_op_at<'a>(batch: &'a RecordBatch, row: usize) -> anyhow::Resul
     Ok(arr.value(row))
 }
 
+/// Columns row `row` sent as TOAST "unchanged" (`_cdc.unchanged`); empty
+/// when the batch has no such column or the row has none.
+pub(crate) fn unchanged_at(batch: &RecordBatch, row: usize) -> anyhow::Result<Vec<String>> {
+    let Ok(idx) = batch.schema().index_of(common_types::cdc::COL_UNCHANGED) else {
+        return Ok(Vec::new());
+    };
+    let arr = batch
+        .column(idx)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| anyhow::anyhow!("_cdc.unchanged column is not Utf8"))?;
+    if arr.is_null(row) {
+        return Ok(Vec::new());
+    }
+    common_types::cdc::decode_unchanged(arr.value(row))
+        .with_context(|| format!("decoding _cdc.unchanged at row {row}"))
+}
+
 /// `"<schema>"."<table>"`, each part quoted via [`quote_ident`].
 fn qualified_table(schema: &str, table: &str) -> anyhow::Result<String> {
     Ok(format!("{}.{}", quote_ident(schema)?, quote_ident(table)?))
@@ -339,6 +357,19 @@ pub(crate) fn insert_sql(
     arrow_schema: &Schema,
     pk_columns: &[String],
 ) -> anyhow::Result<String> {
+    insert_sql_keeping(schema, table, arrow_schema, pk_columns, &[])
+}
+
+/// [`insert_sql`] whose `DO UPDATE SET` leaves `keep_existing` columns
+/// alone: a CDC update that sent them as TOAST "unchanged" carries no
+/// value for them, so the destination's value must survive.
+pub(crate) fn insert_sql_keeping(
+    schema: &str,
+    table: &str,
+    arrow_schema: &Schema,
+    pk_columns: &[String],
+    keep_existing: &[String],
+) -> anyhow::Result<String> {
     let field_names: Vec<&str> = arrow_schema
         .fields()
         .iter()
@@ -368,6 +399,7 @@ pub(crate) fn insert_sql(
     let non_pk: Vec<String> = field_names
         .iter()
         .filter(|n| !pk_columns.iter().any(|p| p == *n))
+        .filter(|n| !keep_existing.iter().any(|k| k == *n))
         .map(|n| quote_ident(n).map(|q| format!("{q} = EXCLUDED.{q}")))
         .collect::<anyhow::Result<_>>()?;
     if non_pk.is_empty() {
@@ -898,6 +930,9 @@ async fn cdc_apply(
 
     let upsert_sql = insert_sql(&spec.schema, target_table, &data_schema, &spec.pk_columns)?;
     let del_sql = delete_sql(&spec.schema, target_table, &spec.pk_columns)?;
+    // Upserts that keep TOAST-unchanged columns, by kept-column set.
+    let mut keeping_sql: std::collections::HashMap<Vec<String>, String> =
+        std::collections::HashMap::new();
 
     let mut applied = 0usize;
     for r in 0..batch.num_rows() {
@@ -905,7 +940,23 @@ async fn cdc_apply(
         match op {
             "i" | "u" | "s" => {
                 let values = extract_data_row(batch, r)?;
-                let mut q = sqlx::query(&upsert_sql);
+                let keep = unchanged_at(batch, r)?;
+                let sql = if keep.is_empty() {
+                    &upsert_sql
+                } else {
+                    if !keeping_sql.contains_key(&keep) {
+                        let sql = insert_sql_keeping(
+                            &spec.schema,
+                            target_table,
+                            &data_schema,
+                            &spec.pk_columns,
+                            &keep,
+                        )?;
+                        keeping_sql.insert(keep.clone(), sql);
+                    }
+                    &keeping_sql[&keep]
+                };
+                let mut q = sqlx::query(sql);
                 for v in &values {
                     q = bind_one(q, v);
                 }
