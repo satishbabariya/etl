@@ -15,6 +15,12 @@ use common_types::ids::TenantId;
 pub async fn create(name: String) -> anyhow::Result<()> {
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let admin = Catalog::connect(&url).await?;
+    // Names resolve tenants everywhere (`--tenant <name>`), so a duplicate
+    // would make them ambiguous. Not a DB constraint (yet): existing
+    // catalogs may already hold duplicates from before this check.
+    if let Some(existing) = admin.get_tenant_by_name(&name).await? {
+        anyhow::bail!("tenant {name} already exists ({})", existing.tenant_id);
+    }
     let id = admin.create_tenant(&name).await?;
     println!("created tenant {} ({})", name, id);
     let p = crate::auth::current_principal()?;
