@@ -25,6 +25,9 @@ pub struct CdcPlan {
     /// i/u/s/d rows in the input, before collapsing (what the PG loader
     /// reports as applied).
     pub applied: usize,
+    /// The batch carries a `c` event: evolve the destination (see
+    /// `evolution`) before writing. The `c` row itself has no data.
+    pub schema_change: bool,
 }
 
 pub fn plan(batch: &RecordBatch, pk_columns: &[String]) -> anyhow::Result<CdcPlan> {
@@ -44,6 +47,7 @@ pub fn plan(batch: &RecordBatch, pk_columns: &[String]) -> anyhow::Result<CdcPla
     // key (rendered pk literals) → (last row, last op was a delete)
     let mut last: HashMap<Vec<String>, (usize, bool)> = HashMap::new();
     let mut applied = 0usize;
+    let mut schema_change = false;
     for row in 0..batch.num_rows() {
         let delete = match cdc_op_at(batch, row)? {
             "i" | "u" | "s" => false,
@@ -55,10 +59,10 @@ pub fn plan(batch: &RecordBatch, pk_columns: &[String]) -> anyhow::Result<CdcPla
                 );
                 continue;
             }
-            "c" => bail!(
-                "schema change CDC event at row {row}: the Snowflake loader does not \
-                 apply schema evolution yet"
-            ),
+            "c" => {
+                schema_change = true;
+                continue;
+            }
             other => bail!("unknown CDC op {other:?} at row {row}"),
         };
         let key = pk_idx
@@ -84,6 +88,7 @@ pub fn plan(batch: &RecordBatch, pk_columns: &[String]) -> anyhow::Result<CdcPla
         upserts: arrow::compute::take_record_batch(&data, &pick(false))?,
         deletes: arrow::compute::take_record_batch(&data, &pick(true))?,
         applied,
+        schema_change,
     })
 }
 
@@ -175,11 +180,13 @@ mod tests {
     }
 
     #[test]
-    fn schema_change_is_rejected() {
-        let err = plan(&cdc_batch(&[(1, Some("a"), "c")]), &pk())
-            .err()
-            .expect("schema change must not be applied silently");
-        assert!(format!("{err}").contains("schema change"), "got {err}");
+    fn schema_change_is_flagged_and_carries_no_data() {
+        let p = plan(&cdc_batch(&[(0, None, "c"), (1, Some("a"), "i")]), &pk()).unwrap();
+        assert!(p.schema_change);
+        assert_eq!(p.applied, 1);
+        assert_eq!(ids(&p.upserts), vec![1]);
+        let p = plan(&cdc_batch(&[(1, Some("a"), "i")]), &pk()).unwrap();
+        assert!(!p.schema_change);
     }
 
     #[test]

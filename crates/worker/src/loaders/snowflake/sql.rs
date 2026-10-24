@@ -46,7 +46,7 @@ pub fn snowflake_type_for(dt: &DataType) -> anyhow::Result<&'static str> {
 // Snowflake treats backslash as an escape character inside single-quoted
 // literals, so it must be doubled (before quotes) or a value ending in `\`
 // would escape the closing quote.
-fn escape_str(s: &str) -> String {
+pub(crate) fn escape_str(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 

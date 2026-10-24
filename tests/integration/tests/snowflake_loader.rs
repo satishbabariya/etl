@@ -206,3 +206,71 @@ async fn snowflake_cdc_applies_last_change_per_key() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires a real Snowflake account via SNOWFLAKE_TEST_* env vars"]
+async fn snowflake_cdc_schema_change_adds_column() -> anyhow::Result<()> {
+    let table = format!("etl_test_evo_{}", uuid::Uuid::new_v4().simple());
+    let Some(spec) = real_spec(&table, vec!["id".into()]) else {
+        eprintln!("SKIP: SNOWFLAKE_TEST_* env not set");
+        return Ok(());
+    };
+    let op_batch = |cols: Vec<(&str, Vec<Option<&str>>)>, ids: Vec<i64>, ops: Vec<&str>| {
+        let mut fields = vec![Field::new("id", DataType::Int64, false)];
+        let mut arrays: Vec<arrow::array::ArrayRef> = vec![Arc::new(Int64Array::from(ids))];
+        for (name, vals) in cols {
+            fields.push(Field::new(name, DataType::Utf8, true));
+            arrays.push(Arc::new(StringArray::from(vals)));
+        }
+        fields.push(Field::new("_cdc.op", DataType::Utf8, false));
+        arrays.push(Arc::new(StringArray::from(ops)));
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).unwrap()
+    };
+
+    SnowflakeLoader
+        .load(
+            &spec,
+            load_id(20),
+            op_batch(vec![("name", vec![Some("a")])], vec![1], vec!["s"]),
+        )
+        .await?;
+    // Source added `email`: a `c` event, then a row using it.
+    SnowflakeLoader
+        .load(
+            &spec,
+            load_id(21),
+            op_batch(
+                vec![
+                    ("name", vec![None, Some("b")]),
+                    ("email", vec![None, Some("b@x")]),
+                ],
+                vec![0, 2],
+                vec!["c", "i"],
+            ),
+        )
+        .await?;
+
+    if let DestinationSpec::Snowflake(s) = &spec {
+        let client = worker::loaders::snowflake::client::SnowflakeClient::from_spec(s)?;
+        let body = client
+            .execute(&format!(
+                "SELECT \"id\", \"email\" FROM \"{}\".\"{}\".\"{}\" ORDER BY \"id\"",
+                s.database, s.schema, table
+            ))
+            .await?;
+        let rows = body["data"].as_array().unwrap().clone();
+        client
+            .execute(&format!(
+                "DROP TABLE IF EXISTS \"{}\".\"{}\".\"{}\"",
+                s.database, s.schema, table
+            ))
+            .await?;
+        assert_eq!(rows.len(), 2, "got {rows:?}");
+        assert!(
+            rows[0][1].is_null(),
+            "existing row gets NULL email: {rows:?}"
+        );
+        assert_eq!(rows[1][1].as_str(), Some("b@x"));
+    }
+    Ok(())
+}
