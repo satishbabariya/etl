@@ -398,3 +398,45 @@ async fn etl_app_revocation_lookup_sees_revoked_jti() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// Verification over etl_app must read the chain it verifies: unscoped, it
+// would see no rows and report a tampered chain as Ok.
+#[tokio::test]
+#[ignore = "requires docker stack"]
+async fn etl_app_audit_verify_sees_tampering() -> anyhow::Result<()> {
+    use audit::verify::VerifyResult;
+    let admin = migrated_admin().await?;
+    let (a, _, _) = seed_tenant(&admin, "acme").await?;
+    let tenant = common_types::ids::TenantId::from_uuid_unchecked(a);
+    let app = catalog::Catalog::connect_app(&app_url()).await?;
+    for target in ["one", "two"] {
+        app.audit_write(&audit::AuditRow {
+            tenant_id: Some(tenant),
+            principal_id: None,
+            jti: None,
+            event: audit::AuditEvent::SecretRead,
+            target: Some(target.into()),
+            occurred_at: chrono::Utc::now(),
+            payload: serde_json::json!({}),
+        })
+        .await?;
+    }
+    assert_eq!(
+        app.audit_verify_chain(Some(tenant)).await?,
+        VerifyResult::Ok { rows_checked: 2 }
+    );
+
+    sqlx::query("UPDATE audit_log SET target = 'forged' WHERE tenant_id = $1 AND target = 'two'")
+        .bind(a)
+        .execute(&admin)
+        .await?;
+    assert!(
+        matches!(
+            app.audit_verify_chain(Some(tenant)).await?,
+            VerifyResult::Mismatch { .. }
+        ),
+        "tampered chain verified as Ok over etl_app"
+    );
+
+    Ok(())
+}
