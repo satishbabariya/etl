@@ -60,7 +60,8 @@ fn load_id(seq: u32) -> LoadId {
         pipeline_id: common_types::ids::PipelineId::from_uuid_unchecked(uuid::Uuid::nil()),
         run_id: common_types::ids::RunId::from_uuid_unchecked(uuid::Uuid::nil()),
         batch_seq: seq,
-        stream_name: "public.items".into(),
+        // Empty ⇒ single-table: the batch lands in spec.table.
+        stream_name: String::new(),
     }
 }
 
@@ -237,4 +238,58 @@ async fn cdc_batch_without_pk_is_rejected() {
         .err()
         .expect("CDC without pk must fail");
     assert!(format!("{err:#}").contains("pk_columns"), "got {err:#}");
+}
+
+#[tokio::test]
+async fn stream_name_routes_each_batch_to_its_own_table() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    Mock::given(method("POST"))
+        .and(path("/api/v2/statements"))
+        .respond_with(empty_ok())
+        .mount(&server)
+        .await;
+
+    for (seq, stream) in [(20, "public.users"), (21, "public.orders")] {
+        let id = LoadId {
+            stream_name: stream.into(),
+            ..load_id(seq)
+        };
+        let res = SnowflakeLoader
+            .load(&spec(vec![]), id, batch())
+            .await
+            .unwrap();
+        assert_eq!(res.path, format!("snowflake://xy12345/DB/RAW/{stream}"));
+    }
+
+    let reqs = server.received_requests().await.unwrap();
+    let all: String = reqs
+        .iter()
+        .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+        .collect();
+    for t in ["public.users", "public.orders"] {
+        assert!(
+            all.contains(&format!("INSERT INTO \\\"DB\\\".\\\"RAW\\\".\\\"{t}\\\"")),
+            "no insert into {t}: {all}"
+        );
+    }
+    assert!(
+        !all.contains("\\\"items\\\""),
+        "spec.table used despite stream_name"
+    );
+}
+
+#[tokio::test]
+async fn stream_name_with_quote_is_rejected() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    let id = LoadId {
+        stream_name: "evil\"name".into(),
+        ..load_id(22)
+    };
+    assert!(SnowflakeLoader
+        .load(&spec(vec![]), id, batch())
+        .await
+        .is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
 }

@@ -7,8 +7,9 @@
 //! writer). Append (`pk_columns: []`) uses INSERT; upsert uses
 //! MERGE-from-VALUES. A batch carrying `_cdc.op` is applied by key
 //! (2-5b, see `cdc`): DELETE for keys whose last change is a delete, MERGE
-//! for the rest. Deferred: stage+COPY fast path, schema evolution,
-//! multi-table routing, VARIANT.
+//! for the rest. `LoadId.stream_name`, when set, names the batch's
+//! target table inside spec.schema (2-5c, as the PG loader's 2-4c).
+//! Deferred: stage+COPY fast path, schema evolution, VARIANT.
 
 pub mod cdc;
 pub mod client;
@@ -21,6 +22,22 @@ use common_types::pipeline_spec::{DestinationSpec, SnowflakeDestinationSpec};
 use loader_sdk::{DestinationLoader, LoadId, LoadResult};
 
 pub struct SnowflakeLoader;
+
+/// The batch's target table: `stream_name` when the connector set one
+/// (multi-table pipelines), else `spec.table`. Empty only for
+/// single-table pipelines, so their target is unchanged.
+fn target_table<'a>(
+    spec: &'a SnowflakeDestinationSpec,
+    stream_name: &'a str,
+) -> anyhow::Result<&'a str> {
+    let table = if stream_name.is_empty() {
+        spec.table.as_str()
+    } else {
+        stream_name
+    };
+    sql::quote_ident(table).context("target table")?;
+    Ok(table)
+}
 
 fn spec_of(dest: &DestinationSpec) -> anyhow::Result<&SnowflakeDestinationSpec> {
     match dest {
@@ -51,9 +68,10 @@ impl DestinationLoader for SnowflakeLoader {
         batch: RecordBatch,
     ) -> anyhow::Result<LoadResult> {
         let spec = spec_of(dest)?;
+        let table = target_table(spec, &load_id.stream_name)?;
         let path = format!(
             "snowflake://{}/{}/{}/{}",
-            spec.account, spec.database, spec.schema, spec.table
+            spec.account, spec.database, spec.schema, table
         );
         if batch.num_rows() == 0 {
             return Ok(LoadResult {
@@ -81,7 +99,7 @@ impl DestinationLoader for SnowflakeLoader {
             .execute(&sql::ensure_target_table_ddl(
                 db,
                 sch,
-                &spec.table,
+                table,
                 target_schema.as_ref(),
             )?)
             .await
@@ -106,14 +124,14 @@ impl DestinationLoader for SnowflakeLoader {
 
         let (dml, rows_loaded) = match &cdc_plan {
             None if spec.pk_columns.is_empty() => (
-                vec![sql::append_insert_sql(db, sch, &spec.table, &batch)?],
+                vec![sql::append_insert_sql(db, sch, table, &batch)?],
                 batch.num_rows(),
             ),
             None => (
                 vec![sql::merge_upsert_sql(
                     db,
                     sch,
-                    &spec.table,
+                    table,
                     &batch,
                     &spec.pk_columns,
                 )?],
@@ -126,7 +144,7 @@ impl DestinationLoader for SnowflakeLoader {
                     dml.push(sql::delete_keys_sql(
                         db,
                         sch,
-                        &spec.table,
+                        table,
                         &p.deletes,
                         &spec.pk_columns,
                     )?);
@@ -135,7 +153,7 @@ impl DestinationLoader for SnowflakeLoader {
                     dml.push(sql::merge_upsert_sql(
                         db,
                         sch,
-                        &spec.table,
+                        table,
                         &p.upserts,
                         &spec.pk_columns,
                     )?);
@@ -164,6 +182,30 @@ impl DestinationLoader for SnowflakeLoader {
 mod loader_tests {
     use super::*;
     use loader_sdk::DestinationLoader;
+
+    fn sf_spec(table: &str) -> SnowflakeDestinationSpec {
+        SnowflakeDestinationSpec {
+            account: "a".into(),
+            user: "u".into(),
+            private_key_env: "K".into(),
+            warehouse: "w".into(),
+            database: "d".into(),
+            schema: "s".into(),
+            table: table.into(),
+            role: None,
+            pk_columns: vec![],
+        }
+    }
+
+    #[test]
+    fn target_table_prefers_stream_name_and_falls_back_to_spec() {
+        let spec = sf_spec("fallback");
+        assert_eq!(target_table(&spec, "public.users").unwrap(), "public.users");
+        assert_eq!(target_table(&spec, "").unwrap(), "fallback");
+        assert!(target_table(&spec, "evil\"name").is_err());
+        assert!(target_table(&spec, "nul\0").is_err());
+        assert!(target_table(&sf_spec(""), "").is_err());
+    }
 
     #[tokio::test]
     async fn validate_rejects_missing_env() {
