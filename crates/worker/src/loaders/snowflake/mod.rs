@@ -8,11 +8,13 @@
 //! MERGE-from-VALUES. A batch carrying `_cdc.op` is applied by key
 //! (2-5b, see `cdc`): DELETE for keys whose last change is a delete, MERGE
 //! for the rest. `LoadId.stream_name`, when set, names the batch's
-//! target table inside spec.schema (2-5c, as the PG loader's 2-4c).
-//! Deferred: stage+COPY fast path, schema evolution, VARIANT.
+//! target table inside spec.schema (2-5c, as the PG loader's 2-4c). A
+//! CDC `c` event evolves the destination first (2-5d, see `evolution`).
+//! Deferred: stage+COPY fast path, VARIANT.
 
 pub mod cdc;
 pub mod client;
+pub mod evolution;
 pub mod jwt;
 pub mod sql;
 
@@ -120,6 +122,24 @@ impl DestinationLoader for SnowflakeLoader {
                 bytes_written: 0,
                 path,
             });
+        }
+
+        if cdc_plan.as_ref().is_some_and(|p| p.schema_change) {
+            // Snowflake DDL commits implicitly, so it can't join the data
+            // transaction: apply it first. evolution_ddl errors on a
+            // destructive change before anything runs; ADD COLUMN IF NOT
+            // EXISTS is safe to repeat on retry.
+            let cols = client
+                .execute(&evolution::dest_columns_sql(db, sch, table)?)
+                .await
+                .context("reading destination columns")?;
+            let cols = evolution::parse_dest_columns(&cols)?;
+            for stmt in evolution::evolution_ddl(db, sch, table, &cols, target_schema.as_ref())? {
+                client
+                    .execute(&stmt)
+                    .await
+                    .context("applying schema evolution")?;
+            }
         }
 
         let (dml, rows_loaded) = match &cdc_plan {

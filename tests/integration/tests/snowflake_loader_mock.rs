@@ -293,3 +293,112 @@ async fn stream_name_with_quote_is_rejected() {
         .is_err());
     assert!(server.received_requests().await.unwrap().is_empty());
 }
+
+/// CDC batch (id, name, email) whose first row is a `c` schema-change event.
+fn evolved_cdc_batch() -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("email", DataType::Utf8, true),
+        Field::new("_cdc.op", DataType::Utf8, false),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![0, 1])),
+            Arc::new(StringArray::from(vec![None, Some("a")])),
+            Arc::new(StringArray::from(vec![None, Some("a@x")])),
+            Arc::new(StringArray::from(vec!["c", "i"])),
+        ],
+    )
+    .unwrap()
+}
+
+async fn mount_dest_columns(server: &MockServer, cols: serde_json::Value) {
+    Mock::given(method("POST"))
+        .and(path("/api/v2/statements"))
+        .and(body_string_contains("INFORMATION_SCHEMA.COLUMNS"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": cols})))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v2/statements"))
+        .respond_with(empty_ok())
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn schema_change_adds_column_before_the_transaction() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    mount_dest_columns(
+        &server,
+        serde_json::json!([["id", "NUMBER"], ["name", "TEXT"]]),
+    )
+    .await;
+
+    let res = SnowflakeLoader
+        .load(&spec(vec!["id".into()]), load_id(30), evolved_cdc_batch())
+        .await
+        .unwrap();
+    assert_eq!(res.rows_loaded, 1);
+
+    let bodies: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+        .collect();
+    let alter = bodies
+        .iter()
+        .position(|b| b.contains("ADD COLUMN IF NOT EXISTS \\\"email\\\" TEXT"))
+        .expect("ALTER TABLE ADD COLUMN email");
+    let txn = bodies
+        .iter()
+        .position(|b| b.contains("BEGIN"))
+        .expect("BEGIN");
+    assert!(alter < txn, "DDL must run before the data transaction");
+    assert!(
+        !bodies[alter].contains("BEGIN"),
+        "DDL inside the transaction"
+    );
+    assert!(
+        bodies[txn].contains("\\\"email\\\""),
+        "MERGE missing new column"
+    );
+}
+
+#[tokio::test]
+async fn destructive_schema_change_pauses_without_writes() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    // Destination still has `legacy`, which the batch no longer carries.
+    mount_dest_columns(
+        &server,
+        serde_json::json!([
+            ["id", "NUMBER"],
+            ["name", "TEXT"],
+            ["email", "TEXT"],
+            ["legacy", "TEXT"]
+        ]),
+    )
+    .await;
+
+    let err = SnowflakeLoader
+        .load(&spec(vec!["id".into()]), load_id(31), evolved_cdc_batch())
+        .await
+        .err()
+        .expect("dropped column must pause the pipeline");
+    assert!(format!("{err:#}").contains("destructive"), "got {err:#}");
+    let bodies: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+        .collect();
+    assert!(!bodies.iter().any(|b| b.contains("ALTER TABLE")), "DDL ran");
+    assert!(!bodies.iter().any(|b| b.contains("BEGIN")), "data written");
+}
