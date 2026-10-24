@@ -310,6 +310,19 @@ pub fn merge_upsert_sql(
     batch: &arrow::record_batch::RecordBatch,
     pk_columns: &[String],
 ) -> anyhow::Result<String> {
+    merge_upsert_sql_keeping(db, schema, table, batch, pk_columns, &[])
+}
+
+/// [`merge_upsert_sql`] whose `WHEN MATCHED UPDATE` leaves `keep_existing`
+/// columns alone: CDC sent them as TOAST "unchanged", with no value.
+pub fn merge_upsert_sql_keeping(
+    db: &str,
+    schema: &str,
+    table: &str,
+    batch: &arrow::record_batch::RecordBatch,
+    pk_columns: &[String],
+    keep_existing: &[String],
+) -> anyhow::Result<String> {
     let schema_ref = batch.schema();
     let names: Vec<&str> = schema_ref
         .fields()
@@ -332,6 +345,7 @@ pub fn merge_upsert_sql(
         .fields()
         .iter()
         .filter(|f| !pk_columns.iter().any(|pk| pk == f.name()))
+        .filter(|f| !keep_existing.iter().any(|k| k == f.name()))
         .map(|f| Ok(format!("t.{q} = s.{q}", q = quote_ident(f.name())?)))
         .collect::<anyhow::Result<_>>()?;
     let insert_vals: Vec<String> = cols.iter().map(|c| format!("s.{c}")).collect();
@@ -458,6 +472,24 @@ mod tests {
         );
         assert!(delete_keys_sql("DB", "RAW", "t", &b, &["nope".into()]).is_err());
         assert!(delete_keys_sql("DB", "RAW", "t", &b.slice(0, 0), &pk).is_err());
+    }
+
+    #[test]
+    fn merge_keeping_leaves_kept_columns_out_of_update() {
+        let sql = merge_upsert_sql_keeping(
+            "DB",
+            "RAW",
+            "t",
+            &two_row_batch(),
+            &["id".into()],
+            &["name".into()],
+        )
+        .unwrap();
+        assert!(!sql.contains("t.\"name\" = s.\"name\""), "got {sql}");
+        // Every column is still inserted for new keys.
+        assert!(sql.contains("INSERT (\"id\", \"name\")"), "got {sql}");
+        // Keeping every non-pk column leaves no UPDATE clause at all.
+        assert!(!sql.contains("WHEN MATCHED"), "got {sql}");
     }
 
     #[test]

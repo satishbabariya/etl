@@ -209,15 +209,19 @@ impl PgSubscription {
             }
             CdcEvent::Insert { rel_id, row } => {
                 let rel = self.relations.get(&rel_id)?;
-                Some(row_event(rel, 'i', lsn, Some(row), None))
+                Some(row_event(rel, 'i', lsn, Some(row), None, &[]))
             }
-            CdcEvent::Update { rel_id, row } => {
+            CdcEvent::Update {
+                rel_id,
+                row,
+                unchanged,
+            } => {
                 let rel = self.relations.get(&rel_id)?;
-                Some(row_event(rel, 'u', lsn, Some(row), None))
+                Some(row_event(rel, 'u', lsn, Some(row), None, &unchanged))
             }
             CdcEvent::Delete { rel_id, key } => {
                 let rel = self.relations.get(&rel_id)?;
-                Some(row_event(rel, 'd', lsn, None, Some(key)))
+                Some(row_event(rel, 'd', lsn, None, Some(key), &[]))
             }
             // Begin/Commit/Truncate/Origin produce no row-level event.
             _ => None,
@@ -231,8 +235,14 @@ fn row_event(
     lsn: &str,
     after: Option<Vec<Option<String>>>,
     before: Option<Vec<Option<String>>>,
+    unchanged: &[usize],
 ) -> ChangeEvent {
     let mut obj = serde_json::Map::new();
+    // Positions in `after` that are TOAST "unchanged" (no value sent):
+    // the guest should mark them so loaders keep the stored value.
+    if !unchanged.is_empty() {
+        obj.insert("unchanged".into(), serde_json::json!(unchanged));
+    }
     if let Some(a) = after {
         obj.insert("after".into(), positional(&a));
     }
@@ -298,10 +308,32 @@ mod tests {
             "0/16B3748",
             Some(vec![Some("1".into()), Some("alice".into())]),
             None,
+            &[],
         );
         assert_eq!(ev.op, 'i');
         assert_eq!(ev.table, "public.items");
         assert_eq!(ev.position, "0/16B3748");
         assert!(ev.row_json.contains("\"after\":["));
+        assert!(!ev.row_json.contains("unchanged"));
+    }
+
+    #[test]
+    fn row_event_reports_unchanged_positions() {
+        let rel = RelationInfo {
+            rel_id: 7,
+            namespace: "public".into(),
+            name: "docs".into(),
+            columns: vec![],
+        };
+        let ev = row_event(
+            &rel,
+            'u',
+            "0/1",
+            Some(vec![Some("1".into()), None]),
+            None,
+            &[1],
+        );
+        let v: serde_json::Value = serde_json::from_str(&ev.row_json).unwrap();
+        assert_eq!(v["unchanged"], serde_json::json!([1]));
     }
 }

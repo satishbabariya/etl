@@ -75,7 +75,9 @@ pub async fn read_window(
 
 /// Convert a flush of `read_window` into a `RecordBatch`. Begin/Commit/
 /// Relation are folded into per-row `_cdc.lsn` / `_cdc.commit_ts` /
-/// `_cdc.txid` metadata; only data rows (i/u/d) become Arrow rows.
+/// `_cdc.txid` metadata; only data rows (i/u/d) become Arrow rows. When an
+/// update left TOAST columns unchanged without a value, the batch gains a
+/// trailing `_cdc.unchanged` column naming them (see common_types::cdc).
 pub fn events_to_batch(
     events: &[CdcEvent],
     relations: &RelationTable,
@@ -100,6 +102,8 @@ pub fn events_to_batch(
     let mut current_txid: Option<u32> = None;
     let mut current_commit_ts: Option<i64> = None;
     let mut current_lsn: Option<u64> = None;
+    let mut unchanged_b = StringBuilder::new();
+    let mut any_unchanged = false;
     for ev in events {
         match ev {
             CdcEvent::Begin {
@@ -116,13 +120,25 @@ pub fn events_to_batch(
             CdcEvent::Relation(_) => {}
             CdcEvent::Insert { rel_id, row } if *rel_id == rel_id_filter => {
                 append_pg_row(&mut col_builders, &schema, row)?;
+                unchanged_b.append_null();
                 op_b.append_value("i");
                 lsn_b.append_value(lsn_to_string(current_lsn.unwrap_or(0)));
                 ts_b.append_option(current_commit_ts);
                 tx_b.append_option(current_txid.map(|t| t as i64));
             }
-            CdcEvent::Update { rel_id, row } if *rel_id == rel_id_filter => {
+            CdcEvent::Update {
+                rel_id,
+                row,
+                unchanged,
+            } if *rel_id == rel_id_filter => {
                 append_pg_row(&mut col_builders, &schema, row)?;
+                let names: Vec<&str> = unchanged
+                    .iter()
+                    .filter_map(|&i| rel.columns.get(i).map(|c| c.name.as_str()))
+                    .collect();
+                let encoded = common_types::cdc::encode_unchanged(&names);
+                any_unchanged |= encoded.is_some();
+                unchanged_b.append_option(encoded);
                 op_b.append_value("u");
                 lsn_b.append_value(lsn_to_string(current_lsn.unwrap_or(0)));
                 ts_b.append_option(current_commit_ts);
@@ -130,6 +146,7 @@ pub fn events_to_batch(
             }
             CdcEvent::Delete { rel_id, key } if *rel_id == rel_id_filter => {
                 append_pg_row_partial(&mut col_builders, &schema, key, &rel.columns)?;
+                unchanged_b.append_null();
                 op_b.append_value("d");
                 lsn_b.append_value(lsn_to_string(current_lsn.unwrap_or(0)));
                 ts_b.append_option(current_commit_ts);
@@ -143,7 +160,21 @@ pub fn events_to_batch(
     cols.push(Arc::new(lsn_b.finish()));
     cols.push(Arc::new(ts_b.finish()));
     cols.push(Arc::new(tx_b.finish()));
-    Ok(arrow::record_batch::RecordBatch::try_new(schema, cols)?)
+    if !any_unchanged {
+        return Ok(arrow::record_batch::RecordBatch::try_new(schema, cols)?);
+    }
+    cols.push(Arc::new(unchanged_b.finish()));
+    let mut fields: Vec<arrow::datatypes::Field> =
+        schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(arrow::datatypes::Field::new(
+        common_types::cdc::COL_UNCHANGED,
+        arrow::datatypes::DataType::Utf8,
+        true,
+    ));
+    Ok(arrow::record_batch::RecordBatch::try_new(
+        Arc::new(arrow::datatypes::Schema::new(fields)),
+        cols,
+    )?)
 }
 
 fn append_pg_row(

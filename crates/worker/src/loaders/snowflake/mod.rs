@@ -87,7 +87,7 @@ impl DestinationLoader for SnowflakeLoader {
             .then(|| cdc::plan(&batch, &spec.pk_columns))
             .transpose()?;
         let target_schema = match &cdc_plan {
-            Some(p) => p.upserts.schema(),
+            Some(p) => p.deletes.schema(),
             None => batch.schema(),
         };
         let client = client::SnowflakeClient::from_spec(spec)?;
@@ -169,13 +169,14 @@ impl DestinationLoader for SnowflakeLoader {
                         &spec.pk_columns,
                     )?);
                 }
-                if p.upserts.num_rows() > 0 {
-                    dml.push(sql::merge_upsert_sql(
+                for g in p.upserts.iter().filter(|g| g.batch.num_rows() > 0) {
+                    dml.push(sql::merge_upsert_sql_keeping(
                         db,
                         sch,
                         table,
-                        &p.upserts,
+                        &g.batch,
                         &spec.pk_columns,
+                        &g.keep_existing,
                     )?);
                 }
                 (dml, p.applied)
