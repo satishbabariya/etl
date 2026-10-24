@@ -10,7 +10,6 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 use crate::connectors::mysql::cdc::schema::InfoSchemaColumn;
 use crate::connectors::mysql::cdc::{position::GtidSet, schema, snapshot, stream};
-use crate::loaders::cdc_parquet::CdcParquetLoader;
 
 #[derive(Clone)]
 pub struct MysqlCdcActivities {
@@ -232,17 +231,16 @@ impl MysqlCdcActivities {
         .map_err(into_activity_err)?;
 
         if let Some(batch) = out.batch.as_ref() {
-            CdcParquetLoader
-                .write(
-                    &input.destination,
-                    input.tenant_id,
-                    input.pipeline_id,
-                    input.run_id,
-                    input.batch_seq,
-                    batch,
-                )
-                .await
-                .map_err(into_activity_err)?;
+            crate::loaders::write_cdc_batch(
+                &input.destination,
+                input.tenant_id,
+                input.pipeline_id,
+                input.run_id,
+                input.batch_seq,
+                batch,
+            )
+            .await
+            .map_err(into_activity_err)?;
         }
         Ok(MysqlReadWindowOutput {
             rows: out.rows as u32,
@@ -312,17 +310,16 @@ impl MysqlCdcActivities {
         .await
         .map_err(into_activity_err)?;
         if let Some(batch) = chunk.batch.as_ref() {
-            CdcParquetLoader
-                .write(
-                    &input.destination,
-                    input.tenant_id,
-                    input.pipeline_id,
-                    input.run_id,
-                    input.batch_seq,
-                    batch,
-                )
-                .await
-                .map_err(into_activity_err)?;
+            crate::loaders::write_cdc_batch(
+                &input.destination,
+                input.tenant_id,
+                input.pipeline_id,
+                input.run_id,
+                input.batch_seq,
+                batch,
+            )
+            .await
+            .map_err(into_activity_err)?;
         }
         // Per-chunk: persist snapshot state for crash-resume.
         let snap_state = catalog::cdc_snapshot::CdcSnapshotState {
