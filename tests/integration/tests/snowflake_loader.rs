@@ -118,3 +118,91 @@ async fn snowflake_append_upsert_idempotent_roundtrip() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires a real Snowflake account via SNOWFLAKE_TEST_* env vars"]
+async fn snowflake_cdc_applies_last_change_per_key() -> anyhow::Result<()> {
+    let table = format!("etl_test_cdc_{}", uuid::Uuid::new_v4().simple());
+    let Some(spec) = real_spec(&table, vec!["id".into()]) else {
+        eprintln!("SKIP: SNOWFLAKE_TEST_* env not set");
+        return Ok(());
+    };
+    let cdc = |rows: Vec<(i64, Option<&str>, &str)>| {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("_cdc.op", DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    rows.iter().map(|r| r.1).collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+                )),
+            ],
+        )
+        .unwrap()
+    };
+
+    // Snapshot rows 1..3, then a streaming batch touching each key twice.
+    SnowflakeLoader
+        .load(
+            &spec,
+            load_id(10),
+            cdc(vec![
+                (1, Some("a"), "s"),
+                (2, Some("b"), "s"),
+                (3, Some("c"), "s"),
+            ]),
+        )
+        .await?;
+    let r = SnowflakeLoader
+        .load(
+            &spec,
+            load_id(11),
+            cdc(vec![
+                (1, Some("a1"), "u"),
+                (1, Some("a2"), "u"), // 1 → a2
+                (2, None, "d"),       // 2 → gone
+                (3, None, "d"),
+                (3, Some("c2"), "i"), // 3 → back as c2
+                (4, Some("d"), "i"),
+                (4, None, "d"), // 4 → never lands
+            ]),
+        )
+        .await?;
+    assert_eq!(r.rows_loaded, 7);
+
+    if let DestinationSpec::Snowflake(s) = &spec {
+        let client = worker::loaders::snowflake::client::SnowflakeClient::from_spec(s)?;
+        let body = client
+            .execute(&format!(
+                "SELECT \"id\", \"name\" FROM \"{}\".\"{}\".\"{}\" ORDER BY \"id\"",
+                s.database, s.schema, table
+            ))
+            .await?;
+        let rows = body["data"].as_array().unwrap();
+        client
+            .execute(&format!(
+                "DROP TABLE IF EXISTS \"{}\".\"{}\".\"{}\"",
+                s.database, s.schema, table
+            ))
+            .await?;
+        assert_eq!(rows.len(), 2, "expected rows 1 and 3; got {rows:?}");
+        assert_eq!(
+            (rows[0][0].as_str(), rows[0][1].as_str()),
+            (Some("1"), Some("a2"))
+        );
+        assert_eq!(
+            (rows[1][0].as_str(), rows[1][1].as_str()),
+            (Some("3"), Some("c2"))
+        );
+    }
+    Ok(())
+}

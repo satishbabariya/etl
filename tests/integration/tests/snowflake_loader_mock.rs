@@ -161,3 +161,80 @@ async fn replay_short_circuits_without_dml() {
         );
     }
 }
+
+fn cdc_batch() -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("_cdc.op", DataType::Utf8, false),
+        Field::new("_cdc.lsn", DataType::Utf8, true),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 2])),
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])),
+            Arc::new(StringArray::from(vec!["i", "i", "d"])),
+            Arc::new(StringArray::from(vec!["0/1", "0/2", "0/3"])),
+        ],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn cdc_flow_deletes_and_merges_in_one_transaction() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    Mock::given(method("POST"))
+        .and(path("/api/v2/statements"))
+        .respond_with(empty_ok())
+        .mount(&server)
+        .await;
+
+    let res = SnowflakeLoader
+        .load(&spec(vec!["id".into()]), load_id(2), cdc_batch())
+        .await
+        .unwrap();
+    assert_eq!(res.rows_loaded, 3);
+
+    let reqs = server.received_requests().await.unwrap();
+    let bodies: Vec<String> = reqs
+        .iter()
+        .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+        .collect();
+    // Target DDL carries data columns only.
+    let ddl = bodies
+        .iter()
+        .find(|b| b.contains("CREATE TABLE IF NOT EXISTS \\\"DB\\\".\\\"RAW\\\".\\\"items\\\""))
+        .expect("target DDL");
+    assert!(!ddl.contains("_cdc"), "got {ddl}");
+    // Key 2 (i then d) is deleted; key 1 is merged; one transaction.
+    let last = bodies.last().unwrap();
+    assert!(last.contains("BEGIN"), "got {last}");
+    assert!(
+        last.contains("DELETE FROM \\\"DB\\\".\\\"RAW\\\".\\\"items\\\" WHERE (\\\"id\\\" = 2)"),
+        "got {last}"
+    );
+    assert!(last.contains("MERGE INTO"), "got {last}");
+    assert!(!last.contains("_cdc"), "got {last}");
+    assert!(last.contains("_ETL_LOADED_BATCHES"), "got {last}");
+    assert!(last.contains("COMMIT"), "got {last}");
+}
+
+#[tokio::test]
+async fn cdc_batch_without_pk_is_rejected() {
+    let server = MockServer::start().await;
+    mock_env(&server);
+    Mock::given(method("POST"))
+        .and(path("/api/v2/statements"))
+        .respond_with(empty_ok())
+        .mount(&server)
+        .await;
+
+    let err = SnowflakeLoader
+        .load(&spec(vec![]), load_id(3), cdc_batch())
+        .await
+        .err()
+        .expect("CDC without pk must fail");
+    assert!(format!("{err:#}").contains("pk_columns"), "got {err:#}");
+}
