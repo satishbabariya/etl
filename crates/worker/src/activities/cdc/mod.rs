@@ -14,7 +14,6 @@ use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 use crate::connectors::postgres::cdc::{slot, snapshot, stream};
-use crate::loaders::cdc_parquet::CdcParquetLoader;
 
 #[derive(Clone)]
 pub struct CdcActivities {
@@ -150,17 +149,16 @@ impl CdcActivities {
         )
         .increment(chunk.batch.num_rows() as u64);
         if chunk.batch.num_rows() > 0 {
-            CdcParquetLoader
-                .write(
-                    &input.destination,
-                    input.tenant_id,
-                    input.pipeline_id,
-                    input.run_id,
-                    input.batch_seq,
-                    &chunk.batch,
-                )
-                .await
-                .map_err(retryable)?;
+            crate::loaders::write_cdc_batch(
+                &input.destination,
+                input.tenant_id,
+                input.pipeline_id,
+                input.run_id,
+                input.batch_seq,
+                &chunk.batch,
+            )
+            .await
+            .map_err(retryable)?;
         }
         // Per-chunk: persist snapshot state so a crashed-and-restarted
         // workflow resumes from this last_pk. mark_completed is the
@@ -321,17 +319,16 @@ impl CdcActivities {
                 .increment(1);
             }
             if rows > 0 {
-                CdcParquetLoader
-                    .write(
-                        &input.destination,
-                        input.tenant_id,
-                        input.pipeline_id,
-                        input.run_id,
-                        input.batch_seq,
-                        &batch,
-                    )
-                    .await
-                    .map_err(retryable)?;
+                crate::loaders::write_cdc_batch(
+                    &input.destination,
+                    input.tenant_id,
+                    input.pipeline_id,
+                    input.run_id,
+                    input.batch_seq,
+                    &batch,
+                )
+                .await
+                .map_err(retryable)?;
             }
         }
         let Some(target) = out.new_position.map(common_types::cursor::lsn_to_string) else {

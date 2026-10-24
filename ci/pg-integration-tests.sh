@@ -51,6 +51,7 @@ TESTS=(
   postgres_loader_schema_evolution
   pg_cdc_advance_slot
   pg_cdc_peek_window
+  native_cdc_destinations
   snowflake_loader_mock
   rbac_matrix
   tenant_create_unique
