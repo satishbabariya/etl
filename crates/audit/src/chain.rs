@@ -10,6 +10,24 @@ use sqlx::PgPool;
 
 pub const GENESIS_PREV_HASH: [u8; 32] = [0u8; 32];
 
+/// Open a transaction scoped to one chain so it works under RLS when the
+/// pool is etl_app: a tenant chain sets `app.tenant_id`; the system chain
+/// (tenant_id NULL) is admitted by the policy as is. Unscoped, an etl_app
+/// read would see no rows — and an empty chain verifies as Ok.
+pub(crate) async fn begin_scoped(
+    pool: &PgPool,
+    tenant_id: Option<common_types::ids::TenantId>,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, ChainError> {
+    let mut tx = pool.begin().await?;
+    if let Some(tid) = tenant_id {
+        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
+            .bind(tid.as_uuid().to_string())
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(tx)
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum ChainError {
     #[error(transparent)]
@@ -46,15 +64,7 @@ fn lock_key(tenant_id: Option<common_types::ids::TenantId>) -> i64 {
 /// tenant via `pg_advisory_xact_lock(<derived key>)` so concurrent
 /// writes for the same tenant serialize.
 pub async fn write_event(pool: &PgPool, row: &AuditRow) -> Result<i64, ChainError> {
-    let mut tx = pool.begin().await?;
-    // Scope to the row's tenant so the write passes RLS when the pool is
-    // etl_app. System rows (tenant_id NULL) are admitted by the policy.
-    if let Some(tid) = row.tenant_id {
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
-            .bind(tid.as_uuid().to_string())
-            .execute(&mut *tx)
-            .await?;
-    }
+    let mut tx = begin_scoped(pool, row.tenant_id).await?;
     let key = lock_key(row.tenant_id);
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
@@ -124,6 +134,7 @@ pub async fn record_checkpoint(
     tenant_id: Option<common_types::ids::TenantId>,
     cp: Checkpoint,
 ) -> Result<(), ChainError> {
+    let mut tx = begin_scoped(pool, tenant_id).await?;
     sqlx::query(
         "INSERT INTO audit_verified_chain (tenant_id, last_verified_audit_id, last_verified_hash, last_verified_at) \
          VALUES ($1, $2, $3, now()) \
@@ -135,8 +146,9 @@ pub async fn record_checkpoint(
     .bind(tenant_id.map(|t| t.as_uuid()))
     .bind(cp.last_verified_audit_id)
     .bind(cp.last_verified_hash.as_slice())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -144,6 +156,7 @@ pub async fn get_checkpoint(
     pool: &PgPool,
     tenant_id: Option<common_types::ids::TenantId>,
 ) -> Result<Option<Checkpoint>, ChainError> {
+    let mut tx = begin_scoped(pool, tenant_id).await?;
     let row: Option<(i64, Vec<u8>)> = match tenant_id {
         Some(tid) => {
             sqlx::query_as(
@@ -151,7 +164,7 @@ pub async fn get_checkpoint(
              FROM audit_verified_chain WHERE tenant_id = $1",
             )
             .bind(tid.as_uuid())
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?
         }
         None => {
@@ -159,10 +172,11 @@ pub async fn get_checkpoint(
                 "SELECT last_verified_audit_id, last_verified_hash \
              FROM audit_verified_chain WHERE tenant_id IS NULL",
             )
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?
         }
     };
+    tx.commit().await?;
     Ok(row.map(|(id, h)| {
         let mut hash = [0u8; 32];
         hash.copy_from_slice(&h);
@@ -180,21 +194,23 @@ pub async fn prune_before(
     tenant_id: Option<common_types::ids::TenantId>,
     older_than_audit_id: i64,
 ) -> Result<u64, ChainError> {
+    let mut tx = begin_scoped(pool, tenant_id).await?;
     let r = match tenant_id {
         Some(tid) => {
             sqlx::query("DELETE FROM audit_log WHERE tenant_id = $1 AND audit_id < $2")
                 .bind(tid.as_uuid())
                 .bind(older_than_audit_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
         }
         None => {
             sqlx::query("DELETE FROM audit_log WHERE tenant_id IS NULL AND audit_id < $1")
                 .bind(older_than_audit_id)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
         }
     };
+    tx.commit().await?;
     Ok(r.rows_affected())
 }
 

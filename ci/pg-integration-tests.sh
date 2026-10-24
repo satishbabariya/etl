@@ -53,6 +53,7 @@ TESTS=(
   pg_cdc_peek_window
   snowflake_loader_mock
   rbac_matrix
+  tenant_create_unique
 )
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
