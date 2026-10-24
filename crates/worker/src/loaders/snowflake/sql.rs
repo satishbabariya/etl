@@ -262,6 +262,47 @@ pub fn append_insert_sql(
     ))
 }
 
+/// `DELETE` of every key in `batch` (one `(pk = .. AND ..)` group per row,
+/// OR-ed). Used by CDC apply for keys whose last change is a delete.
+pub fn delete_keys_sql(
+    db: &str,
+    schema: &str,
+    table: &str,
+    batch: &arrow::record_batch::RecordBatch,
+    pk_columns: &[String],
+) -> anyhow::Result<String> {
+    anyhow::ensure!(batch.num_rows() > 0, "delete_keys_sql on an empty batch");
+    let batch_schema = batch.schema();
+    let pks: Vec<(String, usize)> = pk_columns
+        .iter()
+        .map(|pk| {
+            let idx = batch_schema
+                .index_of(pk)
+                .map_err(|_| anyhow::anyhow!("pk column {pk:?} not in batch"))?;
+            Ok((quote_ident(pk)?, idx))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let groups: Vec<String> = (0..batch.num_rows())
+        .map(|row| {
+            let terms: Vec<String> = pks
+                .iter()
+                .map(|(q, idx)| {
+                    Ok(format!(
+                        "{q} = {}",
+                        sql_literal(batch.column(*idx).as_ref(), row)?
+                    ))
+                })
+                .collect::<anyhow::Result<_>>()?;
+            Ok(format!("({})", terms.join(" AND ")))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    Ok(format!(
+        "DELETE FROM {} WHERE {}",
+        qualified(db, schema, table)?,
+        groups.join(" OR ")
+    ))
+}
+
 pub fn merge_upsert_sql(
     db: &str,
     schema: &str,
@@ -390,6 +431,33 @@ mod tests {
             sql,
             "INSERT INTO \"DB\".\"RAW\".\"t\" (\"id\", \"name\") VALUES (1, 'a'), (2, NULL)"
         );
+    }
+
+    #[test]
+    fn delete_keys_shape_and_escaping() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("org", DataType::Utf8, false),
+            arrow::datatypes::Field::new("id", DataType::Int64, false),
+            arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]));
+        let b = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["a'co", "b"])),
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec![None::<&str>, None])),
+            ],
+        )
+        .unwrap();
+        let pk = vec!["org".to_string(), "id".to_string()];
+        let sql = delete_keys_sql("DB", "RAW", "t", &b, &pk).unwrap();
+        assert_eq!(
+            sql,
+            "DELETE FROM \"DB\".\"RAW\".\"t\" WHERE \
+             (\"org\" = 'a''co' AND \"id\" = 1) OR (\"org\" = 'b' AND \"id\" = 2)"
+        );
+        assert!(delete_keys_sql("DB", "RAW", "t", &b, &["nope".into()]).is_err());
+        assert!(delete_keys_sql("DB", "RAW", "t", &b.slice(0, 0), &pk).is_err());
     }
 
     #[test]

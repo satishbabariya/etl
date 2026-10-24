@@ -5,9 +5,12 @@
 //! (BEGIN; ...; COMMIT). Same LoadId retried ⇒ short-circuit no-op
 //! (Temporal serializes retries, so check-then-write has no concurrent
 //! writer). Append (`pk_columns: []`) uses INSERT; upsert uses
-//! MERGE-from-VALUES. Deferred (see 2-5a design memo): stage+COPY fast
-//! path, CDC apply, schema evolution, multi-table routing, VARIANT.
+//! MERGE-from-VALUES. A batch carrying `_cdc.op` is applied by key
+//! (2-5b, see `cdc`): DELETE for keys whose last change is a delete, MERGE
+//! for the rest. Deferred: stage+COPY fast path, schema evolution,
+//! multi-table routing, VARIANT.
 
+pub mod cdc;
 pub mod client;
 pub mod jwt;
 pub mod sql;
@@ -59,6 +62,14 @@ impl DestinationLoader for SnowflakeLoader {
                 path,
             });
         }
+        // Planned before any request so a bad CDC batch fails fast.
+        let cdc_plan = crate::loaders::postgres::is_cdc_batch(batch.schema().as_ref())
+            .then(|| cdc::plan(&batch, &spec.pk_columns))
+            .transpose()?;
+        let target_schema = match &cdc_plan {
+            Some(p) => p.upserts.schema(),
+            None => batch.schema(),
+        };
         let client = client::SnowflakeClient::from_spec(spec)?;
         let (db, sch) = (&spec.database, &spec.schema);
 
@@ -71,7 +82,7 @@ impl DestinationLoader for SnowflakeLoader {
                 db,
                 sch,
                 &spec.table,
-                batch.schema().as_ref(),
+                target_schema.as_ref(),
             )?)
             .await
             .context("ensuring target table")?;
@@ -93,24 +104,56 @@ impl DestinationLoader for SnowflakeLoader {
             });
         }
 
-        let dml = if spec.pk_columns.is_empty() {
-            sql::append_insert_sql(db, sch, &spec.table, &batch)?
-        } else {
-            sql::merge_upsert_sql(db, sch, &spec.table, &batch, &spec.pk_columns)?
+        let (dml, rows_loaded) = match &cdc_plan {
+            None if spec.pk_columns.is_empty() => (
+                vec![sql::append_insert_sql(db, sch, &spec.table, &batch)?],
+                batch.num_rows(),
+            ),
+            None => (
+                vec![sql::merge_upsert_sql(
+                    db,
+                    sch,
+                    &spec.table,
+                    &batch,
+                    &spec.pk_columns,
+                )?],
+                batch.num_rows(),
+            ),
+            // Delete and upsert keys are disjoint, so their order is free.
+            Some(p) => {
+                let mut dml = Vec::new();
+                if p.deletes.num_rows() > 0 {
+                    dml.push(sql::delete_keys_sql(
+                        db,
+                        sch,
+                        &spec.table,
+                        &p.deletes,
+                        &spec.pk_columns,
+                    )?);
+                }
+                if p.upserts.num_rows() > 0 {
+                    dml.push(sql::merge_upsert_sql(
+                        db,
+                        sch,
+                        &spec.table,
+                        &p.upserts,
+                        &spec.pk_columns,
+                    )?);
+                }
+                (dml, p.applied)
+            }
         };
-        let stmts = vec![
-            "BEGIN".to_string(),
-            dml,
-            sql::log_insert_sql(db, sch, &load_id, batch.num_rows())?,
-            "COMMIT".to_string(),
-        ];
+        let mut stmts = vec!["BEGIN".to_string()];
+        stmts.extend(dml);
+        stmts.push(sql::log_insert_sql(db, sch, &load_id, rows_loaded)?);
+        stmts.push("COMMIT".to_string());
         client
             .execute_multi(&stmts)
             .await
             .context("transactional load")?;
 
         Ok(LoadResult {
-            rows_loaded: batch.num_rows(),
+            rows_loaded,
             bytes_written: batch.get_array_memory_size() as u64,
             path,
         })
