@@ -144,24 +144,44 @@ fn decode_relation(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
     }))
 }
 
-fn decode_tuple(rdr: &mut &[u8]) -> anyhow::Result<Vec<Option<String>>> {
+/// One column of a pgoutput tuple.
+enum TupleCol {
+    Null,
+    /// TOASTed value the UPDATE didn't change; pgoutput sends no data.
+    Unchanged,
+    Text(String),
+}
+
+fn decode_tuple_cols(rdr: &mut &[u8]) -> anyhow::Result<Vec<TupleCol>> {
     let n = rdr.read_u16::<BigEndian>()? as usize;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let kind = rdr.read_u8()?;
         match kind {
-            b'n' => out.push(None),
-            b'u' => out.push(None), // TOAST unchanged — treat as null for Phase I.6
+            b'n' => out.push(TupleCol::Null),
+            b'u' => out.push(TupleCol::Unchanged),
             b't' => {
                 let len = rdr.read_u32::<BigEndian>()? as usize;
                 let mut buf = vec![0u8; len];
                 rdr.read_exact(&mut buf)?;
-                out.push(Some(String::from_utf8(buf)?));
+                out.push(TupleCol::Text(String::from_utf8(buf)?));
             }
             other => return Err(anyhow!("unknown tuple col kind {other}")),
         }
     }
     Ok(out)
+}
+
+/// Tuple as values; an unchanged TOAST column has none, so it reads as
+/// NULL (see `decode_update` for the case the old tuple can fill it).
+fn decode_tuple(rdr: &mut &[u8]) -> anyhow::Result<Vec<Option<String>>> {
+    Ok(decode_tuple_cols(rdr)?
+        .into_iter()
+        .map(|c| match c {
+            TupleCol::Text(s) => Some(s),
+            TupleCol::Null | TupleCol::Unchanged => None,
+        })
+        .collect())
 }
 
 fn decode_insert(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
@@ -174,13 +194,28 @@ fn decode_insert(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
 
 fn decode_update(mut rdr: &[u8]) -> anyhow::Result<CdcEvent> {
     let rel_id = rdr.read_u32::<BigEndian>()?;
-    // May have K (key-only before image) or O (old tuple). Skip both.
-    let tag = rdr.read_u8()?;
+    // May have K (key-only before image) or O (old tuple: REPLICA
+    // IDENTITY FULL, with TOASTed values flattened in).
+    let mut tag = rdr.read_u8()?;
+    let mut old: Vec<Option<String>> = Vec::new();
     if tag == b'K' || tag == b'O' {
-        let _skipped = decode_tuple(&mut rdr)?;
-        let _n_tag = rdr.read_u8()?;
+        old = decode_tuple(&mut rdr)?;
+        tag = rdr.read_u8()?;
     }
-    let row = decode_tuple(&mut rdr)?;
+    anyhow::ensure!(tag == b'N', "update new-tuple tag expected 'N', got {tag}");
+    // An unchanged TOAST column carries no value in the new tuple. Its old
+    // value is its current one, so take it from the old tuple when there
+    // is one; otherwise it stays NULL (a loader applying the row would
+    // overwrite the stored value — default replica identity only).
+    let row = decode_tuple_cols(&mut rdr)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| match c {
+            TupleCol::Text(s) => Some(s),
+            TupleCol::Null => None,
+            TupleCol::Unchanged => old.get(i).cloned().flatten(),
+        })
+        .collect();
     Ok(CdcEvent::Update { rel_id, row })
 }
 
@@ -271,6 +306,30 @@ mod tests {
         match decode_message(&body).unwrap() {
             CdcEvent::Insert { row, .. } => assert_eq!(row, vec![None, None]),
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn update_fills_unchanged_toast_from_old_tuple() {
+        // 'U' rel 7, old tuple O(t"1", t"big"), new tuple N(t"1", u).
+        let mut body = vec![b'U', 0, 0, 0, 7, b'O', 0, 2];
+        body.extend([b't', 0, 0, 0, 1, b'1', b't', 0, 0, 0, 3]);
+        body.extend(b"big");
+        body.extend([b'N', 0, 2, b't', 0, 0, 0, 1, b'1', b'u']);
+        match decode_message(&body).unwrap() {
+            CdcEvent::Update { row, .. } => {
+                assert_eq!(row, vec![Some("1".into()), Some("big".into())])
+            }
+            other => panic!("got {other:?}"),
+        }
+        // Key-only old tuple (default identity): nothing to fill from.
+        let body = [
+            b'U', 0, 0, 0, 7, b'K', 0, 2, b't', 0, 0, 0, 1, b'1', b'n', b'N', 0, 2, b't', 0, 0, 0,
+            1, b'1', b'u',
+        ];
+        match decode_message(&body).unwrap() {
+            CdcEvent::Update { row, .. } => assert_eq!(row, vec![Some("1".into()), None]),
+            other => panic!("got {other:?}"),
         }
     }
 }

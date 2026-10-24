@@ -52,6 +52,7 @@ TESTS=(
   pg_cdc_advance_slot
   pg_cdc_peek_window
   native_cdc_destinations
+  pg_cdc_toast
   snowflake_loader_mock
   rbac_matrix
   tenant_create_unique
